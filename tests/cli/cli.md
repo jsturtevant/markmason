@@ -1,9 +1,11 @@
 # Command-line interface
 
+Check shared help text, not the platform-specific `mm` / `mm.exe` usage line.
+
 ## `mm --help`
 
 ```expected-contains
-Usage: mm [OPTIONS] [SPEC_DIR]
+Standalone Markdown-driven CLI end-to-end test runner
 -h, --help
 Print help
 -V, --version
@@ -18,7 +20,6 @@ No version is hardcoded, so this remains valid after a release bump.
 
 ```expected-contains
 error: unexpected argument '--not-an-option' found
-Usage: mm [OPTIONS] [SPEC_DIR]
 For more information, try '--help'.
 ```
 

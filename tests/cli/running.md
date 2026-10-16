@@ -59,6 +59,5 @@ pass 0
 fail 1
 FAIL setup: Setup command failed: mm --not-an-option
 error: unexpected argument '--not-an-option' found
-Usage: mm [OPTIONS] [SPEC_DIR]
 For more information, try '--help'.
 ```

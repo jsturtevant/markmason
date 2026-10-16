@@ -7,7 +7,7 @@ tags: [smoke, cli]
 ## `mm --help`
 
 ```expected-contains
-Usage: mm [OPTIONS] [SPEC_DIR]
+Standalone Markdown-driven CLI end-to-end test runner
 -V, --version
 Print version
 ```
@@ -20,6 +20,5 @@ The pipeline must stop at the first failing command.
 
 ```expected-contains
 error: unexpected argument '--not-an-option' found
-Usage: mm [OPTIONS] [SPEC_DIR]
 For more information, try '--help'.
 ```
