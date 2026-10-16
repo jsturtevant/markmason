@@ -16,9 +16,16 @@ fmt-check:
 lint:
     cargo clippy --locked --all-targets -- -D warnings
 
+# Run Rust regression tests and the Markdown self-test suite.
+test: test-rust test-markdown
+
 # Run parser, matching, and standalone process tests.
-test:
+test-rust:
     cargo test --locked
+
+# Test the current binary against Markdown specs with bounded leaf fixtures.
+test-markdown:
+    PATH="$PWD/target/debug:$PATH" cargo run --quiet --locked -- tests/cli
 
 # Run the same checks as CI.
 check: fmt-check lint test
