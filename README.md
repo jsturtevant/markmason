@@ -78,6 +78,15 @@ The [Markdown self-tests](tests/cli) run `mm` against small
 as `mm --help`, never the self-test suite: nesting is finite, not recursive.
 No Node, GitHub authentication, or network access is needed.
 
+## Write tests with an agent
+
+Use the [markmason-tests skill](.github/skills/markmason-tests/SKILL.md) to write
+tests that read like docs. It covers normal examples, separate error cases,
+assertions, fixtures, and safe self-testing.
+
+Copy `.github/skills/markmason-tests/` into the same location in another repo
+to reuse it. Keep the folder's reference file and license with it.
+
 ## Releases
 
 - Successful `main` builds update the mutable **`preview-release`** prerelease.
