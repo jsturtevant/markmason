@@ -14,7 +14,9 @@ Print version
 
 ## `mm --version`
 
-No version is hardcoded, so this remains valid after a release bump.
+```expected
+mm 0.1.0
+```
 
 ## `mm --not-an-option` (exit 2)
 

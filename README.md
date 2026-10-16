@@ -81,8 +81,9 @@ No Node, GitHub authentication, or network access is needed.
 ## Releases
 
 - Successful `main` builds update the mutable **`preview-release`** prerelease.
-- For stable releases, update `Cargo.toml` and `Cargo.lock`, then push a matching
-  `vMAJOR.MINOR.PATCH` tag. Versioned releases are never overwritten.
+- For stable releases, update `Cargo.toml`, `Cargo.lock`, and the version assertion
+  in `tests/cli/cli.md`, then push a matching `vMAJOR.MINOR.PATCH` tag.
+  Versioned releases are never overwritten.
 - All four platforms must pass before publishing. Archives include the binary,
   README, MIT license, and SHA-256 checksums.
 
