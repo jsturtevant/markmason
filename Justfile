@@ -23,9 +23,14 @@ test: test-rust test-markdown
 test-rust:
     cargo test --locked
 
+# Build the test-only CLI shared by the Markdown and Rust tests.
+build-test-cli:
+    cargo build --quiet --locked --example mm-test-cli
+
 # Test the current binary against Markdown specs with bounded leaf fixtures.
-test-markdown:
-    PATH="$PWD/target/debug:$PATH" cargo run --quiet --locked -- tests/cli
+test-markdown: build-test-cli
+    # Inherited PWD can contain a Windows drive-letter colon; use Bash's physical path.
+    root="$(pwd -P)" && PATH="$root/target/debug:$root/target/debug/examples:$PATH" cargo run --quiet --locked -- tests/cli --home-env TEST_HOME
 
 # Run the same checks as CI.
 check: fmt-check lint test

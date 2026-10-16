@@ -88,5 +88,19 @@ Combine the flags to narrow files first, then select commands within them.
 Earlier cases won't run automatically; select the whole file if cases depend on
 each other.
 
-See the [filter reference](../../docs/specification.md#filtering-and-diagnostics)
-for environment variables, or [error cases](errors.md) for filters with no matches.
+## `mm tests/fixtures/passing --test-name-pattern "^mm --help$" --test-name-pattern "^mm --version$"`
+
+Repeated name patterns are alternatives: a command only needs to match one.
+
+```expected
+basic.md
+PASS mm --help
+PASS mm --version
+extra.md
+PASS mm --version
+pass 3
+fail 0
+```
+
+See [environment filters](environment.md) for variables and flag precedence,
+or [error cases](errors.md) for filters with no matches.

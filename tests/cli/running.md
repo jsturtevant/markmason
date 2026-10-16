@@ -1,6 +1,7 @@
 # Run Markdown tests
 
-Run a directory of specs or preview its commands without executing them.
+Run a directory of specs, including nested files, or preview commands without executing them.
+Choose the command's working directory and turn on diagnostics when needed.
 
 Run these examples from the repository root with `mm` on `PATH`.
 They use [sample specs](../fixtures/passing); bare `mm` defaults to `tests/cli`.
@@ -35,5 +36,57 @@ mm --version
 ```
 
 No recursion: these fixtures only call help or version, never this guide's directory.
+
+## `mm tests/fixtures/discovery --list`
+
+Discovery includes [nested Markdown files](../fixtures/discovery).
+Paths in the listing are relative to the selected spec directory.
+
+```expected
+a.md
+mm-test-cli echo top
+nested/b.md
+mm-test-cli echo nested
+```
+
+## `mm tests/fixtures/discovery`
+
+Both discovered files run, in path order.
+
+```expected
+a.md
+PASS mm-test-cli echo top
+nested/b.md
+PASS mm-test-cli echo nested
+pass 2
+fail 0
+```
+
+## `mm tests/fixtures/working-directory --cwd tests/fixtures/passing`
+
+`--cwd` controls where commands run, not where specs are found.
+[This spec](../fixtures/working-directory/location.md) checks the actual directory.
+
+```expected
+location.md
+PASS mm-test-cli cwd
+pass 1
+fail 0
+```
+
+## `mm tests/fixtures/diagnostics --verbose`
+
+Show captured output and a comparison diff, even when the assertion passes.
+
+```expected-contains
+output.md
+ACTUAL:
+hello
+DIFF (expected vs actual):
+hello
+PASS mm-test-cli echo hello
+pass 1
+fail 0
+```
 
 [Filter tests](filtering.md) | [Error cases](errors.md)

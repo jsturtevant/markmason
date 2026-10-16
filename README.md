@@ -47,12 +47,19 @@ mm --file-pattern greet    # Select files by regex
 
 Markmason's own tests double as docs: [getting started](tests/cli/cli.md),
 [running tests](tests/cli/running.md), and [filtering](tests/cli/filtering.md).
+Try [stdin and pipes](tests/cli/input.md), [terminal prompts](tests/cli/interactive.md),
+[output matching](tests/cli/matching.md), [setup and state](tests/cli/state.md),
+[path variables](tests/cli/variables.md), and [environment filters](tests/cli/environment.md).
 
-Run the same files from this checkout with `mm` on `PATH`:
+Run the same files from this checkout (see [development prerequisites](#develop-and-self-test)):
 
 ```sh
-mm tests/cli
+just test-markdown
 ```
+
+This builds `mm` and [`mm-test-cli`](tests/support/README.md), a small app
+that prints text, shows prompts, and writes test state. Both go on `PATH`.
+`mm-test-cli` is not shipped with `mm`; your own specs run your CLI instead.
 
 ## Test features
 
@@ -85,9 +92,10 @@ just fmt              # Format Rust source
 ```
 
 The [Markdown self-tests](tests/cli) run `mm` against small
-[fixture specs](tests/fixtures). Those fixtures only invoke leaf commands such
-as `mm --help`, never the self-test suite: nesting is finite, not recursive.
-No Node, GitHub authentication, or network access is needed.
+[fixture specs](tests/fixtures) and the [test CLI](tests/support/README.md).
+Nested fixtures call leaf commands, never the self-test suite.
+No Node, GitHub authentication, or network access is needed. Cloning, cancellation,
+and descendant cleanup remain covered by the Rust integration tests.
 
 ## Write tests with an agent
 

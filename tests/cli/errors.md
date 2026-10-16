@@ -84,3 +84,16 @@ Error: No markdown test specs matched in $REPO_ROOT/tests/fixtures/passing
 ```
 
 `$REPO_ROOT` is replaced with the working directory.
+
+## `mm-test-cli fail` (exit 2)
+
+For a nonzero exit, compare stdout followed by stderr.
+Successful commands compare [stdout only](matching.md).
+
+```expected
+stdout
+stderr
+```
+
+See [matching errors](matching-errors.md) and [runtime errors](runtime-errors.md)
+for failed assertions, timeouts, and incomplete terminal scripts.

@@ -9,137 +9,28 @@ use tempfile::TempDir;
 
 fn helper() -> &'static Path {
     static HELPER: OnceLock<(TempDir, PathBuf)> = OnceLock::new();
-    &HELPER.get_or_init(|| {
-        let dir = tempfile::tempdir().unwrap();
-        let source = dir.path().join("helper.rs");
-        fs::write(&source, r#"
-use std::{env, fs, io::{self, Read, Write}, thread, time::Duration};
-#[cfg(windows)]
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    fn SetHandleInformation(handle: *mut std::ffi::c_void, mask: u32, flags: u32) -> i32;
-}
-fn main() {
-    let args: Vec<_> = env::args().collect();
-    if args.len() == 1 {
-        fs::write(env::var("TEST_HOME").unwrap() + "/state", "ready").unwrap();
-        return;
-    }
-    match args.get(1).map(String::as_str).unwrap_or("") {
-        "echo" => println!("{}", args[2..].join(" ")),
-        "fail" => { print!("stdout\n"); eprint!("stderr\n"); std::process::exit(2); }
-        "cat" => { let mut s = String::new(); io::stdin().read_to_string(&mut s).unwrap(); print!("{s}"); }
-        "setup" | "setup-other" => {
-            assert!(std::path::Path::new(&args[2]).exists());
-            let value = if args[1] == "setup" { "ready" } else { "other" };
-            fs::write(env::var("TEST_HOME").unwrap() + "/state", value).unwrap();
-        }
-        "state" => println!("{}", fs::read_to_string(env::var("TEST_HOME").unwrap() + "/state").unwrap()),
-        "vars" => {
-            for key in ["TEST_HOME", "XDG_CONFIG_HOME", "GH_CONFIG_DIR"] { println!("{}", env::var(key).unwrap()); }
-            println!("{}", env::current_dir().unwrap().display());
-        }
-        "gh-config" => println!("{}", env::var("GH_CONFIG_DIR").unwrap()),
-        "where" => println!("{}", env::current_exe().unwrap().display()),
-        "setup-location" => fs::write(env::var("TEST_HOME").unwrap() + "/state", env::current_exe().unwrap().display().to_string()).unwrap(),
-        "env" => { for key in &args[2..] { println!("{}", env::var(key).unwrap()); } }
-        "root" => {
-            assert_eq!(args[2], env::current_dir().unwrap().display().to_string());
-            assert_eq!(args[3], "");
-        }
-        "mark" => fs::write(&args[2], "unexpected").unwrap(),
-        "tree" | "drain" | "writer" => {
-            let mut command = std::process::Command::new(env::current_exe().unwrap());
-            command.arg("sleep");
-            if args[1] == "writer" {
-                #[cfg(windows)]
-                {
-                    use std::os::windows::io::AsRawHandle;
-                    // Retain only stdin so this mode exercises a blocked writer, not output draining.
-                    for handle in [io::stdout().as_raw_handle(), io::stderr().as_raw_handle()] {
-                        assert_ne!(unsafe { SetHandleInformation(handle, 1, 0) }, 0);
-                    }
-                }
-                command.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
-            }
-            let child = command.spawn().unwrap();
-            let marker = format!("{}.tmp", args[2]);
-            fs::write(&marker, format!("{}\n{}\n{}\n{}", std::process::id(), child.id(), env::var("TEST_HOME").unwrap(), env::var("XDG_CONFIG_HOME").unwrap())).unwrap();
-            fs::rename(marker, &args[2]).unwrap();
-            if args[1] == "tree" { thread::sleep(Duration::from_secs(60)); }
-        }
-        "sleep" => { println!("before timeout"); thread::sleep(Duration::from_secs(10)); }
-        "background" | "background-pty" => {
-            let mut command = std::process::Command::new(env::current_exe().unwrap());
-            command.arg("agent").stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
-            #[cfg(windows)]
-            {
-                use std::os::windows::{io::AsRawHandle, process::CommandExt};
-                for handle in [io::stdin().as_raw_handle(), io::stdout().as_raw_handle(), io::stderr().as_raw_handle()] {
-                    assert_ne!(unsafe { SetHandleInformation(handle, 1, 0) }, 0);
-                }
-                command.creation_flags(0x8 | 0x200); // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-            }
-            let child = command.spawn().unwrap();
-            let marker = format!("{}.tmp", args[2]);
-            fs::write(&marker, format!("{}\n{}\n{}\n{}", std::process::id(), child.id(), env::var("TEST_HOME").unwrap(), env::var("XDG_CONFIG_HOME").unwrap())).unwrap();
-            fs::rename(marker, &args[2]).unwrap();
-            if args[1] == "background-pty" {
-                print!("Ready?"); io::stdout().flush().unwrap();
-                let mut answer = String::new(); io::stdin().read_line(&mut answer).unwrap();
-            }
-        }
-        "agent" => {
-            let home = env::var("TEST_HOME").unwrap();
-            while !std::path::Path::new(&format!("{home}/request")).exists() { thread::sleep(Duration::from_millis(10)); }
-            fs::write(format!("{home}/ready"), "ready").unwrap();
-            thread::sleep(Duration::from_secs(60));
-        }
-        "await-agent" => {
-            let home = env::var("TEST_HOME").unwrap();
-            fs::write(format!("{home}/request"), "").unwrap();
-            let deadline = std::time::Instant::now() + Duration::from_secs(1);
-            while !std::path::Path::new(&format!("{home}/ready")).exists() && std::time::Instant::now() < deadline { thread::sleep(Duration::from_millis(10)); }
-            println!("{}", fs::read_to_string(format!("{home}/ready")).unwrap());
-        }
-        #[cfg(unix)]
-        "nonreading" => {
-            assert!(std::process::Command::new("stty").args(["raw", "-echo"]).status().unwrap().success());
-            fs::write(&args[2], format!("{}\n{}\n{}", std::process::id(), env::var("TEST_HOME").unwrap(), env::var("XDG_CONFIG_HOME").unwrap())).unwrap();
-            println!("Ready?");
-            io::stdout().flush().unwrap();
-            thread::sleep(Duration::from_secs(60));
-        }
-        "interactive" | "interactive-location" => {
-            if args[1] == "interactive-location" { println!("{}", env::current_exe().unwrap().display()); }
-            print!("\x1b[?25l"); io::stdout().flush().unwrap();
-            // Exercise split ANSI and UTF-8 reads.
-            io::stdout().write_all(b"\x1b[").unwrap(); io::stdout().flush().unwrap();
-            thread::sleep(Duration::from_millis(30));
-            print!("31mReady?\x1b[0m"); io::stdout().flush().unwrap();
-            let mut answer = String::new(); io::stdin().read_line(&mut answer).unwrap();
-            println!("accepted {}", answer.trim());
-            print!("Ready?"); io::stdout().flush().unwrap();
-            answer.clear(); io::stdin().read_line(&mut answer).unwrap();
-            println!("done {}", answer.trim());
-        }
-        "premature" => println!("done"),
-        "auth" => {}
-        "repo" => {
-            assert_eq!(&args[2], "clone");
-            fs::write(std::path::Path::new(&args[4]).join("cloned"), "yes").unwrap();
-        }
-        "cloned" => println!("{}", fs::read_to_string("cloned").unwrap()),
-        "bulk" => { let bytes = vec![b'x'; 256 * 1024]; io::stdout().write_all(&bytes).unwrap(); io::stderr().write_all(&bytes).unwrap(); }
-        _ => panic!("unknown helper arguments {args:?}"),
-    }
-}
-"#).unwrap();
-        let binary = dir.path().join(format!("app{}", std::env::consts::EXE_SUFFIX));
-        let output = Command::new("rustc").arg("--edition=2024").arg(&source).arg("-o").arg(&binary).output().unwrap();
-        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-        (dir, binary)
-    }).1
+    &HELPER
+        .get_or_init(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/support/test_cli.rs");
+            let binary = dir
+                .path()
+                .join(format!("app{}", std::env::consts::EXE_SUFFIX));
+            let output = Command::new("rustc")
+                .arg("--edition=2024")
+                .arg(&source)
+                .arg("-o")
+                .arg(&binary)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            (dir, binary)
+        })
+        .1
 }
 
 fn command(specs: &Path) -> Command {
