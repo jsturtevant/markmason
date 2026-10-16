@@ -10,7 +10,8 @@ Run from the repository root with `mm` on `PATH`.
 
 ## `mm tests/fixtures/passing --file-pattern basic`
 
-Run files whose relative paths match the regex `basic`.
+`--file-pattern` matches file paths only. Here it runs all three cases in
+`basic.md`, not individual command headings.
 
 ```expected
 basic.md
@@ -58,7 +59,8 @@ fail 0
 
 ## `mm tests/fixtures/passing --test-name-pattern basic.md`
 
-Name filters match file paths too. A file match runs all its cases.
+`--test-name-pattern` matches file paths or command headings. Here the file name
+matches, so all three cases run, just as with `--file-pattern basic`.
 
 ```expected
 basic.md
@@ -71,7 +73,8 @@ fail 0
 
 ## `mm tests/fixtures/passing --test-name-pattern "^mm --version$"`
 
-Match the exact command heading in either file. The anchors prevent partial matches.
+Here the pattern matches command headings instead: only `mm --version` runs in
+each file. `--file-pattern` cannot select individual commands.
 
 ```expected
 basic.md
@@ -82,7 +85,8 @@ pass 2
 fail 0
 ```
 
-Earlier cases won't run automatically. Select the whole file if cases depend on
+Combine the flags to narrow files first, then select commands within them.
+Earlier cases won't run automatically; select the whole file if cases depend on
 each other.
 
 ## `mm tests/fixtures/passing --tags missing` (exit 1)
