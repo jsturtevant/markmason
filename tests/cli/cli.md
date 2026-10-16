@@ -22,7 +22,7 @@ Print version
 Print the installed version, not the help text describing the flag.
 
 ```expected
-mm 0.1.0
+mm 0.1.1
 ```
 
 [Run tests](running.md) | [Filter tests](filtering.md) | [Error cases](errors.md)
