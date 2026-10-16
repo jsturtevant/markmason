@@ -100,6 +100,8 @@ to reuse it. Keep the folder's reference file and license with it.
 
 ## Releases
 
+PRs run CI only. The separate release workflow reuses those checks before publishing.
+
 - Successful `main` builds update the mutable **`preview-release`** prerelease.
 - For stable releases, update `Cargo.toml`, `Cargo.lock`, and the version assertion
   in `tests/cli/cli.md`, then push a matching `vMAJOR.MINOR.PATCH` tag.
