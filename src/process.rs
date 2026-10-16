@@ -431,7 +431,7 @@ pub fn pty(
                     |step| format!("Waiting for step {step_index}: match {:?}", step.text),
                 );
                 bail!(
-                    "PTY command timed out after {}ms.\n{waiting}\nOutput so far:\n{raw}",
+                    "PTY command timed out after {}ms.\n{waiting}\nOutput so far:\n{clean}",
                     timeout.as_millis()
                 );
             }
@@ -477,7 +477,7 @@ pub fn pty(
             {
                 if step_index < steps.len() {
                     bail!(
-                        "PTY exited before completing step {step_index}: match {:?}\nOutput:\n{raw}",
+                        "PTY exited before completing step {step_index}: match {:?}\nOutput:\n{clean}",
                         steps[step_index].text
                     );
                 }

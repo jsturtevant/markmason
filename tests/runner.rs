@@ -330,6 +330,55 @@ done no
 }
 
 #[test]
+fn pty_failure_diagnostics_strip_terminal_control_sequences() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("errors.md"),
+        r#"## `app interactive`
+```pty
+match: missing
+send: unused{enter}
+```
+
+## `app interactive`
+```pty
+match: Ready?
+send: yes{enter}
+match: Ready?
+send: no{enter}
+match: missing
+send: unused{enter}
+```
+"#,
+    )
+    .unwrap();
+    let output = command(dir.path())
+        .args(["--timeout", "2"])
+        .output()
+        .unwrap();
+    let result = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{result}");
+    for expected in [
+        "pass 0\nfail 2",
+        "PTY command timed out after 2000ms.",
+        "Waiting for step 0: match \"missing\"",
+        "Output so far:\nReady?",
+        "PTY exited before completing step 2: match \"missing\"",
+        "accepted yes",
+        "done no",
+    ] {
+        assert!(
+            result.contains(expected),
+            "missing {expected:?}: {result:?}"
+        );
+    }
+    assert!(
+        !result.contains('\x1b'),
+        "terminal codes leaked: {result:?}"
+    );
+}
+
+#[test]
 fn invalid_setup_spawn_empty_specs_and_mismatches_fail() {
     let dir = tempfile::tempdir().unwrap();
     for (markdown, expected) in [

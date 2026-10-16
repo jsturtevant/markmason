@@ -87,6 +87,7 @@ Created demo
 - Every match needs a following `send:`. All steps must complete.
 - Sends append no newline; use `{enter}` when needed.
 - Expected PTY output always uses contains matching.
+- Captured output is ANSI-stripped, including timeout and incomplete-script diagnostics.
 - Missing prompts, startup failures, and timeouts fail even with an expected nonzero exit.
 - Oversized input remains subject to timeout and cancellation.
 
