@@ -1,7 +1,6 @@
 # Markmason
 
-Write CLI tests in Markdown. Run them with **`mm`**, a single Rust binary.
-No Node or Rust toolchain needed at runtime.
+Write tests in Markdown. Run them with **`mm`**.
 
 ## Install
 
@@ -28,13 +27,13 @@ Save as `tests/cli/greet.md`:
 ````markdown
 # Greetings
 
-## `mycli greet Ada`
+## `bash -c "echo Hello, world!"`
 ```expected
-Hello, Ada!
+Hello, world!
 ```
 ````
 
-Put your CLI on `PATH`, then run:
+With `bash` on `PATH`, run:
 
 ```sh
 mm                         # Defaults to tests/cli
@@ -45,11 +44,17 @@ mm --file-pattern greet    # Select files by regex
 
 ## Live examples
 
-Markmason's own tests double as docs: [getting started](tests/cli/cli.md),
-[running tests](tests/cli/running.md), and [filtering](tests/cli/filtering.md).
-Try [stdin and pipes](tests/cli/input.md), [terminal prompts](tests/cli/interactive.md),
-[output matching](tests/cli/matching.md), [setup and state](tests/cli/state.md),
-[path variables](tests/cli/variables.md), and [environment filters](tests/cli/environment.md).
+Learn more with real examples from `mm`:
+
+- [Getting started](tests/cli/cli.md)
+- [Running tests](tests/cli/running.md)
+- [Filtering](tests/cli/filtering.md)
+- [Stdin and pipes](tests/cli/input.md)
+- [Terminal prompts](tests/cli/interactive.md)
+- [Output matching](tests/cli/matching.md)
+- [Setup and state](tests/cli/state.md)
+- [Path variables](tests/cli/variables.md)
+- [Environment filters](tests/cli/environment.md)
 
 Run the same files from this checkout (see [development prerequisites](#develop-and-self-test)):
 
@@ -61,7 +66,7 @@ This builds `mm` and [`mm-test-cli`](tests/support/README.md), a small app
 that prints text, shows prompts, and writes test state. Both go on `PATH`.
 `mm-test-cli` is not shipped with `mm`; your own specs run your CLI instead.
 
-## Test features
+## Markmason features
 
 | Feature | Syntax |
 |---------|--------|
