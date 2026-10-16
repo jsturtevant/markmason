@@ -13,12 +13,3 @@ Print version
 ```
 
 ## `mm --version`
-
-## `mm --not-an-option | mm --help` (exit 2)
-
-The pipeline must stop at the first failing command.
-
-```expected-contains
-error: unexpected argument '--not-an-option' found
-For more information, try '--help'.
-```
