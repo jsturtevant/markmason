@@ -43,6 +43,17 @@ mm --list                  # Discover without executing
 mm --file-pattern greet    # Select files by regex
 ```
 
+## Live examples
+
+Markmason's own tests double as docs: [getting started](tests/cli/cli.md),
+[running tests](tests/cli/running.md), and [filtering](tests/cli/filtering.md).
+
+Run the same files from this checkout with `mm` on `PATH`:
+
+```sh
+mm tests/cli
+```
+
 ## Test features
 
 | Feature | Syntax |
