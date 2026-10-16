@@ -25,11 +25,12 @@ gh release download v0.1.0 --repo jsturtevant/markmason \
   --pattern 'markmason-v0.1.0-x86_64-unknown-linux-gnu.tar.gz*'
 sha256sum --check markmason-v0.1.0-x86_64-unknown-linux-gnu.tar.gz.sha256
 tar -xzf markmason-v0.1.0-x86_64-unknown-linux-gnu.tar.gz mm
+mkdir -p ~/.local/bin
 install -m 755 mm ~/.local/bin/mm
 mm --version
 ```
 
-Ensure `~/.local/bin` exists and is on `PATH`. On macOS use `shasum -a 256 -c`
+Ensure `~/.local/bin` is on `PATH`. On macOS use `shasum -a 256 -c`
 instead of `sha256sum --check`.
 
 Or build from source with Rust 1.88+:
