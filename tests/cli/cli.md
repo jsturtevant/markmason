@@ -1,5 +1,8 @@
 # Get started with Markmason
 
+Find available options, check the installed version, and see how `mm` reports
+unknown options and invalid timeouts.
+
 These examples run as tests. `expected` checks the full output;
 `expected-contains` checks selected lines. `(exit N)` sets the expected exit code.
 

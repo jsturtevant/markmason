@@ -1,5 +1,8 @@
 # Run Markdown tests
 
+Run a suite, preview its commands, and read the results. Includes output
+mismatches, invalid specs, and failed setup.
+
 Run these examples from the repository root with `mm` on `PATH`.
 They use [sample specs](../fixtures); bare `mm` defaults to `tests/cli`.
 

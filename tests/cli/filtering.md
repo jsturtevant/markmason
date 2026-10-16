@@ -1,5 +1,8 @@
 # Filter tests
 
+Pick files or individual commands using path patterns, tags, and name filters.
+Also covers the error returned when nothing matches.
+
 These examples use [two sample specs](../fixtures/passing).
 Run from the repository root with `mm` on `PATH`.
 
