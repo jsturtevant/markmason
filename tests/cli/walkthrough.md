@@ -19,6 +19,8 @@ then press Enter. Esc cancels without running any commands.
 
 Press Enter after each result to continue, or type q then Enter to stop.
 The section headings below become the titles in the walkthrough.
+The [walkthrough tests](stepping.md) exercise `mm --step` itself using a real
+terminal and scripted keypresses.
 
 ## Start with a greeting
 

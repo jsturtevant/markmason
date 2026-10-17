@@ -442,8 +442,8 @@ fn key_placeholders_and_ansi() {
         "\x1b[?25l\x1b[?25h\x1b[2J\x1b[?1049h\x1b[2J"
     );
     assert_eq!(
-        spec::input_keys("a{ENTER}{up}{Down}{space}{backspace}"),
-        "a\r\x1b[A\x1b[B \x7f"
+        spec::input_keys("a{ENTER}{up}{Down}{space}{backspace}{Escape}"),
+        "a\r\x1b[A\x1b[B \x7f\x1b"
     );
     assert_eq!(
         matching::strip_ansi("\x1b[31mred\x1b[0m\x1b[?25l\x1b]0;title\x07"),

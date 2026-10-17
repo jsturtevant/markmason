@@ -15,6 +15,7 @@ predictable output, prompts, and state.
 | [matching-order](matching-order/output.md) | Exit 1 | Output in the wrong order is rejected |
 | [invalid](invalid/invalid.md) | Exit 1 | Invalid frontmatter is rejected |
 | [pty-timeout](pty-timeout/timeout.md) | Exit 1 | An unreached terminal prompt times out |
+| [walkthrough](walkthrough) | Mixed | Terminal-driven stepping, file selection, quitting, and assertion failures |
 
 For example, `matching-order` prints `second`, then `first`, but expects `first`,
 then `second`. The [outer test](../cli/matching-errors.md) expects exit 1 and the
