@@ -139,6 +139,232 @@ fn next_step(
 }
 
 #[test]
+fn single_file_input_lists_without_setup_and_respects_filters() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("lesson.md");
+    fs::write(
+        &file,
+        "---\nsetup: missing-executable\n---\n```markmason\napp echo selected\n```\n",
+    )
+    .unwrap();
+    fs::write(dir.path().join("other.md"), "```markmason\napp fail\n```\n").unwrap();
+    let output = command(&file).arg("--list").output().unwrap();
+    let result = text(&output);
+    assert!(output.status.success(), "{result}");
+    assert!(
+        result.contains("lesson.md\n  app echo selected"),
+        "{result}"
+    );
+    assert!(!result.contains("other.md"), "{result}");
+    let output = command(&file)
+        .args(["--list", "--file-pattern", "^other"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "{}", text(&output));
+    assert!(text(&output).contains("No markdown test specs matched"));
+}
+
+#[test]
+fn markdown_setup_shares_home_config_cwd_and_custom_variables_and_cleans_up() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("prerequisites")).unwrap();
+    fs::write(
+        dir.path().join("prerequisites/first steps.md"),
+        "---\nsetup: app mark ./setup-ran\n---\n\
+         ```markmason\napp state-exists CUSTOM_HOME\n```\n```expected\nfalse\n```\n\
+         ```markmason\napp mark \"$CUSTOM_HOME/state\"\n\
+         app write-state XDG_CONFIG_HOME configured\n\
+         app mark \"$REPO_ROOT/prepared\"\n```\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("gettingstarted.md"),
+        "---\nsetup: 'mm \"prerequisites/first steps.md\"'\n---\n\
+         ```markmason\napp state-exists CUSTOM_HOME\n```\n```expected\ntrue\n```\n",
+    )
+    .unwrap();
+    let lesson = dir.path().join("lesson.md");
+    fs::write(
+        &lesson,
+        "---\nsetup: mm gettingstarted.md\n---\n\
+         ```markmason\napp state-exists CUSTOM_HOME\n\
+         app state-exists XDG_CONFIG_HOME\n```\n```expected\ntrue\ntrue\n```\n\
+         ```markmason\napp env CUSTOM_HOME XDG_CONFIG_HOME\n```\n",
+    )
+    .unwrap();
+    let output = command_with_home(&lesson, "CUSTOM_HOME")
+        .arg("--cwd")
+        .arg(dir.path())
+        .args(["--verbose", "--test-name-pattern", "^lesson"])
+        .output()
+        .unwrap();
+    let result = text(&output);
+    assert!(output.status.success(), "{result}");
+    assert!(result.contains("pass 2\nfail 0"), "{result}");
+    assert!(dir.path().join("prepared").is_file(), "{result}");
+    assert!(dir.path().join("prerequisites/setup-ran").is_file());
+    let homes: Vec<_> = result
+        .lines()
+        .filter(|line| line.contains("markmason-home-") || line.contains("markmason-xdg-"))
+        .filter(|line| Path::new(line).is_absolute())
+        .collect();
+    assert!(homes.len() >= 2, "{result}");
+    for home in homes {
+        assert!(!Path::new(home).exists(), "Fixture not cleaned up: {home}");
+    }
+}
+
+#[test]
+fn markdown_setup_failures_skip_later_setup_and_walkthrough_commands() {
+    for (prerequisite, expected) in [
+        ("```markmason\napp fail\n```\n", "expected exit 0"),
+        (
+            "```markmason\napp echo actual\n```\n```expected\ndifferent\n```\n",
+            "Line 1 mismatch",
+        ),
+        (
+            "```markmason\napp env TEST_HOME XDG_CONFIG_HOME\n```\n```expected\ndifferent\n```\n",
+            "Line 1 mismatch",
+        ),
+        (
+            "---\ntimeout: invalid\n---\n```markmason\napp echo no\n```\n",
+            "Invalid Markdown setup",
+        ),
+        ("# No commands\n", "No test cases found in Markdown setup"),
+        (
+            "---\nclone: owner/repo\n---\n```markmason\napp echo no\n```\n",
+            "cannot use clone",
+        ),
+        (
+            "---\nsetup: mm lesson.md\n---\n```markmason\napp echo no\n```\n",
+            "Circular Markdown setup",
+        ),
+        (
+            "---\nsetup: mm missing.md\n---\n```markmason\napp echo no\n```\n",
+            "Cannot find Markdown setup",
+        ),
+        (
+            "---\ntimeout: 0.1\n---\n```markmason\napp sleep\n```\n",
+            "timed out",
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("must-not-run");
+        let lesson = dir.path().join("lesson.md");
+        fs::write(
+            &lesson,
+            format!(
+                "---\nsetup: mm setup.md\n---\n```markmason\napp mark \"{}\"\n```\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        let setup = if prerequisite == "# No commands\n" {
+            prerequisite.to_owned()
+        } else {
+            format!(
+                "{prerequisite}\n```markmason\napp mark \"{}\"\n```\n",
+                marker.display()
+            )
+        };
+        fs::write(dir.path().join("setup.md"), setup).unwrap();
+        let output = command(&lesson).output().unwrap();
+        let result = text(&output);
+        assert!(!output.status.success(), "{result}");
+        assert!(result.contains(expected), "{expected}: {result}");
+        assert!(!marker.exists(), "{result}");
+        assert!(result.contains("pass 0\nfail 1"), "{result}");
+        for home in result.lines().filter(|line| {
+            Path::new(line).is_absolute()
+                && (line.contains("markmason-home-") || line.contains("markmason-xdg-"))
+        }) {
+            assert!(!Path::new(home).exists(), "Fixture not cleaned up: {home}");
+        }
+    }
+}
+
+#[test]
+fn markdown_setup_preserves_expected_nonzero_and_isolation_between_callers() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("setup.md"),
+        "```markmason\napp state-exists\n```\n```expected\nfalse\n```\n\
+         ```markmason (exit 2)\napp fail\n```\n```expected\nstdout\nstderr\n```\n\
+         ```markmason\napp write-state TEST_HOME ready\n```\n",
+    )
+    .unwrap();
+    for name in ["a.md", "b.md"] {
+        fs::write(
+            dir.path().join(name),
+            "---\nsetup: mm setup.md\n---\n```markmason\napp state\n```\n\
+             ```expected\nready\n```\n",
+        )
+        .unwrap();
+    }
+    let output = command(dir.path())
+        .args(["--file-pattern", "^[ab]\\.md$"])
+        .output()
+        .unwrap();
+    let result = text(&output);
+    assert!(output.status.success(), "{result}");
+    assert!(result.contains("pass 2\nfail 0"), "{result}");
+}
+
+#[test]
+fn markdown_setup_shares_cloned_checkout_and_background_processes() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::hard_link(
+        helper(),
+        dir.path()
+            .join(format!("gh{}", std::env::consts::EXE_SUFFIX)),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("setup.md"),
+        "---\nsetup: app mark prepared\n---\n\
+         ```markmason\napp cloned\n```\n```expected\nyes\n```\n\
+         ```markmason\napp background \"$REPO_ROOT/processes\"\n```\n",
+    )
+    .unwrap();
+    let lesson = dir.path().join("lesson.md");
+    fs::write(
+        &lesson,
+        "---\nclone: owner/repo\nsetup: mm setup.md\n---\n\
+         ```markmason\napp await-agent\n```\n```expected\nready\n```\n\
+         ```markmason\napp setup ./prepared\n```\n\
+         ```markmason\napp cwd\n```\n",
+    )
+    .unwrap();
+    let path = std::env::join_paths(
+        [dir.path().to_owned(), helper().parent().unwrap().to_owned()]
+            .into_iter()
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let output = command(&lesson)
+        .env("PATH", path)
+        .arg("--verbose")
+        .output()
+        .unwrap();
+    let result = text(&output);
+    assert!(output.status.success(), "{result}");
+    assert!(result.contains("pass 3\nfail 0"), "{result}");
+    assert!(
+        !Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("prepared")
+            .exists()
+    );
+    let checkout = result
+        .lines()
+        .find(|line| Path::new(line).is_absolute() && line.contains("markmason-repo-"))
+        .unwrap();
+    assert!(
+        !Path::new(checkout).exists(),
+        "Cloned fixture not cleaned up: {checkout}"
+    );
+}
+
+#[test]
 fn step_mode_requires_a_terminal_or_an_explicit_file_filter() {
     let dir = tempfile::tempdir().unwrap();
     let marker = dir.path().join("must-not-run");

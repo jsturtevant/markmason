@@ -158,3 +158,36 @@ terminal input.
 ```expected
 Error: The walkthrough file picker needs an interactive terminal; select a file with --file-pattern REGEX
 ```
+
+## Prepare a walkthrough with another Markdown document
+
+```markmason
+mm tests/fixtures/markdown-setup/walkthrough.md --step --home-env TEST_HOME
+```
+
+A direct file path skips the picker. The walkthrough's
+`setup: mm gettingstarted.md` runs automatically in the same fixture, without
+pausing. Only the two walkthrough commands need Enter.
+
+```pty
+match: Enter: Next block
+send: {enter}
+match: Enter: Finish walkthrough
+send: {enter}
+```
+
+```expected-contains
+walkthrough.md | Block 1 of 2
+Inspect the prepared application state
+ACTUAL OUTPUT
+| ready
+PASS Block matched expectations.
+walkthrough.md | Block 2 of 2
+Inspect the prepared configuration
+ACTUAL OUTPUT
+| true
+PASS Block matched expectations.
+Walkthrough finished
+Passed blocks: 2
+Failed blocks: 0
+```

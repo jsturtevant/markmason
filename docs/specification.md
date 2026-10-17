@@ -72,7 +72,7 @@ timeout: 30
 
 | Field | Meaning |
 |-------|---------|
-| `setup` | Complete command for this file: Node, Python, or a native executable |
+| `setup` | Complete command, or `mm file.md` to reuse a Markdown setup document |
 | `clone` | GitHub `owner/repo` to clone with `gh auth status` / `gh repo clone` |
 | `tags` | Array of tags for filtering |
 | `timeout` | Positive seconds per command; overrides `--timeout` (default 30) |
@@ -82,6 +82,34 @@ It uses command quoting, not shell expansion or pipelines.
 Executables and file arguments found beside the spec resolve there;
 explicit `./` and `../` paths also resolve from the spec's directory.
 Quote paths with spaces, for example `setup: 'python3 "setup fixtures.py"'`.
+
+To prepare a walkthrough using a getting-started document, write:
+
+```yaml
+---
+setup: mm gettingstarted.md
+---
+```
+
+`mm file.md` (also `mm.exe file.md` on Windows) in setup is a Markdown
+prerequisite: the runner executes that file's setup, commands, and assertions
+in the caller's existing fixture, rather than starting an isolated child runner.
+The path resolves beside the calling file; quote paths containing spaces.
+Application home, configuration, working directory, variables, and background
+processes are shared. A prerequisite's external setup also runs in that shared
+working directory, including a cloned checkout.
+Setup commands do not pause in `--step` mode or count
+toward the walkthrough's block progress.
+
+Prerequisites run in full regardless of the caller's filters. Their own `timeout`
+overrides the caller's timeout. Failure stops setup immediately and skips the
+calling file's commands. Further Markdown prerequisites are supported; cycles
+are errors. Put `clone` on the calling file, not a shared setup document.
+Other setup commands continue to run as external executables.
+`--list` does not execute or expand prerequisites.
+
+See the executable [setup example](../tests/cli/state.md) and its
+[getting-started document](../tests/fixtures/markdown-setup/gettingstarted.md).
 
 ## Isolation and cleanup
 
@@ -123,11 +151,13 @@ A searchable picker lists the files matching your filters. Use the arrow keys
 or type to search, then press **Enter** to choose one file. **Esc** cancels before
 any setup, commands, or fixtures run. This also works when only one file matches.
 
-To skip the picker, select files with `--file-pattern` (or its environment
-variable). Without an interactive terminal, a file filter is required:
+To skip the picker, pass a Markdown file directly or select files with
+`--file-pattern` (or its environment variable). Without an interactive terminal,
+one of those explicit selections is required:
 
 ```sh
 mm tests/cli --step --file-pattern '^greet\.md$'
+mm tests/cli/greet.md --step
 ```
 
 Each command shows its section heading, block and command progress, resolved

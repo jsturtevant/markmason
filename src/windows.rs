@@ -14,15 +14,16 @@ use std::{
 };
 use windows_sys::Win32::{
     Foundation::{
-        ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
-        SetHandleInformation, WAIT_OBJECT_0,
+        ERROR_ALREADY_EXISTS, ERROR_INVALID_PARAMETER, ERROR_MORE_DATA, GetLastError, HANDLE,
+        HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, SetHandleInformation, WAIT_OBJECT_0,
     },
     Globalization::{CSTR_EQUAL, CompareStringOrdinal},
     System::{
         JobObjects::{
             AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-            JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
+            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_BASIC_PROCESS_ID_LIST,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectBasicAccountingInformation,
+            JobObjectBasicProcessIdList, JobObjectExtendedLimitInformation,
             QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
         },
         Threading::{
@@ -158,6 +159,7 @@ impl ProcessTree {
     }
 
     pub fn terminate(&self) -> Result<()> {
+        let processes = self.process_handles()?;
         if unsafe { TerminateJobObject(self.job.as_raw_handle(), 1) } == 0 {
             return Err(std::io::Error::last_os_error()).context("Failed to terminate command job");
         }
@@ -177,12 +179,73 @@ impl ProcessTree {
                 return Err(std::io::Error::last_os_error()).context("Failed to query command job");
             }
             if info.ActiveProcesses == 0 {
-                return Ok(());
+                break;
             }
             if Instant::now() >= deadline {
                 bail!("Timed out waiting for command job to terminate");
             }
             thread::sleep(Duration::from_millis(10));
+        }
+        // Job accounting can reach zero before exited processes release their cwd handles.
+        for process in processes {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match unsafe {
+                WaitForSingleObject(
+                    process.as_raw_handle(),
+                    remaining.as_millis().min(u32::MAX as u128) as u32,
+                )
+            } {
+                WAIT_OBJECT_0 => {}
+                windows_sys::Win32::Foundation::WAIT_FAILED => {
+                    return Err(std::io::Error::last_os_error())
+                        .context("Failed waiting for command process to terminate");
+                }
+                _ => bail!("Timed out waiting for command process to terminate"),
+            }
+        }
+        Ok(())
+    }
+
+    fn process_handles(&self) -> Result<Vec<OwnedHandle>> {
+        let mut buffer = vec![0usize; 16];
+        loop {
+            let result = unsafe {
+                QueryInformationJobObject(
+                    self.job.as_raw_handle(),
+                    JobObjectBasicProcessIdList,
+                    buffer.as_mut_ptr().cast(),
+                    (buffer.len() * size_of::<usize>()) as u32,
+                    null_mut(),
+                )
+            };
+            if result == 0 {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() == Some(ERROR_MORE_DATA as i32) {
+                    buffer.resize(buffer.len() * 2, 0);
+                    continue;
+                }
+                return Err(error).context("Failed to list command job processes");
+            }
+            let list = unsafe { &*buffer.as_ptr().cast::<JOBOBJECT_BASIC_PROCESS_ID_LIST>() };
+            let ids = unsafe {
+                std::slice::from_raw_parts(
+                    list.ProcessIdList.as_ptr(),
+                    list.NumberOfProcessIdsInList as usize,
+                )
+            };
+            let mut handles = Vec::new();
+            for &pid in ids {
+                let handle = unsafe { OpenProcess(SYNCHRONIZATION_SYNCHRONIZE, 0, pid as u32) };
+                if handle.is_null() {
+                    let error = std::io::Error::last_os_error();
+                    if error.raw_os_error() != Some(ERROR_INVALID_PARAMETER as i32) {
+                        return Err(error).context("Failed to open command job process");
+                    }
+                } else {
+                    handles.push(owned(handle)?);
+                }
+            }
+            return Ok(handles);
         }
     }
 }

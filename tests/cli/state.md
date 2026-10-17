@@ -58,3 +58,26 @@ PASS mm-test-cli state-exists XDG_CONFIG_HOME
 pass 4
 fail 0
 ```
+
+## Reuse a getting-started document
+
+Put `setup: mm gettingstarted.md` in a walkthrough's frontmatter to run that
+document's commands and assertions first. Paths resolve beside the calling
+Markdown file. Setup shares the walkthrough's home, configuration, and working
+directory, so its state remains available until the walkthrough finishes.
+
+The [getting-started document](../fixtures/markdown-setup/gettingstarted.md)
+prepares state for [this walkthrough](../fixtures/markdown-setup/walkthrough.md).
+Both files can also run directly:
+
+```markmason
+mm tests/fixtures/markdown-setup/walkthrough.md --home-env TEST_HOME
+```
+
+```expected
+walkthrough.md
+PASS mm-test-cli state
+PASS mm-test-cli state-exists XDG_CONFIG_HOME
+pass 2
+fail 0
+```
