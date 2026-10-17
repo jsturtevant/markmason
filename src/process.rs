@@ -1,4 +1,4 @@
-use crate::{cancellation, matching::strip_ansi, spec};
+use crate::{cancellation, matching::pty_text, spec};
 use anyhow::{Context, Result, bail};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use std::{
@@ -425,7 +425,7 @@ pub fn pty(
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
             let raw = String::from_utf8_lossy(&bytes);
-            let clean = strip_ansi(&raw);
+            let clean = pty_text(&raw);
             if start.elapsed() >= timeout {
                 let waiting = steps.get(step_index).map_or_else(
                     || "Waiting for process to exit (all steps matched)".to_owned(),
@@ -477,10 +477,6 @@ pub fn pty(
                 && !sending
             {
                 let code = status.exit_code() as i32;
-                #[cfg(windows)]
-                if args.iter().any(|arg| arg == "--step") {
-                    eprintln!("PTY raw diagnostic: {raw:?}");
-                }
                 if (final_command || code != 0) && step_index < steps.len() {
                     bail!(
                         "PTY exited before completing step {step_index}: match {:?}\nOutput:\n{clean}",
