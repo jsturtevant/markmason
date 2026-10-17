@@ -160,7 +160,8 @@ definition gets one pause, not one per physical line. Syntax is parsed before
 execution; Bash itself still determines which features its installed version supports.
 
 The shell is noninteractive and does not load profiles, `.bashrc`, `BASH_ENV`,
-or `ENV`. It requires `bash`, `stty`, and `sleep` on `PATH`.
+or `ENV`, and ignores inherited `SHELLOPTS`/`BASHOPTS` so its starting options
+are predictable. It requires `bash`, `stty`, and `sleep` on `PATH`.
 Linux uses the installed Bash; macOS supports built-in Bash 3.2 regardless of
 the user's login shell. Native Windows requires a local Git Bash installation on
 `PATH`, alongside the native tools being tested. A WSL launcher is not a native

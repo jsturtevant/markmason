@@ -258,7 +258,8 @@ fn bash_session_handles_compound_commands_and_preserves_state_after_expected_fai
     fs::write(
         &lesson,
         "---\nshell: bash\n---\n\
-         ```markmason\nVALUE=before\nsleep 0.1 &\nBACKGROUND=$!\nwait \"$BACKGROUND\"\n\
+        ```markmason\nif shopt -q failglob; then false; fi\n\
+        VALUE=before\nsleep 0.1 &\nBACKGROUND=$!\nwait \"$BACKGROUND\"\n\
          for value in one two; do\n  printf '%s\\n' \"$value\"\ndone\n\
          cat <<'END'\n  heredoc text\nEND\n\
          printf '%s\\n' continued \\\n  command | cat\n```\n\
@@ -268,7 +269,11 @@ fn bash_session_handles_compound_commands_and_preserves_state_after_expected_fai
          ```markmason\nprintf '%s\\n' \"$VALUE\"\n```\n```expected\nbefore\n```\n",
     )
     .unwrap();
-    let output = command(&lesson).output().unwrap();
+    let output = command(&lesson)
+        .env("SHELLOPTS", "errexit:noclobber")
+        .env("BASHOPTS", "failglob")
+        .output()
+        .unwrap();
     let result = text(&output);
     assert!(output.status.success(), "{result}");
     assert!(result.contains("pass 3\nfail 0"), "{result}");

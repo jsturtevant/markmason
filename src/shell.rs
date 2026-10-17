@@ -90,7 +90,7 @@ impl Session {
         let bootstrap = directory.path().join("session.sh");
         fs::write(&bootstrap, BOOTSTRAP)?;
         let mut env = env.clone();
-        for name in ["BASH_ENV", "ENV"] {
+        for name in ["BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS"] {
             process::set_env(&mut env, name, "");
         }
         let terminal = process::Terminal::new(
