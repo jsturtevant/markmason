@@ -17,7 +17,7 @@ verify the archive against `SHA256SUMS`, and put `mm` (`mm.exe` on Windows) on `
 Or install from source with Rust 1.88+:
 
 ```sh
-cargo install --git https://github.com/jsturtevant/markmason --tag v0.1.2 --locked
+cargo install --git https://github.com/jsturtevant/markmason --tag v0.2.0 --locked
 ```
 
 ## Write a test
@@ -145,6 +145,7 @@ to reuse it. Keep the folder's reference file and license with it.
 PRs run CI only. The separate release workflow reuses those checks before publishing.
 
 - Successful `main` builds update the mutable **`preview-release`** prerelease.
+- Use a minor version bump for executable Markdown format changes.
 - For stable releases, update `Cargo.toml`, `Cargo.lock`, and the version assertion
   in `tests/cli/cli.md`, then push a matching `vMAJOR.MINOR.PATCH` tag.
   Versioned releases are never overwritten.
