@@ -198,6 +198,75 @@ fn fenced_cases_bind_blocks_until_the_next_command_or_heading() -> Result<()> {
 }
 
 #[test]
+fn fenced_cases_stop_at_setext_headings() -> Result<()> {
+    for underline in ["=", "===", "-", "---", "  === \t", "   ---"] {
+        let spec = spec::parse(&format!(
+            "```markmason\nfirst\n```\n```expected\noriginal\n```\n\
+             Other examples\n{underline}\n\
+             ```expected-contains\nmust not overwrite\n```\n\
+             ```stdin\nmust not send\n```\n\
+             ```pty\nmatch: prompt\nsend: must not send\n```\n\
+             ```markmason\nsecond\n```\n```expected\nsecond result\n```\n"
+        ))?;
+        assert_eq!(spec.cases.len(), 2, "{underline:?}");
+        let first = &spec.cases[0];
+        assert_eq!(first.expected.as_deref(), Some("original"), "{underline:?}");
+        assert!(!first.contains, "{underline:?}");
+        assert!(first.stdin.is_none(), "{underline:?}");
+        assert!(first.pty.is_none(), "{underline:?}");
+        assert_eq!(spec.cases[1].expected.as_deref(), Some("second result"));
+    }
+    for divider in ["---", "==="] {
+        let spec = spec::parse(&format!(
+            "```markmason\ncmd\n```\n\n{divider}\n\n```expected\nstill attached\n```\n"
+        ))?;
+        assert_eq!(spec.cases[0].expected.as_deref(), Some("still attached"));
+    }
+    Ok(())
+}
+
+#[test]
+fn fenced_contents_remove_only_the_opening_indentation() -> Result<()> {
+    for marker in ["```", "~~~"] {
+        for indent in 0..=3 {
+            let pad = " ".repeat(indent);
+            let spec = spec::parse(&format!(
+                "{pad}{marker}markmason\n{pad}app cat\n{pad}{marker}\n\
+                 {pad}{marker}stdin\n\
+                 {pad}if True:\n{pad}    print(\"ok\")\n\n{pad}print(\"done\")\n\
+                 unindented\n{pad}\tkeep tab\n{pad}{marker}\n\
+                 {pad}{marker}expected\n{pad}ok\n{pad}  extra indentation\n{pad}{marker}\n\
+                 {pad}{marker}pty\n{pad}match: Ready?\n{pad}send: yes\n{pad}{marker}\n"
+            ))?;
+            assert_eq!(spec.cases.len(), 1);
+            let case = &spec.cases[0];
+            assert_eq!(case.command, "app cat");
+            assert_eq!(
+                case.stdin.as_deref(),
+                Some("if True:\n    print(\"ok\")\n\nprint(\"done\")\nunindented\n\tkeep tab\n"),
+                "{marker}, indent {indent}"
+            );
+            assert_eq!(
+                case.expected.as_deref(),
+                Some("ok\n  extra indentation"),
+                "{marker}, indent {indent}"
+            );
+            let steps = case.pty.as_ref().unwrap();
+            assert_eq!(steps[0].text, "Ready?");
+            assert_eq!(steps[0].input, "yes");
+        }
+    }
+    let spec = spec::parse(
+        "   ```markmason\n   app cat\n   ```\n   ```stdin\n one space\n  two spaces\n    four spaces\n   ```\n",
+    )?;
+    assert_eq!(
+        spec.cases[0].stdin.as_deref(),
+        Some("one space\ntwo spaces\n four spaces\n")
+    );
+    Ok(())
+}
+
+#[test]
 fn invalid_command_fences_report_errors() {
     for (markdown, expected) in [
         ("```markmason\n", "Unterminated markmason block"),

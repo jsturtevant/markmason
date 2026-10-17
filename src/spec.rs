@@ -159,17 +159,28 @@ pub fn parse(content: &str) -> Result<Spec> {
     };
     let command_info = Regex::new(r"^markmason(?:\s+\(exit\s+(\d+)\))?$").unwrap();
     let heading = Regex::new(r"^ {0,3}#{1,6}(?:\s|$)").unwrap();
+    let setext_underline = Regex::new(r"^ {0,3}(?:=+|-+)[ \t]*$").unwrap();
     let lines: Vec<_> = body.split('\n').map(|s| s.trim_end_matches('\r')).collect();
     let mut current = None;
+    let mut paragraph = false;
     let mut i = 0;
     while i < lines.len() {
-        if heading.is_match(lines[i]) {
+        if heading.is_match(lines[i]) || (paragraph && setext_underline.is_match(lines[i])) {
             current = None;
+            paragraph = false;
+            i += 1;
+            continue;
         }
         let Some((marker, length, info)) = fence(lines[i]) else {
+            paragraph = !lines[i].trim().is_empty()
+                && !setext_underline.is_match(lines[i])
+                && !lines[i].starts_with("    ")
+                && !lines[i].starts_with('\t');
             i += 1;
             continue;
         };
+        paragraph = false;
+        let indent = lines[i].len() - lines[i].trim_start_matches(' ').len();
         let kind = info.split_whitespace().next().unwrap_or("");
         let recognized = matches!(
             kind,
@@ -188,7 +199,14 @@ pub fn parse(content: &str) -> Result<Spec> {
             if i == lines.len() {
                 bail!("Unterminated {kind} block");
             }
-            let block = lines[start..i].join("\n");
+            let block_lines: Vec<_> = lines[start..i]
+                .iter()
+                .map(|line| {
+                    let removed = line.bytes().take(indent).take_while(|b| *b == b' ').count();
+                    &line[removed..]
+                })
+                .collect();
+            let block = block_lines.join("\n");
             if kind == "markmason" {
                 let caps = command_info
                     .captures(info)
@@ -226,7 +244,7 @@ pub fn parse(content: &str) -> Result<Spec> {
                         case.contains = info == "expected-contains";
                     }
                     "stdin" => case.stdin = Some(block + "\n"),
-                    "pty" => case.pty = Some(parse_steps(&lines[start..i])?),
+                    "pty" => case.pty = Some(parse_steps(&block_lines)?),
                     _ => bail!("Invalid {kind} fence: unexpected metadata"),
                 }
             }
