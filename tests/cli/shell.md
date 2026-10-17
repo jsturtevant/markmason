@@ -94,6 +94,21 @@ application input
 application input
 ```
 
+## Wait for background output
+
+Wait for a background job before checking its output. Output printed while a
+walkthrough is paused is retained for the next command, not discarded.
+
+```markmason
+(sleep 0.1; printf 'background ready\n') &
+JOB=$!
+wait "$JOB"
+```
+
+```expected
+background ready
+```
+
 ## Confirm that input state also survives
 
 ```markmason

@@ -1,6 +1,21 @@
 use super::*;
 
 #[test]
+fn bash_terminal_boundaries_preserve_following_output_and_wait_for_complete_frames() {
+    for (raw, after) in [
+        ("output\r\nTOKEN\r\nlater", "later"),
+        ("output\r\r\nTOKEN\r\r\nlater", "later"),
+        ("output\x1b[2;1HTOKEN\x1b[3;1Hlater", "later"),
+        ("TOKEN\r\n\x1b[31mlater", "\x1b[31mlater"),
+    ] {
+        let end = shell::boundary_end(raw.as_bytes(), "TOKEN").unwrap();
+        assert_eq!(&raw[end..], after);
+    }
+    assert!(shell::boundary_end(b"output\r\nTOKEN", "TOKEN").is_none());
+    assert!(shell::boundary_end(b"output\r\nTOKEN\x1b[3;", "TOKEN").is_none());
+}
+
+#[test]
 fn shell_frontmatter_is_explicit_and_inherits_into_markdown_setup() -> Result<()> {
     let source =
         "---\nshell: bash\n---\n```markmason\nif true; then\n  printf 'ready\\n'\nfi\n```\n";

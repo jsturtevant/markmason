@@ -1,9 +1,11 @@
 use crate::{cancellation, matching::pty_text, process, spec};
 use anyhow::{Context, Result, bail};
+use regex::bytes::Regex;
 use std::{
     fs,
+    io::{Read, Seek, SeekFrom},
     path::Path,
-    sync::mpsc,
+    sync::{LazyLock, mpsc},
     thread,
     time::{Duration, Instant},
 };
@@ -18,6 +20,7 @@ command stty -echo || exit
 builtin printf 'ready\n' >| "$__markmason_root/ready"
 __markmason_sequence=0
 __markmason_status=0
+__markmason_last_arg=
 __markmason_previous_status() { return "$__markmason_status"; }
 while :; do
     __markmason_request="$__markmason_root/command-$__markmason_sequence"
@@ -25,23 +28,21 @@ while :; do
         "$__markmason_sleep" 0.05 || exit
     done
     if builtin test -f "$__markmason_request/pty"; then
-        if __markmason_previous_status; then
+        if __markmason_previous_status "$__markmason_last_arg"; then
             builtin . "$__markmason_request/script"
         else
             builtin . "$__markmason_request/script"
         fi
     else
-        if __markmason_previous_status; then
-            builtin . "$__markmason_request/script" < "$__markmason_request/input" >| "$__markmason_request/stdout" 2>| "$__markmason_request/stderr"
+        if __markmason_previous_status "$__markmason_last_arg"; then
+            builtin . "$__markmason_request/script" < "$__markmason_request/input" >> "$__markmason_root/stdout" 2>> "$__markmason_root/stderr"
         else
-            builtin . "$__markmason_request/script" < "$__markmason_request/input" >| "$__markmason_request/stdout" 2>| "$__markmason_request/stderr"
+            builtin . "$__markmason_request/script" < "$__markmason_request/input" >> "$__markmason_root/stdout" 2>> "$__markmason_root/stderr"
         fi
     fi
     __markmason_status=$?
-    if builtin test -f "$__markmason_request/pty"; then
-        IFS= builtin read -r __markmason_boundary < "$__markmason_request/boundary"
-        builtin printf '\r\n%s\r\n' "$__markmason_boundary"
-    fi
+    IFS= builtin read -r __markmason_boundary < "$__markmason_request/boundary"
+    builtin printf '\r\n%s\r\n' "$__markmason_boundary"
     builtin printf '%s\n' "$__markmason_status" >| "$__markmason_request/status"
     __markmason_sequence=$((__markmason_sequence + 1))
 done
@@ -112,10 +113,41 @@ fn before_boundary<'a>(text: &'a str, boundary: &str) -> Option<&'a str> {
     })
 }
 
+pub(super) fn boundary_end(bytes: &[u8], boundary: &str) -> Option<usize> {
+    static LINE_START: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\x1b\[[0-9]+;1[Hf]").unwrap());
+    let start = bytes
+        .windows(boundary.len())
+        .position(|part| part == boundary.as_bytes())?
+        + boundary.len();
+    let suffix = &bytes[start..];
+    let newline = suffix
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .map(|index| index + 1);
+    let cursor = LINE_START.find(suffix).map(|matched| matched.end());
+    newline
+        .into_iter()
+        .chain(cursor)
+        .min()
+        .map(|end| start + end)
+}
+
+fn read_capture(path: &Path, offset: u64) -> Result<Vec<u8>> {
+    let mut file = fs::File::open(path)?;
+    file.seek(SeekFrom::Start(offset))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
 pub struct Session {
     terminal: Option<process::Terminal>,
     directory: TempDir,
     sequence: usize,
+    pending: Vec<u8>,
+    stdout_position: u64,
+    stderr_position: u64,
 }
 
 impl Session {
@@ -125,6 +157,8 @@ impl Session {
             .tempdir()?;
         let bootstrap = directory.path().join("session.sh");
         fs::write(&bootstrap, BOOTSTRAP)?;
+        fs::write(directory.path().join("stdout"), "")?;
+        fs::write(directory.path().join("stderr"), "")?;
         let mut env = env.clone();
         for name in ["BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS"] {
             process::set_env(&mut env, name, "");
@@ -145,6 +179,9 @@ impl Session {
             terminal: Some(terminal),
             directory,
             sequence: 0,
+            pending: Vec::new(),
+            stdout_position: 0,
+            stderr_position: 0,
         };
         let deadline = Instant::now() + timeout.min(Duration::from_secs(10));
         let mut output = Vec::new();
@@ -203,10 +240,13 @@ impl Session {
             .path()
             .join(format!("command-{}", self.sequence));
         fs::create_dir(&directory)?;
-        fs::write(directory.join("script"), format!("{command}\n"))?;
+        fs::write(
+            directory.join("script"),
+            format!(
+                "{command}\n__markmason_status=$? __markmason_last_arg=${{_-}}\n__markmason_previous_status \"$__markmason_last_arg\"\n"
+            ),
+        )?;
         fs::write(directory.join("input"), input.unwrap_or_default())?;
-        fs::write(directory.join("stdout"), "")?;
-        fs::write(directory.join("stderr"), "")?;
         fs::write(directory.join("status"), "")?;
         if block.is_some() {
             fs::write(directory.join("pty"), "")?;
@@ -221,11 +261,7 @@ impl Session {
             self.sequence
         );
         fs::write(directory.join("boundary"), format!("{boundary}\n"))?;
-        let mut bytes = Vec::new();
-        while let Ok(chunk) = terminal.rx.try_recv() {
-            bytes.extend(chunk.context("Failed reading Bash session output")?);
-        }
-        bytes.clear();
+        let mut bytes = std::mem::take(&mut self.pending);
         fs::write(directory.join("ready"), "")?;
         self.sequence += 1;
         let start = Instant::now();
@@ -241,6 +277,7 @@ impl Session {
             let finished = before_boundary(&clean, &boundary);
             let clean = finished.unwrap_or(&clean);
             let command_raw = before_boundary(&raw, &boundary).unwrap_or(&raw);
+            let frame_end = boundary_end(&bytes, &boundary);
             let status = match fs::read_to_string(directory.join("status")) {
                 Ok(text) if text.ends_with('\n') => Some(
                     text.trim()
@@ -260,51 +297,52 @@ impl Session {
                     status.is_none(),
                 )?;
             }
-            let output = |code| -> Result<process::Output> {
-                let text = if block.is_some() {
-                    clean.to_owned()
-                } else {
-                    let mut text =
-                        String::from_utf8_lossy(&fs::read(directory.join("stdout"))?).into_owned();
-                    if code != 0 {
-                        text.push_str(&String::from_utf8_lossy(&fs::read(
-                            directory.join("stderr"),
-                        )?));
-                    }
-                    text
-                };
-                Ok(process::Output { text, code })
+            let output = |code| -> Result<(process::Output, u64, u64)> {
+                let stdout =
+                    read_capture(&self.directory.path().join("stdout"), self.stdout_position)?;
+                let stderr =
+                    read_capture(&self.directory.path().join("stderr"), self.stderr_position)?;
+                let mut text = clean.to_owned();
+                text.push_str(&String::from_utf8_lossy(&stdout));
+                if code != 0 {
+                    text.push_str(&String::from_utf8_lossy(&stderr));
+                }
+                Ok((
+                    process::Output { text, code },
+                    u64::try_from(stdout.len())?,
+                    u64::try_from(stderr.len())?,
+                ))
             };
             if let Some(code) = status
                 && block
                     .as_ref()
                     .is_none_or(|block| !block.interaction.sending())
-                && (block.is_none() || finished.is_some())
+                && let Some(frame_end) = frame_end
             {
+                let (output, stdout, stderr) = output(code)?;
                 if let Some(block) = block {
                     block.raw.push_str(command_raw);
-                    block.clean.push_str(clean);
+                    block.clean.push_str(&output.text);
                     block
                         .interaction
                         .check_complete(final_command, code, &block.clean)?;
-                    return Ok(process::Output {
-                        text: clean.to_owned(),
-                        code,
-                    });
                 }
-                return output(code);
+                self.pending = bytes[frame_end..].to_vec();
+                self.stdout_position += stdout;
+                self.stderr_position += stderr;
+                return Ok(output);
             }
             if terminal.child.try_wait()?.is_some() {
                 bail!(
                     "Bash session exited before reporting command status.\nOutput:\n{}",
-                    output(1)?.text
+                    output(1)?.0.text
                 );
             }
             if start.elapsed() >= timeout {
                 bail!(
                     "Bash command timed out after {}ms: {command}\nOutput so far:\n{}",
                     timeout.as_millis(),
-                    output(1)?.text
+                    output(1)?.0.text
                 );
             }
         }

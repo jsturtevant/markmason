@@ -225,7 +225,9 @@ fn bash_sessions_preserve_previous_status_and_noclobber_in_both_capture_modes() 
             &lesson,
             format!(
                 "---\nshell: bash\n---\n\
-                 ```markmason\ntrue\ntest \"$?\" -eq 0\nset -C\nprintf 'noclobber retained\\n'\n```\n\
+                 ```markmason\nmkdir -p \"$TEST_HOME/work\"\ncd \"$_\"\n\
+                 test \"$PWD\" -ef \"$TEST_HOME/work\"\ntrue\ntest \"$?\" -eq 0\n\
+                 set -C\nprintf 'noclobber retained\\n'\n```\n\
                  {pty}```expected\nnoclobber retained\n```\n\
                  ```markmason (exit 7)\n(exit 7)\n```\n{pty}\
                  ```markmason\ntest \"$?\" -eq 7\ntest -o noclobber\nprintf 'status retained\\n'\n```\n\
@@ -238,6 +240,64 @@ fn bash_sessions_preserve_previous_status_and_noclobber_in_both_capture_modes() 
         assert!(output.status.success(), "{result}");
         assert!(result.contains("pass 3\nfail 0"), "{result}");
     }
+}
+
+#[test]
+fn bash_background_output_survives_until_wait_in_both_capture_modes() {
+    for pty in ["", "```pty\n```\n"] {
+        let dir = tempfile::tempdir().unwrap();
+        let lesson = dir.path().join("lesson.md");
+        fs::write(
+            &lesson,
+            format!(
+                "---\nshell: bash\n---\n\
+                 ```markmason\n(while test ! -f \"$TEST_HOME/go\"; do sleep 0.01; done; printf 'late\\n') &\nJOB=$!\n```\n{pty}\
+                 ```markmason\n: > \"$TEST_HOME/go\"\nwait \"$JOB\"\nprintf 'done\\n'\n```\n\
+                 {pty}```expected\nlate\ndone\n```\n"
+            ),
+        )
+        .unwrap();
+        let output = command(&lesson).output().unwrap();
+        assert!(output.status.success(), "{}", text(&output));
+    }
+}
+
+#[test]
+fn bash_terminal_output_during_a_step_pause_is_not_discarded() {
+    let dir = tempfile::tempdir().unwrap();
+    let release = dir.path().join("release");
+    let printed = dir.path().join("printed");
+    let lesson = dir.path().join("lesson.md");
+    fs::write(
+        &lesson,
+        format!(
+            "---\nshell: bash\n---\n```markmason\n\
+             (while test ! -f \"{}\"; do sleep 0.01; done; printf 'ready\\n'; : > \"{}\") &\n\
+             wait \"$!\"\nprintf 'done\\n'\n```\n```pty\n```\n\
+             ```expected\nready\ndone\n```\n",
+            shell_path(&release),
+            shell_path(&printed),
+        ),
+    )
+    .unwrap();
+    let (mut child, mut input, receive) = step_process(&lesson, &[]);
+    let mut transcript = String::new();
+    next_step(&mut child, &receive, &mut transcript);
+    fs::write(release, "").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !printed.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        printed.exists(),
+        "Background output was not produced while paused"
+    );
+    input.write_all(b"\n\n\n").unwrap();
+    drop(input);
+    let output = child.wait_with_output().unwrap();
+    transcript.extend(receive.into_iter().map(Result::unwrap));
+    assert!(output.status.success(), "{transcript}\n{}", text(&output));
+    assert!(transcript.contains("Passed blocks: 1"), "{transcript}");
 }
 
 #[test]
@@ -2120,6 +2180,21 @@ fn bash_job_control_process_groups_are_cleaned_on_every_exit_path() {
             let pid = pid.parse().unwrap();
             let stopped = || {
                 let stopped = unsafe { libc::kill(pid, 0) } == -1;
+                #[cfg(target_os = "macos")]
+                let stopped = stopped || {
+                    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+                    let size = i32::try_from(std::mem::size_of_val(&info)).unwrap();
+                    let count = unsafe {
+                        libc::proc_pidinfo(
+                            pid,
+                            libc::PROC_PIDTBSDINFO,
+                            0,
+                            (&mut info as *mut libc::proc_bsdinfo).cast(),
+                            size,
+                        )
+                    };
+                    count == size && info.pbi_status == libc::SZOMB as u32
+                };
                 #[cfg(target_os = "linux")]
                 let stopped = stopped
                     || fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {

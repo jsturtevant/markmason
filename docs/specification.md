@@ -140,7 +140,7 @@ hello: two
 
 One real Bash process owns assignments, exports, functions, shell options,
 and directory changes across blocks and Markdown setup. The previous
-user-command status (`$?`) and options such as `noclobber` survive runner
+user-command status (`$?`), last argument (`$_`), and options such as `noclobber` survive runner
 bookkeeping too. A prerequisite inherits its caller's shell mode; it can also
 declare `shell: bash` to work standalone.
 A Bash prerequisite cannot silently change a direct-execution caller's mode:
@@ -160,6 +160,11 @@ preserved. Complete top-level shell constructs are individual commands, includin
 semicolon-separated commands. With `--step`, a complete loop or function
 definition gets one pause, not one per physical line. Syntax is parsed before
 execution; Bash itself still determines which features its installed version supports.
+
+Commands are sourced separately. Interpreter metadata such as `BASH_SOURCE`,
+`LINENO`, and `PIPESTATUS` reflects that transport, not one monolithic Markdown
+script. Keep a pipeline and inspection of its `PIPESTATUS` in the same compound
+command. Names beginning with `__markmason_` are reserved for the runner.
 
 The shell is noninteractive and does not load profiles, `.bashrc`, `BASH_ENV`,
 or `ENV`, and ignores inherited `SHELLOPTS`/`BASHOPTS` so its starting options

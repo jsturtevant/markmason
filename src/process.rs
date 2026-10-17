@@ -181,7 +181,7 @@ fn unix_pids() -> Result<Vec<i32>> {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn kill_terminal_session(session: u32) -> Result<()> {
-    let mut groups = std::collections::BTreeSet::new();
+    let mut groups = BTreeMap::<u32, Vec<i32>>::new();
     for pid in unix_pids()? {
         let owner = unsafe { libc::getsid(pid) };
         if owner == -1 {
@@ -200,13 +200,35 @@ fn kill_terminal_session(session: u32) -> Result<()> {
                 }
                 return Err(error).context("Failed reading terminal process group");
             }
-            groups.insert(u32::try_from(group)?);
+            groups.entry(u32::try_from(group)?).or_default().push(pid);
         }
     }
-    kill_group(session)?;
-    for group in groups {
-        if group != session {
-            kill_group(group)?;
+    for (group, members) in groups {
+        if let Err(error) = kill_group(group) {
+            #[cfg(target_os = "macos")]
+            if error
+                .downcast_ref::<std::io::Error>()
+                .and_then(|error| error.raw_os_error())
+                == Some(libc::EPERM)
+            {
+                // Darwin rejects killpg for zombie-only groups; individual kill succeeds.
+                for pid in members {
+                    if unsafe { libc::kill(pid, libc::SIGKILL) } != 0 {
+                        let error = std::io::Error::last_os_error();
+                        if error.raw_os_error() != Some(libc::ESRCH) {
+                            return Err(error).with_context(|| {
+                                format!("Failed terminating owned process {pid}")
+                            });
+                        }
+                    }
+                }
+                continue;
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = members;
+            return Err(error).with_context(|| {
+                format!("Failed terminating group {group} in terminal session {session}")
+            });
         }
     }
     Ok(())
