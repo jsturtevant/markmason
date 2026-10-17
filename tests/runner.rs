@@ -321,7 +321,8 @@ fn markdown_setup_shares_cloned_checkout_and_background_processes() {
     .unwrap();
     fs::write(
         dir.path().join("setup.md"),
-        "```markmason\napp cloned\n```\n```expected\nyes\n```\n\
+        "---\nsetup: app mark prepared\n---\n\
+         ```markmason\napp cloned\n```\n```expected\nyes\n```\n\
          ```markmason\napp background \"$REPO_ROOT/processes\"\n```\n",
     )
     .unwrap();
@@ -330,6 +331,7 @@ fn markdown_setup_shares_cloned_checkout_and_background_processes() {
         &lesson,
         "---\nclone: owner/repo\nsetup: mm setup.md\n---\n\
          ```markmason\napp await-agent\n```\n```expected\nready\n```\n\
+         ```markmason\napp setup ./prepared\n```\n\
          ```markmason\napp cwd\n```\n",
     )
     .unwrap();
@@ -346,7 +348,12 @@ fn markdown_setup_shares_cloned_checkout_and_background_processes() {
         .unwrap();
     let result = text(&output);
     assert!(output.status.success(), "{result}");
-    assert!(result.contains("pass 2\nfail 0"), "{result}");
+    assert!(result.contains("pass 3\nfail 0"), "{result}");
+    assert!(
+        !Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("prepared")
+            .exists()
+    );
     let checkout = result
         .lines()
         .find(|line| Path::new(line).is_absolute() && line.contains("markmason-repo-"))

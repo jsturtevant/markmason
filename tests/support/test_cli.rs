@@ -198,10 +198,16 @@ fn main() {
         "agent" => {
             let home = env::var("TEST_HOME").unwrap();
             while !Path::new(&format!("{home}/request")).exists() {
+                if !Path::new(&home).exists() {
+                    return;
+                }
                 thread::sleep(Duration::from_millis(10));
             }
             fs::write(format!("{home}/ready"), "ready").unwrap();
-            thread::sleep(Duration::from_secs(60));
+            let deadline = std::time::Instant::now() + Duration::from_secs(60);
+            while Path::new(&home).exists() && std::time::Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(10));
+            }
         }
         "await-agent" => {
             let home = env::var("TEST_HOME").unwrap();

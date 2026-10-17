@@ -96,7 +96,9 @@ prerequisite: the runner executes that file's setup, commands, and assertions
 in the caller's existing fixture, rather than starting an isolated child runner.
 The path resolves beside the calling file; quote paths containing spaces.
 Application home, configuration, working directory, variables, and background
-processes are shared. Setup commands do not pause in `--step` mode or count
+processes are shared. A prerequisite's external setup also runs in that shared
+working directory, including a cloned checkout.
+Setup commands do not pause in `--step` mode or count
 toward the walkthrough's block progress.
 
 Prerequisites run in full regardless of the caller's filters. Their own `timeout`

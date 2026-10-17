@@ -461,7 +461,7 @@ fn run_setup(
             &setup_spec,
             dir,
             fixture,
-            setup_cwd,
+            &fixture.cwd,
             timeout,
             verbose,
             chain,
