@@ -217,6 +217,55 @@ fn bash_setup_requires_a_shell_caller_and_assertion_failures_stop_stateful_files
 }
 
 #[test]
+fn bash_sessions_preserve_previous_status_and_noclobber_in_both_capture_modes() {
+    for pty in ["", "```pty\n```\n"] {
+        let dir = tempfile::tempdir().unwrap();
+        let lesson = dir.path().join("lesson.md");
+        fs::write(
+            &lesson,
+            format!(
+                "---\nshell: bash\n---\n\
+                 ```markmason\ntrue\ntest \"$?\" -eq 0\nset -C\nprintf 'noclobber retained\\n'\n```\n\
+                 {pty}```expected\nnoclobber retained\n```\n\
+                 ```markmason (exit 7)\n(exit 7)\n```\n{pty}\
+                 ```markmason\ntest \"$?\" -eq 7\ntest -o noclobber\nprintf 'status retained\\n'\n```\n\
+                 {pty}```expected\nstatus retained\n```\n"
+            ),
+        )
+        .unwrap();
+        let output = command(&lesson).output().unwrap();
+        let result = text(&output);
+        assert!(output.status.success(), "{result}");
+        assert!(result.contains("pass 3\nfail 0"), "{result}");
+    }
+}
+
+#[test]
+fn bash_terminal_interactions_span_logical_commands_without_losing_prompts() {
+    for (prompt, expected) in [
+        ("printf 'Name?\\n'", "Name?"),
+        ("printf 'Your '\nprintf 'name?\\n'", "Your name?"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let lesson = dir.path().join("lesson.md");
+        fs::write(
+            &lesson,
+            format!(
+                "---\nshell: bash\n---\n```markmason\n{prompt}\nread -r ANSWER\n\
+                 printf 'Hello %s\\n' \"$ANSWER\"\n```\n\
+                 ```pty\nmatch: {expected}\nsend: Ada{{enter}}\n```\n\
+                 ```expected\n{expected}\nHello Ada\n```\n"
+            ),
+        )
+        .unwrap();
+        let output = command(&lesson).output().unwrap();
+        let result = text(&output);
+        assert!(output.status.success(), "{result}");
+        assert!(!result.contains("MARKMASON_END"), "{result}");
+    }
+}
+
+#[test]
 fn bash_session_shares_setup_state_functions_cwd_and_application_input() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(

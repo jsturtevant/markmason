@@ -316,6 +316,7 @@ fn execute(
     };
     let mut stdin = case.stdin.as_ref().map(|s| s.as_bytes().to_vec());
     let mut step_index = 0;
+    let mut shell_block = case.pty.as_deref().map(shell::Block::new);
     for (index, command) in commands.iter().enumerate() {
         let command = if shell_mode {
             command.clone()
@@ -333,15 +334,13 @@ fn execute(
         }
         let result = (|| -> Result<process::Output> {
             if let Some(shell) = fixture.shell.borrow_mut().as_mut() {
-                let (result, completed) = shell.run(
+                shell.run(
                     &command,
                     stdin.take(),
-                    case.pty.as_ref().map(|steps| &steps[step_index..]),
+                    shell_block.as_mut(),
                     timeout,
                     index + 1 == commands.len(),
-                )?;
-                step_index += completed;
-                Ok(result)
+                )
             } else if let Some(steps) = &case.pty {
                 let (result, completed) = process::pty(
                     &resolve(&command, dir)?,
@@ -395,7 +394,8 @@ fn execute(
             }
         };
         // ConPTY can omit the final newline; separate distinct terminal sessions.
-        if case.pty.is_some()
+        if !shell_mode
+            && case.pty.is_some()
             && !output.text.is_empty()
             && !output.text.ends_with('\n')
             && !result.text.is_empty()
@@ -550,9 +550,7 @@ fn run_setup(
                 })
                 .collect::<Vec<_>>()
                 .join(" ");
-            shell
-                .run(&command, None, None, timeout, true)
-                .map(|(output, _)| output)
+            shell.run(&command, None, None, timeout, true)
         } else {
             process::run(
                 &args,

@@ -15,24 +15,34 @@ readonly __markmason_sleep=$(type -P sleep)
 : "${__markmason_sleep:?shell: bash requires sleep on PATH}"
 set --
 command stty -echo || exit
-builtin printf 'ready\n' > "$__markmason_root/ready"
+builtin printf 'ready\n' >| "$__markmason_root/ready"
 __markmason_sequence=0
+__markmason_status=0
+__markmason_previous_status() { return "$__markmason_status"; }
 while :; do
     __markmason_request="$__markmason_root/command-$__markmason_sequence"
     while ! builtin test -f "$__markmason_request/ready"; do
         "$__markmason_sleep" 0.05 || exit
     done
     if builtin test -f "$__markmason_request/pty"; then
-        builtin . "$__markmason_request/script"
+        if __markmason_previous_status; then
+            builtin . "$__markmason_request/script"
+        else
+            builtin . "$__markmason_request/script"
+        fi
     else
-        builtin . "$__markmason_request/script" < "$__markmason_request/input" > "$__markmason_request/stdout" 2> "$__markmason_request/stderr"
+        if __markmason_previous_status; then
+            builtin . "$__markmason_request/script" < "$__markmason_request/input" >| "$__markmason_request/stdout" 2>| "$__markmason_request/stderr"
+        else
+            builtin . "$__markmason_request/script" < "$__markmason_request/input" >| "$__markmason_request/stdout" 2>| "$__markmason_request/stderr"
+        fi
     fi
     __markmason_status=$?
     if builtin test -f "$__markmason_request/pty"; then
         IFS= builtin read -r __markmason_boundary < "$__markmason_request/boundary"
         builtin printf '\r\n%s\r\n' "$__markmason_boundary"
     fi
-    builtin printf '%s\n' "$__markmason_status" > "$__markmason_request/status"
+    builtin printf '%s\n' "$__markmason_status" >| "$__markmason_request/status"
     __markmason_sequence=$((__markmason_sequence + 1))
 done
 "#;
@@ -74,6 +84,32 @@ pub fn path(path: &Path) -> String {
 
 pub fn quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "'\"'\"'"))
+}
+
+pub struct Block<'a> {
+    interaction: process::Interaction<'a>,
+    raw: String,
+    clean: String,
+}
+
+impl<'a> Block<'a> {
+    pub fn new(steps: &'a [spec::Step]) -> Self {
+        Self {
+            interaction: process::Interaction::new(steps),
+            raw: String::new(),
+            clean: String::new(),
+        }
+    }
+}
+
+fn before_boundary<'a>(text: &'a str, boundary: &str) -> Option<&'a str> {
+    text.find(boundary).map(|position| {
+        let text = &text[..position];
+        text.strip_suffix("\r\r\n")
+            .or_else(|| text.strip_suffix("\r\n"))
+            .or_else(|| text.strip_suffix('\n'))
+            .unwrap_or(text)
+    })
 }
 
 pub struct Session {
@@ -138,11 +174,11 @@ impl Session {
         &mut self,
         command: &str,
         input: Option<Vec<u8>>,
-        steps: Option<&[spec::Step]>,
+        block: Option<&mut Block<'_>>,
         timeout: Duration,
         final_command: bool,
-    ) -> Result<(process::Output, usize)> {
-        let result = self.execute(command, input, steps, timeout, final_command);
+    ) -> Result<process::Output> {
+        let result = self.execute(command, input, block, timeout, final_command);
         if result.is_err()
             && let Some(terminal) = self.terminal.take()
         {
@@ -157,10 +193,10 @@ impl Session {
         &mut self,
         command: &str,
         input: Option<Vec<u8>>,
-        steps: Option<&[spec::Step]>,
+        mut block: Option<&mut Block<'_>>,
         timeout: Duration,
         final_command: bool,
-    ) -> Result<(process::Output, usize)> {
+    ) -> Result<process::Output> {
         let terminal = self.terminal.as_mut().context("Bash session is closed")?;
         let directory = self
             .directory
@@ -172,7 +208,7 @@ impl Session {
         fs::write(directory.join("stdout"), "")?;
         fs::write(directory.join("stderr"), "")?;
         fs::write(directory.join("status"), "")?;
-        if steps.is_some() {
+        if block.is_some() {
             fs::write(directory.join("pty"), "")?;
         }
         let boundary = format!(
@@ -193,7 +229,6 @@ impl Session {
         fs::write(directory.join("ready"), "")?;
         self.sequence += 1;
         let start = Instant::now();
-        let mut interaction = process::Interaction::new(steps.unwrap_or_default());
         loop {
             cancellation::check()?;
             match terminal.rx.recv_timeout(Duration::from_millis(10)) {
@@ -203,13 +238,9 @@ impl Session {
             }
             let raw = String::from_utf8_lossy(&bytes);
             let clean = pty_text(&raw);
-            let boundary_position = clean.find(&boundary);
-            let clean = boundary_position.map_or(clean.as_str(), |position| {
-                clean[..position]
-                    .strip_suffix("\r\n")
-                    .or_else(|| clean[..position].strip_suffix('\n'))
-                    .unwrap_or(&clean[..position])
-            });
+            let finished = before_boundary(&clean, &boundary);
+            let clean = finished.unwrap_or(&clean);
+            let command_raw = before_boundary(&raw, &boundary).unwrap_or(&raw);
             let status = match fs::read_to_string(directory.join("status")) {
                 Ok(text) if text.ends_with('\n') => Some(
                     text.trim()
@@ -220,15 +251,17 @@ impl Session {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
                 Err(error) => return Err(error).context("Failed reading Bash command status"),
             };
-            interaction.advance(
-                &raw,
-                clean,
-                &terminal.send_tx,
-                &terminal.written_rx,
-                status.is_none(),
-            )?;
+            if let Some(block) = block.as_deref_mut() {
+                block.interaction.advance(
+                    &format!("{}{command_raw}", block.raw),
+                    &format!("{}{clean}", block.clean),
+                    &terminal.send_tx,
+                    &terminal.written_rx,
+                    status.is_none(),
+                )?;
+            }
             let output = |code| -> Result<process::Output> {
-                let text = if steps.is_some() {
+                let text = if block.is_some() {
                     clean.to_owned()
                 } else {
                     let mut text =
@@ -243,20 +276,23 @@ impl Session {
                 Ok(process::Output { text, code })
             };
             if let Some(code) = status
-                && !interaction.sending()
-                && (steps.is_none() || boundary_position.is_some())
+                && block
+                    .as_ref()
+                    .is_none_or(|block| !block.interaction.sending())
+                && (block.is_none() || finished.is_some())
             {
-                if steps.is_some() {
-                    interaction.check_complete(final_command, code, clean)?;
-                    return Ok((
-                        process::Output {
-                            text: clean.to_owned(),
-                            code,
-                        },
-                        interaction.completed(),
-                    ));
+                if let Some(block) = block {
+                    block.raw.push_str(command_raw);
+                    block.clean.push_str(clean);
+                    block
+                        .interaction
+                        .check_complete(final_command, code, &block.clean)?;
+                    return Ok(process::Output {
+                        text: clean.to_owned(),
+                        code,
+                    });
                 }
-                return Ok((output(code)?, 0));
+                return output(code);
             }
             if terminal.child.try_wait()?.is_some() {
                 bail!(

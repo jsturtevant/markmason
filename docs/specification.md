@@ -139,8 +139,10 @@ hello: two
 ````
 
 One real Bash process owns assignments, exports, functions, shell options,
-and directory changes across blocks and Markdown setup. A prerequisite inherits
-its caller's shell mode; it can also declare `shell: bash` to work standalone.
+and directory changes across blocks and Markdown setup. The previous
+user-command status (`$?`) and options such as `noclobber` survive runner
+bookkeeping too. A prerequisite inherits its caller's shell mode; it can also
+declare `shell: bash` to work standalone.
 A Bash prerequisite cannot silently change a direct-execution caller's mode:
 add `shell: bash` to the caller too. Independently selected files never share
 shell sessions.
