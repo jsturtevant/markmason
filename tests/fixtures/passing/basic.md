@@ -4,7 +4,11 @@ tags: [smoke, cli]
 ---
 # Passing leaf commands
 
-## `mm --help`
+## Show help
+
+```markmason
+mm --help
+```
 
 ```expected-contains
 Standalone Markdown-driven CLI end-to-end test runner
@@ -12,4 +16,8 @@ Standalone Markdown-driven CLI end-to-end test runner
 Print version
 ```
 
-## `mm --version`
+## Show the installed version
+
+```markmason
+mm --version
+```

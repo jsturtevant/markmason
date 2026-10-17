@@ -3,7 +3,11 @@
 A `pty` block waits for each prompt from the [test CLI](../support/README.md).
 Sends do not add a newline; use `{enter}` to submit an answer.
 
-## `mm-test-cli interactive`
+## Answer repeated prompts
+
+```markmason
+mm-test-cli interactive
+```
 
 Match visible text without ANSI color codes. Repeated prompts are matched in order.
 
@@ -19,7 +23,11 @@ accepted Ada Lovelace
 done ready
 ```
 
-## `mm-test-cli interactive`
+## Wait for raw terminal sequences
+
+```markmason
+mm-test-cli interactive
+```
 
 Use `match-raw` for terminal escape sequences. An empty send waits without typing.
 

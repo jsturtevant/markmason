@@ -4,7 +4,11 @@ Output matching ignores blank lines, repeated whitespace, and path separators.
 The [test CLI](../support/README.md) prints known output: use `expected` for the full
 result, or `expected-contains` for selected whole lines.
 
-## `mm-test-cli lines "  one   two  " "" three`
+## Normalize whitespace and blank lines
+
+```markmason
+mm-test-cli lines "  one   two  " "" three
+```
 
 Whitespace and blank lines are normalized before comparison.
 
@@ -13,7 +17,11 @@ one two
 three
 ```
 
-## `mm-test-cli echo 'path\to\file'`
+## Match paths across platforms
+
+```markmason
+mm-test-cli echo 'path\to\file'
+```
 
 Backslashes are literal command arguments, but match forward slashes in output.
 
@@ -21,7 +29,11 @@ Backslashes are literal command arguments, but match forward slashes in output.
 path/to/file
 ```
 
-## `mm-test-cli lines wrapped over "three lines"`
+## Match wrapped terminal lines
+
+```markmason
+mm-test-cli lines wrapped over "three lines"
+```
 
 A line wrapped across two or three terminal lines can still match one expected line.
 
@@ -29,7 +41,11 @@ A line wrapped across two or three terminal lines can still match one expected l
 wrapped over three lines
 ```
 
-## `mm-test-cli lines noise first noise second`
+## Match selected lines in order
+
+```markmason
+mm-test-cli lines noise first noise second
+```
 
 Contains matching skips other lines before and between these lines, not after them.
 
@@ -38,7 +54,11 @@ first
 second
 ```
 
-## `mm-test-cli warn`
+## Ignore stderr for successful commands
+
+```markmason
+mm-test-cli warn
+```
 
 Successful commands compare stdout only. This helper also writes to stderr.
 

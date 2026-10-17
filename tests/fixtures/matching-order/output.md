@@ -2,7 +2,11 @@
 
 This deliberately fails because the expected lines appear in the wrong order.
 
-## `mm-test-cli lines second first`
+## Print the expected lines in reverse order
+
+```markmason
+mm-test-cli lines second first
+```
 
 ```expected-contains
 first

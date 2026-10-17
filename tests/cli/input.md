@@ -3,7 +3,11 @@
 Use a `stdin` block for input, or pipe one command's stdout into another.
 These examples use the [test CLI](../support/README.md), `mm-test-cli`.
 
-## `mm-test-cli cat`
+## Send text to stdin
+
+```markmason
+mm-test-cli cat
+```
 
 The block is sent to stdin with a final newline.
 
@@ -17,7 +21,11 @@ hello
 from stdin
 ```
 
-## `mm-test-cli echo "hello | world" | mm-test-cli cat | mm-test-cli cat`
+## Pipe output through multiple commands
+
+```markmason
+mm-test-cli echo "hello | world" | mm-test-cli cat | mm-test-cli cat
+```
 
 Pipes connect stdout between stages. The quoted `|` stays inside its argument.
 
@@ -25,7 +33,11 @@ Pipes connect stdout between stages. The quoted `|` stays inside its argument.
 hello | world
 ```
 
-## `mm-test-cli args "hello | world" "" "last value"`
+## Preserve quoted and empty arguments
+
+```markmason
+mm-test-cli args "hello | world" "" "last value"
+```
 
 Quotes preserve spaces and empty arguments. Commands run without a shell.
 

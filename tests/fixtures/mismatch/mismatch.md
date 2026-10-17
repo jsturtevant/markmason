@@ -1,6 +1,10 @@
 # Deliberately incorrect output
 
-## `mm --help`
+## Compare help with deliberately incorrect output
+
+```markmason
+mm --help
+```
 
 ```expected
 not the help output

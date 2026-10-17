@@ -6,10 +6,18 @@ setup: mm-test-cli
 
 Setup creates home state; the second command also writes configuration state.
 
-## `mm-test-cli state`
+## Read home state created by setup
+
+```markmason
+mm-test-cli state
+```
 
 ```expected
 ready
 ```
 
-## `mm-test-cli write-state XDG_CONFIG_HOME ready`
+## Write configuration state
+
+```markmason
+mm-test-cli write-state XDG_CONFIG_HOME ready
+```

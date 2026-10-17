@@ -304,7 +304,8 @@ pub fn pty(
     steps: &[spec::Step],
     timeout: Duration,
     scope: &Scope,
-) -> Result<Output> {
+    final_command: bool,
+) -> Result<(Output, usize)> {
     #[cfg(not(windows))]
     let _ = scope;
     cancellation::check()?;
@@ -475,16 +476,14 @@ pub fn pty(
                 && eof
                 && !sending
             {
-                if step_index < steps.len() {
+                let code = status.exit_code() as i32;
+                if (final_command || code != 0) && step_index < steps.len() {
                     bail!(
                         "PTY exited before completing step {step_index}: match {:?}\nOutput:\n{clean}",
                         steps[step_index].text
                     );
                 }
-                return Ok(Output {
-                    text: clean,
-                    code: status.exit_code() as i32,
-                });
+                return Ok((Output { text: clean, code }, step_index));
             }
         }
     })();

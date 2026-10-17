@@ -2,8 +2,46 @@
 
 ## Commands and output
 
-Use ``## `command` `` headings with an optional `(exit N)`; the default is exit 0.
+Write descriptive headings and put commands in `markmason` fenced blocks.
+The default expected exit code is 0; add `(exit N)` to the opening fence to
+require a different code:
+
+````markdown
+## Reject an unknown option
+
+```markmason (exit 2)
+mycli --not-an-option
+```
+
+```expected
+error: unknown option --not-an-option
+```
+````
+
+Each block is one test. Put one command on each line; blank lines are ignored.
+Commands run in order and their output is concatenated for the following
+expected block. The first nonzero exit stops the block and becomes its exit
+code; if all commands succeed, the block exits 0.
 Without an expected block, only the exit code is checked.
+
+Each command starts in the file's working directory and environment, sharing
+file state but not shell variables or `cd` changes. Use an explicit interpreter
+for shell scripts. A `stdin` block supplies input to the first command only;
+later commands start with empty stdin. A `pty` block's match/send steps advance
+across commands in order, and must all finish by the end of the block.
+Each PTY command uses a separate terminal session; their output is joined on
+line boundaries.
+Timeouts apply to each command (and each pipeline stage), not the whole block.
+
+Output, stdin, and PTY blocks belong to the preceding `markmason` block until
+the next command block or heading. Keep them in the same section.
+Both `#` headings and headings underlined with `=` or `-` start a new section.
+Ordinary code blocks and examples nested inside longer fences do not run.
+Backtick and tilde fences of at least three characters are supported, indented
+by at most three spaces; close with the same character and at least the opening
+length. Recognized blocks must be closed.
+Content loses up to the opening fence's indentation; additional indentation
+inside scripts is preserved.
 
 | Block | Behavior |
 |-------|----------|
@@ -58,7 +96,7 @@ Quote paths with spaces, for example `setup: 'python3 "setup fixtures.py"'`.
 
 ## Variables
 
-Command headings and expected blocks substitute:
+Command blocks and expected blocks substitute:
 
 | Variable | Value |
 |----------|-------|
@@ -72,7 +110,12 @@ Stdin and PTY directives remain literal.
 ## Interactive terminals
 
 ````markdown
-## `mycli init`
+## Create a project
+
+```markmason
+mycli init
+```
+
 ```pty
 match: Project name?
 send: demo{enter}
@@ -110,8 +153,9 @@ Raw and ANSI-stripped matches advance separate cursors.
 - `--env-prefix` changes the environment prefix. Explicit flags take precedence.
 - Tags are comma-separated and case-insensitive. Inclusion requires all tags;
   exclusion rejects any matching tag.
-- `--test-name-pattern REGEX` matches a relative spec path or command heading.
-  Matching a file runs all its cases; selecting a command skips earlier prerequisites.
+- `--test-name-pattern REGEX` matches a relative spec path or command text, not headings.
+  Matching a file runs all its cases; matching any command selects its whole block.
+  Selecting a block skips earlier blocks, including their prerequisites.
 - File and name patterns use Rust regex syntax.
 - `--list` discovers cases without executing setup or creating fixtures.
 - No matches, malformed specs, and failed assertions return nonzero exits.

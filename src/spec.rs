@@ -157,51 +157,118 @@ pub fn parse(content: &str) -> Result<Spec> {
     } else {
         content
     };
-    let heading = Regex::new(r"^##\s+`([^`]+)`(?:\s+\(exit\s+(\d+)\))?").unwrap();
-    let next_heading = Regex::new(r"^##\s+`").unwrap();
+    let command_info = Regex::new(r"^markmason(?:\s+\(exit\s+(\d+)\))?$").unwrap();
+    let heading = Regex::new(r"^ {0,3}#{1,6}(?:\s|$)").unwrap();
+    let setext_underline = Regex::new(r"^ {0,3}(?:=+|-+)[ \t]*$").unwrap();
     let lines: Vec<_> = body.split('\n').map(|s| s.trim_end_matches('\r')).collect();
+    let mut current = None;
+    let mut paragraph = false;
     let mut i = 0;
     while i < lines.len() {
-        let Some(caps) = heading.captures(lines[i]) else {
+        if heading.is_match(lines[i]) || (paragraph && setext_underline.is_match(lines[i])) {
+            current = None;
+            paragraph = false;
+            i += 1;
+            continue;
+        }
+        let Some((marker, length, info)) = fence(lines[i]) else {
+            paragraph = !lines[i].trim().is_empty()
+                && !setext_underline.is_match(lines[i])
+                && !lines[i].starts_with("    ")
+                && !lines[i].starts_with('\t');
             i += 1;
             continue;
         };
-        let mut case = Case {
-            command: caps[1].to_owned(),
-            exit_code: caps.get(2).map_or(Ok(0), |m| m.as_str().parse())?,
-            expected: None,
-            contains: false,
-            stdin: None,
-            pty: None,
-        };
+        paragraph = false;
+        let indent = lines[i].len() - lines[i].trim_start_matches(' ').len();
+        let kind = info.split_whitespace().next().unwrap_or("");
+        let recognized = matches!(
+            kind,
+            "markmason" | "expected" | "expected-contains" | "stdin" | "pty"
+        );
         i += 1;
-        while i < lines.len() && !next_heading.is_match(lines[i]) {
-            let kind = ["expected-contains", "expected", "stdin", "pty"]
-                .into_iter()
-                .find(|kind| lines[i].starts_with(&format!("```{kind}")));
-            if let Some(kind) = kind {
-                i += 1;
-                let start = i;
-                while i < lines.len() && lines[i].trim_end() != "```" {
-                    i += 1;
-                }
-                let block = lines[start..i].join("\n");
-                match kind {
-                    "expected-contains" => {
-                        case.expected = Some(block);
-                        case.contains = true;
-                    }
-                    "expected" => case.expected = Some(block),
-                    "stdin" => case.stdin = Some(block + "\n"),
-                    "pty" => case.pty = Some(parse_steps(&lines[start..i])?),
-                    _ => unreachable!(),
-                }
-            }
+        let start = i;
+        while i < lines.len()
+            && !fence(lines[i]).is_some_and(|(end_marker, end_length, end_info)| {
+                end_marker == marker && end_length >= length && end_info.is_empty()
+            })
+        {
             i += 1;
         }
-        spec.cases.push(case);
+        if recognized {
+            if i == lines.len() {
+                bail!("Unterminated {kind} block");
+            }
+            let block_lines: Vec<_> = lines[start..i]
+                .iter()
+                .map(|line| {
+                    let removed = line.bytes().take(indent).take_while(|b| *b == b' ').count();
+                    &line[removed..]
+                })
+                .collect();
+            let block = block_lines.join("\n");
+            if kind == "markmason" {
+                let caps = command_info
+                    .captures(info)
+                    .context("Invalid markmason fence: expected markmason or markmason (exit N)")?;
+                let commands: Vec<_> = block
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .collect();
+                if commands.is_empty()
+                    || commands.iter().any(|command| {
+                        split_command(command)
+                            .first()
+                            .is_none_or(|arg| arg.is_empty())
+                    })
+                {
+                    bail!("A markmason block must contain nonempty commands");
+                }
+                spec.cases.push(Case {
+                    command: commands.join("\n"),
+                    exit_code: caps.get(1).map_or(Ok(0), |m| m.as_str().parse()).context(
+                        "Invalid markmason exit code: expected a nonnegative 32-bit integer",
+                    )?,
+                    expected: None,
+                    contains: false,
+                    stdin: None,
+                    pty: None,
+                });
+                current = Some(spec.cases.len() - 1);
+            } else if let Some(index) = current {
+                let case = &mut spec.cases[index];
+                match info {
+                    "expected" | "expected-contains" => {
+                        case.expected = Some(block);
+                        case.contains = info == "expected-contains";
+                    }
+                    "stdin" => case.stdin = Some(block + "\n"),
+                    "pty" => case.pty = Some(parse_steps(&block_lines)?),
+                    _ => bail!("Invalid {kind} fence: unexpected metadata"),
+                }
+            }
+        }
+        i += 1;
     }
     Ok(spec)
+}
+
+fn fence(line: &str) -> Option<(u8, usize, &str)> {
+    let text = line.trim_start_matches(' ');
+    if line.len() - text.len() > 3 {
+        return None;
+    }
+    let marker = *text.as_bytes().first()?;
+    if !matches!(marker, b'`' | b'~') {
+        return None;
+    }
+    let length = text.bytes().take_while(|byte| *byte == marker).count();
+    let info = text[length..].trim();
+    if length < 3 || (marker == b'`' && info.contains('`')) {
+        return None;
+    }
+    Some((marker, length, info))
 }
 
 // Deliberately not shell parsing: backslashes are literal, and empty quoted arguments survive.

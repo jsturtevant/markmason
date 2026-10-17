@@ -19,12 +19,13 @@ fn environment_overrides_follow_platform_case_rules() {
 #[test]
 fn frontmatter_and_tags() -> Result<()> {
     let spec = spec::parse(
-        "---\r\nclone: owner/repo\r\nsetup: node setup.js\r\ntags: [Dispatch, SLOW, slow]\r\ntimeout: '0.5'\r\n---\r\n## `cmd` (exit 2)\r\n",
+        "---\r\nclone: owner/repo\r\nsetup: node setup.js\r\ntags: [Dispatch, SLOW, slow]\r\ntimeout: '0.5'\r\n---\r\n```markmason (exit 2)\r\ncmd\r\n```\r\n",
     )?;
     assert_eq!(spec.clone.as_deref(), Some("owner/repo"));
     assert_eq!(spec.setup.as_deref(), Some("node setup.js"));
     assert_eq!(spec.tags, ["dispatch", "slow"]);
     assert_eq!(spec.timeout, Some(Duration::from_millis(500)));
+    assert_eq!(spec.cases[0].command, "cmd");
     assert_eq!(spec.cases[0].exit_code, 2);
     for invalid in [
         "[]",
@@ -95,9 +96,9 @@ fn setup_commands_resolve_files_without_assuming_an_interpreter() -> Result<()> 
 #[test]
 fn parses_all_blocks_and_smoke_tests() -> Result<()> {
     let spec = spec::parse(
-        "## `cmd a` (exit 1)\nprose\n```expected-contains\nerror\n```\n```stdin\ny\n```\n\
-         ## `cmd b`\n```pty\nmatch: Create?\nsend: y{enter}\n\nmatch-raw: {hide-cursor}\nsend: q\n```\n\
-         ```expected\ndone\n```\n## `cmd c`\nSmoke.\n",
+        "```markmason (exit 1)\ncmd a\n```\nprose\n```expected-contains\nerror\n```\n```stdin\ny\n```\n\
+         ```markmason\ncmd b\n```\n```pty\nmatch: Create?\nsend: y{enter}\n\nmatch-raw: {hide-cursor}\nsend: q\n```\n\
+         ```expected\ndone\n```\n```markmason\ncmd c\n```\nSmoke.\n",
     )?;
     assert_eq!(spec.cases.len(), 3);
     let first = &spec.cases[0];
@@ -116,8 +117,221 @@ fn parses_all_blocks_and_smoke_tests() -> Result<()> {
     assert!(!second.contains);
     assert!(spec.cases[2].expected.is_none());
     for block in ["send: y", "match: prompt", "match-raw: \\x1b[2J"] {
-        assert!(spec::parse(&format!("## `cmd`\n```pty\n{block}\n```")).is_err());
+        assert!(spec::parse(&format!("```markmason\ncmd\n```\n```pty\n{block}\n```")).is_err());
     }
+    Ok(())
+}
+
+#[test]
+fn fenced_commands_leave_headings_and_nested_examples_as_documentation() -> Result<()> {
+    let spec = spec::parse(
+        r#"# Commands are separate from headings
+
+## `legacy-command` (exit 2)
+
+```sh
+not-a-test
+```
+
+````markdown
+```markmason
+nested-example
+```
+````
+
+~~~text
+```markmason
+another-example
+```
+~~~
+
+    ```markmason
+    indented-example
+    ```
+
+## Run a real command
+
+```markmason
+real-command
+```
+````stdin
+```markmason
+literal-input
+```
+````
+````expected
+```markmason
+literal-output
+```
+````
+"#,
+    )?;
+    assert_eq!(spec.cases.len(), 1);
+    assert_eq!(spec.cases[0].command, "real-command");
+    assert_eq!(
+        spec.cases[0].stdin.as_deref(),
+        Some("```markmason\nliteral-input\n```\n")
+    );
+    assert_eq!(
+        spec.cases[0].expected.as_deref(),
+        Some("```markmason\nliteral-output\n```")
+    );
+    Ok(())
+}
+
+#[test]
+fn fenced_cases_bind_blocks_until_the_next_command_or_heading() -> Result<()> {
+    let spec = spec::parse(
+        "```markmason\nfirst\n```\n```expected\none\n```\n\
+         ```markmason (exit 2)\nsecond\n```\n```expected-contains\ntwo\n```\n\
+         ## An unrelated section\n```expected\nnot an assertion\n```\n\
+         ### A smoke test\n  ~~~~markmason\n\n  third  \n\n  ~~~~~ \n",
+    )?;
+    assert_eq!(spec.cases.len(), 3);
+    assert_eq!(spec.cases[0].expected.as_deref(), Some("one"));
+    assert_eq!(spec.cases[1].exit_code, 2);
+    assert_eq!(spec.cases[1].expected.as_deref(), Some("two"));
+    assert!(spec.cases[1].contains);
+    assert_eq!(spec.cases[2].command, "third");
+    assert!(spec.cases[2].expected.is_none());
+    Ok(())
+}
+
+#[test]
+fn fenced_cases_stop_at_setext_headings() -> Result<()> {
+    for underline in ["=", "===", "-", "---", "  === \t", "   ---"] {
+        let spec = spec::parse(&format!(
+            "```markmason\nfirst\n```\n```expected\noriginal\n```\n\
+             Other examples\n{underline}\n\
+             ```expected-contains\nmust not overwrite\n```\n\
+             ```stdin\nmust not send\n```\n\
+             ```pty\nmatch: prompt\nsend: must not send\n```\n\
+             ```markmason\nsecond\n```\n```expected\nsecond result\n```\n"
+        ))?;
+        assert_eq!(spec.cases.len(), 2, "{underline:?}");
+        let first = &spec.cases[0];
+        assert_eq!(first.expected.as_deref(), Some("original"), "{underline:?}");
+        assert!(!first.contains, "{underline:?}");
+        assert!(first.stdin.is_none(), "{underline:?}");
+        assert!(first.pty.is_none(), "{underline:?}");
+        assert_eq!(spec.cases[1].expected.as_deref(), Some("second result"));
+    }
+    for divider in ["---", "==="] {
+        let spec = spec::parse(&format!(
+            "```markmason\ncmd\n```\n\n{divider}\n\n```expected\nstill attached\n```\n"
+        ))?;
+        assert_eq!(spec.cases[0].expected.as_deref(), Some("still attached"));
+    }
+    Ok(())
+}
+
+#[test]
+fn fenced_contents_remove_only_the_opening_indentation() -> Result<()> {
+    for marker in ["```", "~~~"] {
+        for indent in 0..=3 {
+            let pad = " ".repeat(indent);
+            let spec = spec::parse(&format!(
+                "{pad}{marker}markmason\n{pad}app cat\n{pad}{marker}\n\
+                 {pad}{marker}stdin\n\
+                 {pad}if True:\n{pad}    print(\"ok\")\n\n{pad}print(\"done\")\n\
+                 unindented\n{pad}\tkeep tab\n{pad}{marker}\n\
+                 {pad}{marker}expected\n{pad}ok\n{pad}  extra indentation\n{pad}{marker}\n\
+                 {pad}{marker}pty\n{pad}match: Ready?\n{pad}send: yes\n{pad}{marker}\n"
+            ))?;
+            assert_eq!(spec.cases.len(), 1);
+            let case = &spec.cases[0];
+            assert_eq!(case.command, "app cat");
+            assert_eq!(
+                case.stdin.as_deref(),
+                Some("if True:\n    print(\"ok\")\n\nprint(\"done\")\nunindented\n\tkeep tab\n"),
+                "{marker}, indent {indent}"
+            );
+            assert_eq!(
+                case.expected.as_deref(),
+                Some("ok\n  extra indentation"),
+                "{marker}, indent {indent}"
+            );
+            let steps = case.pty.as_ref().unwrap();
+            assert_eq!(steps[0].text, "Ready?");
+            assert_eq!(steps[0].input, "yes");
+        }
+    }
+    let spec = spec::parse(
+        "   ```markmason\n   app cat\n   ```\n   ```stdin\n one space\n  two spaces\n    four spaces\n   ```\n",
+    )?;
+    assert_eq!(
+        spec.cases[0].stdin.as_deref(),
+        Some("one space\ntwo spaces\n four spaces\n")
+    );
+    Ok(())
+}
+
+#[test]
+fn invalid_command_fences_report_errors() {
+    for (markdown, expected) in [
+        ("```markmason\n", "Unterminated markmason block"),
+        ("```markmason\ncmd\n~~~\n", "Unterminated markmason block"),
+        ("````markmason\ncmd\n```\n", "Unterminated markmason block"),
+        ("```markmason\n```\n", "must contain nonempty commands"),
+        ("```markmason\n  \n```\n", "must contain nonempty commands"),
+        (
+            "```markmason\n\"\"\n```\n",
+            "must contain nonempty commands",
+        ),
+        (
+            "```markmason\nfirst\n\"\"\nsecond\n```\n",
+            "must contain nonempty commands",
+        ),
+        (
+            "```markmason (exit -1)\ncmd\n```\n",
+            "Invalid markmason fence",
+        ),
+        (
+            "```markmason (exit nope)\ncmd\n```\n",
+            "Invalid markmason fence",
+        ),
+        (
+            "```markmason (exit 2147483648)\ncmd\n```\n",
+            "Invalid markmason exit code",
+        ),
+        (
+            "```markmason unexpected\ncmd\n```\n",
+            "Invalid markmason fence",
+        ),
+        (
+            "```markmason\ncmd\n```\n```expected\noutput",
+            "Unterminated expected block",
+        ),
+        (
+            "```markmason\ncmd\n```\n```stdin\ninput",
+            "Unterminated stdin block",
+        ),
+        (
+            "```markmason\ncmd\n```\n```pty\nmatch: prompt",
+            "Unterminated pty block",
+        ),
+        (
+            "```markmason\ncmd\n```\n```expected extra\noutput\n```",
+            "Invalid expected fence",
+        ),
+    ] {
+        let error = spec::parse(markdown).unwrap_err().to_string();
+        assert!(error.contains(expected), "{markdown:?}: {error}");
+    }
+}
+
+#[test]
+fn command_blocks_allow_multiple_commands_and_blank_lines() -> Result<()> {
+    let spec = spec::parse(
+        "## Run several commands\r\n\r\n```markmason (exit 2)\r\n\r\n\
+         first \"two words\"\r\n\r\n  second | third  \r\nlast\r\n\r\n```\r\n\
+         ```expected\r\ncombined output\r\n```\r\n",
+    )?;
+    assert_eq!(spec.cases.len(), 1);
+    let case = &spec.cases[0];
+    assert_eq!(case.command, "first \"two words\"\nsecond | third\nlast");
+    assert_eq!(case.exit_code, 2);
+    assert_eq!(case.expected.as_deref(), Some("combined output"));
     Ok(())
 }
 

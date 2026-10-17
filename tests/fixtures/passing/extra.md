@@ -3,4 +3,8 @@ tags: [extra]
 ---
 # Additional leaf command
 
-## `mm --version`
+## Show the installed version
+
+```markmason
+mm --version
+```
