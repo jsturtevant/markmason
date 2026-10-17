@@ -258,7 +258,7 @@ fn bash_session_handles_compound_commands_and_preserves_state_after_expected_fai
     fs::write(
         &lesson,
         "---\nshell: bash\n---\n\
-         ```markmason\nVALUE=before\n\
+         ```markmason\nVALUE=before\nsleep 0.1 &\nBACKGROUND=$!\nwait \"$BACKGROUND\"\n\
          for value in one two; do\n  printf '%s\\n' \"$value\"\ndone\n\
          cat <<'END'\n  heredoc text\nEND\n\
          printf '%s\\n' continued \\\n  command | cat\n```\n\

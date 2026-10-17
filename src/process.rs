@@ -564,6 +564,8 @@ pub fn pty(
         rx,
         send_tx,
         written_rx,
+        #[cfg(windows)]
+        tree,
         ..
     } = &mut terminal;
     let result = (|| {
@@ -597,11 +599,7 @@ pub fn pty(
                 exited = child.try_wait()?;
                 if exited.is_some() {
                     #[cfg(windows)]
-                    terminal
-                        .tree
-                        .as_ref()
-                        .context("Missing PTY job")?
-                        .check_started()?;
+                    tree.as_ref().context("Missing PTY job")?.check_started()?;
                     // Closing ConPTY releases its output pipe so the reader can drain to EOF.
                     drop(master.take());
                 }

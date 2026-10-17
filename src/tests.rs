@@ -51,6 +51,10 @@ fn bash_commands_keep_complete_shell_constructs_and_heredocs() -> Result<()> {
             "printf 'one'; printf 'two'\n",
             vec!["printf 'one'", "printf 'two'"],
         ),
+        (
+            "sleep 0.1 & # leave it running\nBACKGROUND=$!\nwait \"$BACKGROUND\"\n",
+            vec!["sleep 0.1 &", "BACKGROUND=$!", "wait \"$BACKGROUND\""],
+        ),
     ] {
         assert_eq!(shell::commands(script)?, expected, "{script}");
     }

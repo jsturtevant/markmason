@@ -51,7 +51,13 @@ pub fn commands(script: &str) -> Result<Vec<String>> {
         .root_node()
         .named_children(&mut cursor)
         .filter(|node| node.kind() != "comment")
-        .map(|node| script[node.byte_range()].to_owned())
+        .map(|node| {
+            let end = node
+                .next_sibling()
+                .filter(|next| next.kind() == "&")
+                .map_or(node.end_byte(), |next| next.end_byte());
+            script[node.start_byte()..end].to_owned()
+        })
         .collect();
     if commands.is_empty() {
         bail!("A markmason block must contain nonempty commands");
