@@ -135,11 +135,17 @@ impl Session {
         self.stop_on_error(result)
     }
 
-    pub fn inspect(&mut self, actual: &str, exit: Option<i32>, status: Status<'_>) -> Result<()> {
+    pub fn inspect(
+        &mut self,
+        actual: &str,
+        exit: Option<i32>,
+        status: Status<'_>,
+        stop_file: bool,
+    ) -> Result<()> {
         let result = (|| {
             let complete = !matches!(status, Status::Progress);
             self.result(actual, exit, status)?;
-            self.pause(complete)
+            self.pause(complete, stop_file)
         })();
         self.stop_on_error(result)
     }
@@ -198,8 +204,10 @@ impl Session {
         Ok(())
     }
 
-    fn pause(&mut self, complete: bool) -> Result<()> {
-        let action = if complete && self.block == self.blocks {
+    fn pause(&mut self, complete: bool, stop_file: bool) -> Result<()> {
+        let action = if stop_file {
+            "Stop this file"
+        } else if complete && self.block == self.blocks {
             "Finish walkthrough"
         } else if complete {
             "Next block"

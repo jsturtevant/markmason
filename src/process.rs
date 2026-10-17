@@ -297,6 +297,255 @@ pub fn run(
     result
 }
 
+pub struct Terminal {
+    pub child: Box<dyn portable_pty::Child + Send + Sync>,
+    pub master: Option<Box<dyn portable_pty::MasterPty + Send>>,
+    pub rx: Receiver<std::io::Result<Vec<u8>>>,
+    pub send_tx: mpsc::Sender<Vec<u8>>,
+    pub written_rx: Receiver<std::io::Result<()>>,
+    #[cfg(windows)]
+    tree: Option<crate::windows::ProcessTree>,
+    finished: bool,
+}
+
+impl Terminal {
+    pub fn new(args: &[String], cwd: &Path, env: &Environment) -> Result<Self> {
+        cancellation::check()?;
+        let pair = native_pty_system().openpty(PtySize {
+            rows: 30,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        })?;
+        #[cfg(not(windows))]
+        let argv = args.iter().map(OsString::from).collect();
+        #[cfg(windows)]
+        let tree = crate::windows::ProcessTree::new()?;
+        #[cfg(windows)]
+        let argv = {
+            let program = executable(args.first().context("Empty PTY command")?, cwd, env)?;
+            let mut argv = vec![
+                std::env::current_exe()?.into_os_string(),
+                "--internal-exec".into(),
+                tree.event_name.clone(),
+                tree.status_path.clone().into_os_string(),
+            ];
+            argv.push(program.into_os_string());
+            argv.extend(args.iter().skip(1).map(OsString::from));
+            argv
+        };
+        let mut command = CommandBuilder::from_argv(argv);
+        command.cwd(cwd);
+        command.env_clear();
+        for (key, value) in env {
+            command.env(key, value);
+        }
+        command.env("TERM", "xterm-color");
+        let mut reader = pair.master.try_clone_reader()?;
+        let writer = Arc::new(Mutex::new(pair.master.take_writer()?));
+        let (tx, rx) = mpsc::channel();
+        #[cfg(windows)]
+        let response_writer = Arc::clone(&writer);
+        thread::spawn(move || {
+            let mut buffer = [0; 8192];
+            #[cfg(windows)]
+            let mut queries = Vec::new();
+            loop {
+                match reader.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        #[cfg(windows)]
+                        {
+                            // ConPTY's INHERIT_CURSOR handshake can precede spawn completion.
+                            queries.extend_from_slice(&buffer[..n]);
+                            let result = (|| -> Result<()> {
+                                for _ in queries.windows(4).filter(|bytes| *bytes == b"\x1b[6n") {
+                                    let mut writer = response_writer.lock().unwrap();
+                                    writer.write_all(b"\x1b[1;1R")?;
+                                    writer.flush()?;
+                                }
+                                Ok(())
+                            })();
+                            if let Err(error) = result {
+                                let _ = tx.send(Err(std::io::Error::other(error)));
+                                break;
+                            }
+                            queries.drain(..queries.len().saturating_sub(3));
+                        }
+                        if tx.send(Ok(buffer[..n].to_vec())).is_err() {
+                            break;
+                        }
+                    }
+                    // Linux PTYs return EIO when the slave closes.
+                    Err(error) if cfg!(unix) && error.raw_os_error() == Some(5) => break,
+                    Err(error) => {
+                        let _ = tx.send(Err(error));
+                        break;
+                    }
+                }
+            }
+        });
+        let child = pair.slave.spawn_command(command)?;
+        #[cfg(windows)]
+        let mut child = child;
+        #[cfg(windows)]
+        if let Err(error) = tree.start(child.process_id().context("Missing PTY process ID")?) {
+            child
+                .kill()
+                .context("Failed to terminate PTY after startup failure")?;
+            child
+                .wait()
+                .context("Failed to reap PTY after startup failure")?;
+            return Err(error);
+        }
+        drop(pair.slave);
+        let master = Some(pair.master);
+        let (send_tx, send_rx) = mpsc::channel::<Vec<u8>>();
+        let (written_tx, written_rx) = mpsc::channel();
+        thread::spawn(move || {
+            for input in send_rx {
+                let mut writer = writer.lock().unwrap();
+                let result = writer.write_all(&input).and_then(|()| writer.flush());
+                let failed = result.is_err();
+                if written_tx.send(result).is_err() || failed {
+                    break;
+                }
+            }
+        });
+        Ok(Self {
+            child,
+            master,
+            rx,
+            send_tx,
+            written_rx,
+            #[cfg(windows)]
+            tree: Some(tree),
+            finished: false,
+        })
+    }
+
+    fn terminate(&mut self) -> Result<()> {
+        if self.finished {
+            return Ok(());
+        }
+        #[cfg(unix)]
+        kill_group(self.child.process_id().context("Missing PTY process ID")?)?;
+        #[cfg(windows)]
+        if let Some(tree) = &self.tree {
+            tree.terminate()?;
+        }
+        if self.child.try_wait()?.is_none()
+            && let Err(error) = self.child.kill()
+            && self.child.try_wait()?.is_none()
+        {
+            return Err(error).context("Failed to terminate PTY command");
+        }
+        self.child.wait().context("Failed to reap PTY command")?;
+        drop(self.master.take());
+        self.finished = true;
+        Ok(())
+    }
+
+    pub fn close(mut self) -> Result<()> {
+        self.terminate()?;
+        #[cfg(windows)]
+        if let Some(tree) = self.tree.take() {
+            tree.close()?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for Terminal {
+    fn drop(&mut self) {
+        if let Err(error) = self.terminate() {
+            eprintln!("Failed to clean up terminal session: {error:#}");
+        }
+    }
+}
+
+pub struct Interaction<'a> {
+    steps: &'a [spec::Step],
+    index: usize,
+    raw_cursor: usize,
+    clean_cursor: usize,
+    pending: Option<Instant>,
+    sending: bool,
+}
+
+impl<'a> Interaction<'a> {
+    pub fn new(steps: &'a [spec::Step]) -> Self {
+        Self {
+            steps,
+            index: 0,
+            raw_cursor: 0,
+            clean_cursor: 0,
+            pending: None,
+            sending: false,
+        }
+    }
+
+    pub fn advance(
+        &mut self,
+        raw: &str,
+        clean: &str,
+        send: &mpsc::Sender<Vec<u8>>,
+        written: &Receiver<std::io::Result<()>>,
+        running: bool,
+    ) -> Result<()> {
+        if self.sending {
+            match written.try_recv() {
+                Ok(result) => {
+                    result.context("Failed writing PTY input")?;
+                    self.index += 1;
+                    self.sending = false;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(error) => bail!("PTY input writer stopped: {error}"),
+            }
+        } else if let Some(send_at) = self.pending {
+            if Instant::now() >= send_at && running {
+                send.send(spec::input_keys(&self.steps[self.index].input).into_bytes())?;
+                self.sending = true;
+                self.pending = None;
+            }
+        } else if let Some(step) = self.steps.get(self.index) {
+            let (haystack, cursor) = if step.raw {
+                (raw, &mut self.raw_cursor)
+            } else {
+                (clean, &mut self.clean_cursor)
+            };
+            if let Some(pos) = haystack
+                .get(*cursor..)
+                .and_then(|text| text.find(&step.text))
+            {
+                *cursor += pos + step.text.len();
+                self.pending = Some(Instant::now() + Duration::from_millis(200));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn completed(&self) -> usize {
+        self.index
+    }
+
+    pub fn sending(&self) -> bool {
+        self.sending
+    }
+
+    pub fn check_complete(&self, final_command: bool, code: i32, output: &str) -> Result<()> {
+        if (final_command || code != 0) && self.index < self.steps.len() {
+            bail!(
+                "PTY exited before completing step {}: match {:?}\nOutput:\n{output}",
+                self.index,
+                self.steps[self.index].text
+            );
+        }
+        Ok(())
+    }
+}
+
 pub fn pty(
     args: &[String],
     cwd: &Path,
@@ -308,113 +557,19 @@ pub fn pty(
 ) -> Result<(Output, usize)> {
     #[cfg(not(windows))]
     let _ = scope;
-    cancellation::check()?;
-    let pair = native_pty_system().openpty(PtySize {
-        rows: 30,
-        cols: 120,
-        pixel_width: 0,
-        pixel_height: 0,
-    })?;
-    #[cfg(not(windows))]
-    let argv = args.iter().map(OsString::from).collect();
-    #[cfg(windows)]
-    let tree = crate::windows::ProcessTree::new()?;
-    #[cfg(windows)]
-    let argv = {
-        let program = executable(args.first().context("Empty PTY command")?, cwd, env)?;
-        let mut argv = vec![
-            std::env::current_exe()?.into_os_string(),
-            "--internal-exec".into(),
-            tree.event_name.clone(),
-            tree.status_path.clone().into_os_string(),
-        ];
-        argv.push(program.into_os_string());
-        argv.extend(args.iter().skip(1).map(OsString::from));
-        argv
-    };
-    let mut command = CommandBuilder::from_argv(argv);
-    command.cwd(cwd);
-    command.env_clear();
-    for (key, value) in env {
-        command.env(key, value);
-    }
-    command.env("TERM", "xterm-color");
-    let mut reader = pair.master.try_clone_reader()?;
-    let writer = Arc::new(Mutex::new(pair.master.take_writer()?));
-    let (tx, rx) = mpsc::channel();
-    #[cfg(windows)]
-    let response_writer = Arc::clone(&writer);
-    thread::spawn(move || {
-        let mut buffer = [0; 8192];
-        #[cfg(windows)]
-        let mut queries = Vec::new();
-        loop {
-            match reader.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(n) => {
-                    #[cfg(windows)]
-                    {
-                        // ConPTY's INHERIT_CURSOR handshake can precede spawn completion.
-                        queries.extend_from_slice(&buffer[..n]);
-                        let result = (|| -> Result<()> {
-                            for _ in queries.windows(4).filter(|bytes| *bytes == b"\x1b[6n") {
-                                let mut writer = response_writer.lock().unwrap();
-                                writer.write_all(b"\x1b[1;1R")?;
-                                writer.flush()?;
-                            }
-                            Ok(())
-                        })();
-                        if let Err(error) = result {
-                            let _ = tx.send(Err(std::io::Error::other(error)));
-                            break;
-                        }
-                        queries.drain(..queries.len().saturating_sub(3));
-                    }
-                    if tx.send(Ok(buffer[..n].to_vec())).is_err() {
-                        break;
-                    }
-                }
-                // Linux PTYs return EIO when the slave closes.
-                Err(error) if cfg!(unix) && error.raw_os_error() == Some(5) => break,
-                Err(error) => {
-                    let _ = tx.send(Err(error));
-                    break;
-                }
-            }
-        }
-    });
-    let mut child = pair.slave.spawn_command(command)?;
-    #[cfg(windows)]
-    if let Err(error) = tree.start(child.process_id().context("Missing PTY process ID")?) {
-        child
-            .kill()
-            .context("Failed to terminate PTY after startup failure")?;
-        child
-            .wait()
-            .context("Failed to reap PTY after startup failure")?;
-        return Err(error);
-    }
-    drop(pair.slave);
-    let mut master = Some(pair.master);
-    let (send_tx, send_rx) = mpsc::channel::<Vec<u8>>();
-    let (written_tx, written_rx) = mpsc::channel();
-    thread::spawn(move || {
-        for input in send_rx {
-            let mut writer = writer.lock().unwrap();
-            let result = writer.write_all(&input).and_then(|()| writer.flush());
-            let failed = result.is_err();
-            if written_tx.send(result).is_err() || failed {
-                break;
-            }
-        }
-    });
+    let mut terminal = Terminal::new(args, cwd, env)?;
+    let Terminal {
+        child,
+        master,
+        rx,
+        send_tx,
+        written_rx,
+        ..
+    } = &mut terminal;
     let result = (|| {
         let mut bytes = Vec::new();
-        let mut step_index = 0;
-        let (mut raw_cursor, mut clean_cursor) = (0, 0);
+        let mut interaction = Interaction::new(steps);
         let start = Instant::now();
-        let mut pending = None;
-        let mut sending = false;
         let mut exited = None;
         let mut eof = false;
         loop {
@@ -427,6 +582,7 @@ pub fn pty(
             let raw = String::from_utf8_lossy(&bytes);
             let clean = pty_text(&raw);
             if start.elapsed() >= timeout {
+                let step_index = interaction.completed();
                 let waiting = steps.get(step_index).map_or_else(
                     || "Waiting for process to exit (all steps matched)".to_owned(),
                     |step| format!("Waiting for step {step_index}: match {:?}", step.text),
@@ -436,73 +592,41 @@ pub fn pty(
                     timeout.as_millis()
                 );
             }
-            if sending {
-                match written_rx.try_recv() {
-                    Ok(result) => {
-                        result.context("Failed writing PTY input")?;
-                        step_index += 1;
-                        sending = false;
-                    }
-                    Err(mpsc::TryRecvError::Empty) => {}
-                    Err(error) => bail!("PTY input writer stopped: {error}"),
-                }
-            } else if let Some(send_at) = pending {
-                if Instant::now() >= send_at && exited.is_none() {
-                    send_tx.send(spec::input_keys(&steps[step_index].input).into_bytes())?;
-                    sending = true;
-                    pending = None;
-                }
-            } else if let Some(step) = steps.get(step_index) {
-                let (haystack, cursor) = if step.raw {
-                    (raw.as_ref(), &mut raw_cursor)
-                } else {
-                    (clean.as_str(), &mut clean_cursor)
-                };
-                if let Some(pos) = haystack.get(*cursor..).and_then(|s| s.find(&step.text)) {
-                    *cursor += pos + step.text.len();
-                    pending = Some(Instant::now() + Duration::from_millis(200));
-                }
-            }
+            interaction.advance(&raw, &clean, send_tx, written_rx, exited.is_none())?;
             if exited.is_none() {
                 exited = child.try_wait()?;
                 if exited.is_some() {
                     #[cfg(windows)]
-                    tree.check_started()?;
+                    terminal
+                        .tree
+                        .as_ref()
+                        .context("Missing PTY job")?
+                        .check_started()?;
                     // Closing ConPTY releases its output pipe so the reader can drain to EOF.
                     drop(master.take());
                 }
             }
             if let Some(status) = &exited
                 && eof
-                && !sending
+                && !interaction.sending()
             {
                 let code = status.exit_code() as i32;
-                if (final_command || code != 0) && step_index < steps.len() {
-                    bail!(
-                        "PTY exited before completing step {step_index}: match {:?}\nOutput:\n{clean}",
-                        steps[step_index].text
-                    );
-                }
-                return Ok((Output { text: clean, code }, step_index));
+                interaction.check_complete(final_command, code, &clean)?;
+                return Ok((Output { text: clean, code }, interaction.completed()));
             }
         }
     })();
     #[cfg(windows)]
     if result.is_ok() {
-        scope.jobs.borrow_mut().push(tree);
-    } else {
-        tree.terminate()?;
+        scope
+            .jobs
+            .borrow_mut()
+            .push(terminal.tree.take().context("Missing PTY job")?);
     }
     if result.is_err() {
-        #[cfg(unix)]
-        kill_group(child.process_id().context("Missing PTY process ID")?)?;
-        if child.try_wait()?.is_none()
-            && let Err(error) = child.kill()
-            && child.try_wait()?.is_none()
-        {
-            return Err(error).context("Failed to terminate PTY command");
-        }
-        child.wait().context("Failed to reap PTY command")?;
+        terminal.close()?;
+    } else {
+        terminal.finished = true;
     }
     result
 }

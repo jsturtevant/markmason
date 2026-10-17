@@ -63,6 +63,28 @@ To prepare a walkthrough from another Markdown document, add
 automatically in the walkthrough's shared environment, so the state it creates
 is available to later steps. See [setup and state](tests/cli/state.md).
 
+Add `shell: bash` when the tutorial needs shell variables, functions, pipelines,
+or `cd` changes to persist across commands and Markdown setup:
+
+````markdown
+---
+shell: bash
+setup: mm sharedset.md
+---
+
+```markmason
+MESSAGE="hello from Bash"
+printf '%s\n' "$MESSAGE"
+```
+```expected
+hello from Bash
+```
+````
+
+This requires Bash on `PATH`: system Bash on Linux/macOS (including macOS
+Bash 3.2), or Git Bash for native Windows. There is no automatic PowerShell,
+cmd, or WSL substitution. See the [executable shell guide](tests/cli/shell.md).
+
 ## Live examples
 
 Learn more with real examples from `mm`:
@@ -77,6 +99,7 @@ Learn more with real examples from `mm`:
 - [Terminal prompts](tests/cli/interactive.md)
 - [Output matching](tests/cli/matching.md)
 - [Setup and state](tests/cli/state.md)
+- [Persistent Bash sessions](tests/cli/shell.md)
 - [Path variables](tests/cli/variables.md)
 - [Environment filters](tests/cli/environment.md)
 
@@ -102,11 +125,14 @@ that prints text, shows prompts, and writes test state. Both go on `PATH`.
 | Piped input | `stdin` block |
 | Interactive terminal | `pty` block with `match:` / `send:` |
 | Per-file setup | `setup: python3 setup.py` in YAML frontmatter |
+| Shared Markdown setup | `setup: mm sharedset.md` |
+| Persistent Bash session | `shell: bash` in YAML frontmatter |
 | Clone a fixture | `clone: owner/repo` in frontmatter; requires authenticated `gh` |
 | Tags and timeout | `tags: [smoke]`, `timeout: 30` in frontmatter |
 
-Commands resolve from `PATH`, without a shell. Each file gets an isolated home
-and configuration directory; its cases run in order and share state.
+By default, commands resolve from `PATH` without a shell. `shell: bash` opts
+one file into a persistent Bash session. Each file gets an isolated home and
+configuration directory; its cases run in order and share state.
 
 Headings describe the behavior. Each `markmason` block is one test: commands run
 in order, combine their output, and stop at the first nonzero exit.

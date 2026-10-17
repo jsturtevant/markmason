@@ -26,6 +26,8 @@ pulldown-cmark = { version = "0.13", default-features = false }
 regex = "1"
 serde_yaml = "0.9"
 tempfile = "3"
+tree-sitter = "0.26.13"
+tree-sitter-bash = "0.25.1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

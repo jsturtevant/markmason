@@ -1,6 +1,70 @@
 use super::*;
 
 #[test]
+fn shell_frontmatter_is_explicit_and_inherits_into_markdown_setup() -> Result<()> {
+    let source =
+        "---\nshell: bash\n---\n```markmason\nif true; then\n  printf 'ready\\n'\nfi\n```\n";
+    let parsed = spec::parse(source)?;
+    assert_eq!(parsed.shell, Some(spec::Shell::Bash));
+    assert!(parsed.cases[0].command.contains("\n  printf"));
+    let inherited = spec::parse_with_shell("```markmason\nvalue=shared\n```\n", parsed.shell)?;
+    assert_eq!(inherited.shell, Some(spec::Shell::Bash));
+    assert!(
+        spec::parse("```markmason\napp echo literal\n```\n")?
+            .shell
+            .is_none()
+    );
+    for invalid in ["zsh", "pwsh", "[]", "42", "''"] {
+        assert!(spec::parse(&format!("---\nshell: {invalid}\n---\n")).is_err());
+    }
+    Ok(())
+}
+
+#[test]
+fn bash_commands_keep_complete_shell_constructs_and_heredocs() -> Result<()> {
+    for (script, expected) in [
+        (
+            "# prose\nVALUE=ready\nprintf '%s\\n' \"$VALUE\"\n",
+            vec!["VALUE=ready", "printf '%s\\n' \"$VALUE\""],
+        ),
+        (
+            "printf '%s\\n' one \\\n  two | cat\n",
+            vec!["printf '%s\\n' one \\\n  two | cat"],
+        ),
+        (
+            "for value in one two; do\n  printf '%s\\n' \"$value\"\ndone\n",
+            vec!["for value in one two; do\n  printf '%s\\n' \"$value\"\ndone"],
+        ),
+        (
+            "greet() {\n  printf 'hello\\n'\n}\ngreet\n",
+            vec!["greet() {\n  printf 'hello\\n'\n}", "greet"],
+        ),
+        (
+            "cat <<'END'\n  hello\nEND\nprintf 'done\\n'\n",
+            vec!["cat <<'END'\n  hello\nEND", "printf 'done\\n'"],
+        ),
+        (
+            "false || printf 'recovered\\n'\n",
+            vec!["false || printf 'recovered\\n'"],
+        ),
+        (
+            "printf 'one'; printf 'two'\n",
+            vec!["printf 'one'", "printf 'two'"],
+        ),
+    ] {
+        assert_eq!(shell::commands(script)?, expected, "{script}");
+    }
+    for invalid in [
+        "if true; then\n",
+        "printf 'unterminated\n",
+        "# comment only\n",
+    ] {
+        assert!(shell::commands(invalid).is_err(), "{invalid}");
+    }
+    Ok(())
+}
+
+#[test]
 fn environment_overrides_follow_platform_case_rules() {
     for (inherited, key) in [
         ("test_home", "TEST_HOME"),

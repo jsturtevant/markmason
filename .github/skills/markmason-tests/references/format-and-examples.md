@@ -57,7 +57,7 @@ error: unknown option --not-an-option
 | `stdin` fence | Send its contents plus a final newline |
 | `pty` fence | Use paired `match:` / `send:` or `match-raw:` / `send:` steps |
 
-- Commands run without a shell. Quote arguments with spaces; backslashes are literal.
+- By default commands run without a shell. Quote arguments with spaces; backslashes are literal.
 - Put one command on each line; blank lines are ignored. Combine their output
   for the assertion, and stop at the first nonzero exit.
 - Share file state between commands, not shell variables or directory changes.
@@ -93,6 +93,33 @@ timeout: 30
 - Leave stdin and PTY text literal; they do not substitute these variables.
 - Choose a positive timeout. Frontmatter overrides the command-line default.
 - Document prerequisites when selecting a single case would skip earlier state.
+
+## Stateful Bash walkthroughs
+
+Use `shell: bash` when a document needs variables, functions, shell syntax, or
+directory changes to persist. Keep commands directly in `markmason` fences,
+not in `stdin` scripts or environment-state files.
+
+```yaml
+---
+shell: bash
+setup: mm sharedset.md
+---
+```
+
+Markdown setup shares the same Bash process and inherits shell mode. It may
+also declare `shell: bash` to work standalone. A direct-execution caller must
+opt in explicitly before using a Bash prerequisite.
+
+Bash uses `nounset` and `pipefail`, without forced `errexit`. Preserve complete
+loops, functions, pipelines, and heredocs; these are logical commands for stepping.
+Expected failures retain state, but unexpected failures stop the file.
+Use application `stdin` only on the first logical command of a block.
+
+Require Bash on `PATH`: Linux Bash, macOS Bash 3.2+, or native Windows Git Bash.
+Do not assume PowerShell, cmd, WSL, or a Bash version newer than the documented
+prerequisites. Runner variables expand through Bash; single quotes stay literal.
+See [the executable guide](../../../../tests/cli/shell.md).
 
 ## Filtering
 
