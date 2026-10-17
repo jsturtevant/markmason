@@ -2193,7 +2193,7 @@ fn bash_job_control_process_groups_are_cleaned_on_every_exit_path() {
                             size,
                         )
                     };
-                    count == size && info.pbi_status == libc::SZOMB as u32
+                    count == size && info.pbi_status == libc::SZOMB
                 };
                 #[cfg(target_os = "linux")]
                 let stopped = stopped
