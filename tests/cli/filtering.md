@@ -10,10 +10,14 @@ Run from the repository root with `mm` on `PATH`.
 | [basic.md](../fixtures/passing/basic.md) | `smoke`, `cli` | 2 |
 | [extra.md](../fixtures/passing/extra.md) | `extra` | 1 |
 
-## `mm tests/fixtures/passing --file-pattern basic`
+## Select files by path
+
+```markmason
+mm tests/fixtures/passing --file-pattern basic
+```
 
 `--file-pattern` matches file paths only. Here it runs both cases in
-`basic.md`, not individual command headings.
+`basic.md`, not individual commands.
 
 ```expected
 basic.md
@@ -23,7 +27,11 @@ pass 2
 fail 0
 ```
 
-## `mm tests/fixtures/passing --file-exclude basic`
+## Exclude files by path
+
+```markmason
+mm tests/fixtures/passing --file-exclude basic
+```
 
 Skip files whose paths match `basic`.
 
@@ -34,7 +42,11 @@ pass 1
 fail 0
 ```
 
-## `mm tests/fixtures/passing --tags SMOKE,cli`
+## Require every listed tag
+
+```markmason
+mm tests/fixtures/passing --tags SMOKE,cli
+```
 
 Require both tags. Matching ignores case, so `SMOKE` matches `smoke`.
 
@@ -46,7 +58,11 @@ pass 2
 fail 0
 ```
 
-## `mm tests/fixtures/passing --tags-exclude smoke`
+## Exclude a tag
+
+```markmason
+mm tests/fixtures/passing --tags-exclude smoke
+```
 
 Skip files with the `smoke` tag.
 
@@ -57,9 +73,13 @@ pass 1
 fail 0
 ```
 
-## `mm tests/fixtures/passing --test-name-pattern basic.md`
+## Select all commands in a matching file
 
-`--test-name-pattern` matches file paths or command headings. Here the file name
+```markmason
+mm tests/fixtures/passing --test-name-pattern basic.md
+```
+
+`--test-name-pattern` matches file paths or commands. Here the file name
 matches, so both cases run, just as with `--file-pattern basic`.
 
 ```expected
@@ -70,9 +90,13 @@ pass 2
 fail 0
 ```
 
-## `mm tests/fixtures/passing --test-name-pattern "^mm --version$"`
+## Select individual commands
 
-Here the pattern matches command headings instead: only `mm --version` runs in
+```markmason
+mm tests/fixtures/passing --test-name-pattern "^mm --version$"
+```
+
+Here the pattern matches commands instead: only `mm --version` runs in
 each file. `--file-pattern` cannot select individual commands.
 
 ```expected
@@ -88,7 +112,11 @@ Combine the flags to narrow files first, then select commands within them.
 Earlier cases won't run automatically; select the whole file if cases depend on
 each other.
 
-## `mm tests/fixtures/passing --test-name-pattern "^mm --help$" --test-name-pattern "^mm --version$"`
+## Combine alternative command patterns
+
+```markmason
+mm tests/fixtures/passing --test-name-pattern "^mm --help$" --test-name-pattern "^mm --version$"
+```
 
 Repeated name patterns are alternatives: a command only needs to match one.
 

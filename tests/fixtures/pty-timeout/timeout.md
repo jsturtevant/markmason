@@ -6,7 +6,11 @@ timeout: 1
 
 The process stays alive without printing the prompt the script needs.
 
-## `mm-test-cli sleep`
+## Wait for a prompt that never arrives
+
+```markmason
+mm-test-cli sleep
+```
 
 ```pty
 match: missing

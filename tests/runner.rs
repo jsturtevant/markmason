@@ -74,31 +74,43 @@ fn standalone_sequential_setup_variables_pipeline_and_nonzero_exit() {
         r#"---
 setup: app setup setup.fixture
 ---
-## `app state`
+```markmason
+app state
+```
 ```expected
 ready
 ```
-## `app echo "hello | world" "" | app cat`
+```markmason
+app echo "hello | world" "" | app cat
+```
 ```expected
 hello | world
 ```
-## `app cat`
+```markmason
+app cat
+```
 ```stdin
 input
 ```
 ```expected
 input
 ```
-## `app fail | app echo must-not-run` (exit 2)
+```markmason (exit 2)
+app fail | app echo must-not-run
+```
 ```expected
 stdout
 stderr
 ```
-## `app echo $TEST_HOME $REPO_ROOT $PROJECT_NAME $XDG_CONFIG_HOME`
+```markmason
+app echo $TEST_HOME $REPO_ROOT $PROJECT_NAME $XDG_CONFIG_HOME
+```
 ```expected
 $TEST_HOME $REPO_ROOT $PROJECT_NAME $XDG_CONFIG_HOME
 ```
-## `app vars`
+```markmason
+app vars
+```
 ```expected
 $TEST_HOME
 $XDG_CONFIG_HOME
@@ -108,7 +120,9 @@ $XDG_CONFIG_HOME
             + r#"
 $REPO_ROOT
 ```
-## `app bulk`
+```markmason
+app bulk
+```
 "#,
     )
     .unwrap();
@@ -128,11 +142,11 @@ fn each_file_chooses_its_own_setup_command() {
     fs::write(dir.path().join("setup.fixture"), "").unwrap();
     fs::write(
         dir.path().join("a.md"),
-        format!("---\nsetup: '\"{executable}\" setup setup.fixture'\n---\n## `app state`\n```expected\nready\n```\n"),
+        format!("---\nsetup: '\"{executable}\" setup setup.fixture'\n---\n```markmason\napp state\n```\n```expected\nready\n```\n"),
     ).unwrap();
     fs::write(
         dir.path().join("b.md"),
-        "---\nsetup: app setup-other setup.fixture\n---\n## `app state`\n```expected\nother\n```\n",
+        "---\nsetup: app setup-other setup.fixture\n---\n```markmason\napp state\n```\n```expected\nother\n```\n",
     )
     .unwrap();
     let output = command(dir.path()).output().unwrap();
@@ -165,7 +179,7 @@ fn setup_executes_directly_without_a_node_interpreter() {
     fs::hard_link(helper(), dir.path().join(&name)).unwrap();
     fs::write(
         dir.path().join("direct.md"),
-        format!("---\nsetup: {name}\n---\n## `app state`\n```expected\nready\n```\n"),
+        format!("---\nsetup: {name}\n---\n```markmason\napp state\n```\n```expected\nready\n```\n"),
     )
     .unwrap();
     let output = command(dir.path())
@@ -186,11 +200,15 @@ fn windows_batch_shims_work_in_pipes_and_ptys() {
     .unwrap();
     fs::write(
         dir.path().join("shim.md"),
-        r#"## `shim echo "hello & world"`
+        r#"```markmason
+shim echo "hello & world"
+```
 ```expected
 hello & world
 ```
-## `shim interactive`
+```markmason
+shim interactive
+```
 ```pty
 match: Ready?
 send: yes{enter}
@@ -219,10 +237,14 @@ fn recursive_discovery_tags_files_and_name_filter_failures() {
     fs::create_dir(dir.path().join("nested")).unwrap();
     fs::write(
         dir.path().join("nested/slow.md"),
-        "---\ntags: [Dispatch, SLOW]\n---\n## `app fail`\n",
+        "---\ntags: [Dispatch, SLOW]\n---\n```markmason\napp fail\n```\n",
     )
     .unwrap();
-    fs::write(dir.path().join("fast.md"), "## `app echo fast`\n").unwrap();
+    fs::write(
+        dir.path().join("fast.md"),
+        "```markmason\napp echo fast\n```\n",
+    )
+    .unwrap();
     let output = command(dir.path())
         .env("E2E_TAGS_EXCLUDE", "SLOW")
         .output()
@@ -270,7 +292,7 @@ fn timeouts_are_not_expected_exit_failures() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(
         dir.path().join("timeout.md"),
-        "---\ntimeout: 0.15\n---\n## `app sleep` (exit 1)\n",
+        "---\ntimeout: 0.15\n---\n```markmason (exit 1)\napp sleep\n```\n",
     )
     .unwrap();
     let start = Instant::now();
@@ -286,7 +308,9 @@ fn pty_raw_clean_repeated_prompts_and_missing_steps() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(
         dir.path().join("interactive.md"),
-        r#"## `app interactive`
+        r#"```markmason
+app interactive
+```
 ```pty
 match-raw: {hide-cursor}
 send:
@@ -305,7 +329,7 @@ done no
     assert!(output.status.success(), "{}", text(&output));
     fs::write(
         dir.path().join("interactive.md"),
-        "## `app premature`\n```pty\nmatch: missing\nsend: y\n```\n",
+        "```markmason\napp premature\n```\n```pty\nmatch: missing\nsend: y\n```\n",
     )
     .unwrap();
     let output = command(dir.path()).output().unwrap();
@@ -317,7 +341,7 @@ done no
     );
     fs::write(
         dir.path().join("interactive.md"),
-        "---\ntimeout: 0.1\n---\n## `app sleep`\n```pty\nmatch: missing\nsend: y\n```\n",
+        "---\ntimeout: 0.1\n---\n```markmason\napp sleep\n```\n```pty\nmatch: missing\nsend: y\n```\n",
     )
     .unwrap();
     let output = command(dir.path()).output().unwrap();
@@ -334,13 +358,17 @@ fn pty_failure_diagnostics_strip_terminal_control_sequences() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(
         dir.path().join("errors.md"),
-        r#"## `app interactive`
+        r#"```markmason
+app interactive
+```
 ```pty
 match: missing
 send: unused{enter}
 ```
 
-## `app interactive`
+```markmason
+app interactive
+```
 ```pty
 match: Ready?
 send: yes{enter}
@@ -383,25 +411,33 @@ fn invalid_setup_spawn_empty_specs_and_mismatches_fail() {
     let dir = tempfile::tempdir().unwrap();
     for (markdown, expected) in [
         ("# no commands", "No test cases found"),
+        (
+            "## `app echo legacy`\n",
+            "Expected a fenced markmason command block",
+        ),
+        (
+            "```markmason\napp echo unterminated",
+            "Unterminated markmason block",
+        ),
         ("---\ntags: nope\n---\n", "tags must be an array"),
         (
-            "## `missing-executable-markmason` (exit 1)",
+            "```markmason (exit 1)\nmissing-executable-markmason\n```",
             "Failed to start",
         ),
         (
-            "## `app echo actual`\n```expected\nexpected\n```\n",
+            "```markmason\napp echo actual\n```\n```expected\nexpected\n```\n",
             "Line 1 mismatch",
         ),
         (
-            "---\nsetup: missing\n---\n## `app echo ignored`",
+            "---\nsetup: missing\n---\n```markmason\napp echo ignored\n```",
             "Setup command failed",
         ),
         (
-            "---\nsetup: missing-executable-markmason setup.fixture\n---\n## `app echo ignored`",
+            "---\nsetup: missing-executable-markmason setup.fixture\n---\n```markmason\napp echo ignored\n```",
             "Setup command failed",
         ),
         (
-            "---\nsetup: app fail\n---\n## `app echo ignored`",
+            "---\nsetup: app fail\n---\n```markmason\napp echo ignored\n```",
             "Setup command failed: app fail",
         ),
     ] {
@@ -419,7 +455,7 @@ fn clone_fixture_is_isolated_and_removed() {
         .path()
         .join(format!("gh{}", std::env::consts::EXE_SUFFIX));
     fs::hard_link(helper(), &gh).unwrap();
-    fs::write(dir.path().join("clone.md"), "---\nclone: owner/repo\n---\n## `app cloned`\n```expected\nyes\n```\n## `app echo $REPO_ROOT`\n").unwrap();
+    fs::write(dir.path().join("clone.md"), "---\nclone: owner/repo\n---\n```markmason\napp cloned\n```\n```expected\nyes\n```\n```markmason\napp echo $REPO_ROOT\n```\n").unwrap();
     let path = std::env::join_paths(
         [dir.path().to_owned(), helper().parent().unwrap().to_owned()]
             .into_iter()
@@ -457,7 +493,7 @@ fn empty_authentication_environment_values_use_nonempty_fallbacks() {
         fs::write(
             dir.path().join("config.md"),
             format!(
-                "## `app gh-config`\n```expected\n{}\n```\n",
+                "```markmason\napp gh-config\n```\n```expected\n{}\n```\n",
                 expected.display()
             ),
         )
@@ -480,7 +516,7 @@ fn listing_needs_neither_authentication_nor_a_working_directory() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(
         dir.path().join("list.md"),
-        "---\nclone: owner/repo\nsetup: nonexistent\n---\n## `app echo listed`\n",
+        "---\nclone: owner/repo\nsetup: nonexistent\n---\n```markmason\napp echo listed\n```\n",
     )
     .unwrap();
     let output = command(dir.path())
@@ -507,7 +543,7 @@ fn filesystem_root_is_a_valid_working_directory() {
         .collect();
     fs::write(
         dir.path().join("root.md"),
-        "## `app root \"$REPO_ROOT\" \"$PROJECT_NAME\"`\n",
+        "```markmason\napp root \"$REPO_ROOT\" \"$PROJECT_NAME\"\n```\n",
     )
     .unwrap();
     let output = command(dir.path()).arg("--cwd").arg(root).output().unwrap();
@@ -540,7 +576,7 @@ fn mixed_case_environment_cannot_override_fixture_isolation() {
         fs::write(
             dir.path().join("mixed.md"),
             format!(
-                "## `app env TEST_HOME XDG_CONFIG_HOME APPDATA LOCALAPPDATA GH_CONFIG_DIR NO_COLOR FORCE_COLOR GIT_TERMINAL_PROMPT GH_PROMPT_DISABLED`\n```expected\n${home_env}\n$XDG_CONFIG_HOME\n$XDG_CONFIG_HOME\n$XDG_CONFIG_HOME\n{}\n1\n0\n0\n1\n```\n",
+                "```markmason\napp env TEST_HOME XDG_CONFIG_HOME APPDATA LOCALAPPDATA GH_CONFIG_DIR NO_COLOR FORCE_COLOR GIT_TERMINAL_PROMPT GH_PROMPT_DISABLED\n```\n```expected\n${home_env}\n$XDG_CONFIG_HOME\n$XDG_CONFIG_HOME\n$XDG_CONFIG_HOME\n{}\n1\n0\n0\n1\n```\n",
                 caller_home.display()
             ),
         ).unwrap();
@@ -573,7 +609,7 @@ fn setup_resolves_executables_from_a_relative_working_directory() {
     for program in ["tool.exe", "tool"] {
         fs::write(
             specs.join("setup.md"),
-            format!("---\nsetup: {program}\n---\n## `app state`\n```expected\nready\n```\n"),
+            format!("---\nsetup: {program}\n---\n```markmason\napp state\n```\n```expected\nready\n```\n"),
         )
         .unwrap();
         let output = command(&specs)
@@ -600,7 +636,7 @@ fn relative_path_entries_resolve_from_the_command_working_directory() {
     fs::write(
         specs.join("path.md"),
         format!(
-            "---\nsetup: tool.exe setup-location\n---\n## `tool.exe state`\n```expected\n{0}\n```\n## `tool.exe where`\n```expected\n{0}\n```\n## `tool.exe interactive-location`\n```pty\nmatch: {0}\nsend:\nmatch: Ready?\nsend: yes{{enter}}\nmatch: Ready?\nsend: no{{enter}}\n```\n```expected\ndone no\n```\n",
+            "---\nsetup: tool.exe setup-location\n---\n```markmason\ntool.exe state\n```\n```expected\n{0}\n```\n```markmason\ntool.exe where\n```\n```expected\n{0}\n```\n```markmason\ntool.exe interactive-location\n```\n```pty\nmatch: {0}\nsend:\nmatch: Ready?\nsend: yes{{enter}}\nmatch: Ready?\nsend: no{{enter}}\n```\n```expected\ndone no\n```\n",
             expected.display()
         ),
     ).unwrap();
@@ -623,7 +659,7 @@ fn invalid_executables_are_startup_errors_not_expected_exit_codes() {
         fs::write(
             dir.path().join("invalid.md"),
             format!(
-                "## `\"{}\"` (exit 1)\n{}",
+                "```markmason (exit 1)\n\"{}\"\n```\n{}",
                 program.display(),
                 if pty { "```pty\n```\n" } else { "" }
             ),
@@ -653,7 +689,7 @@ fn successful_jobs_keep_agents_alive_until_the_markdown_file_finishes() {
         fs::write(
             dir.path().join("agent.md"),
             format!(
-                "## `app {} \"{}\"`\n{}\n## `app await-agent`\n```expected\nready\n```\n",
+                "```markmason\napp {} \"{}\"\n```\n{}\n```markmason\napp await-agent\n```\n```expected\nready\n```\n",
                 if pty { "background-pty" } else { "background" },
                 started.display(),
                 if pty {
@@ -716,7 +752,7 @@ fn windows_jobs_clean_up_descendants_even_after_the_command_exits() {
         fs::write(
             dir.path().join("descendants.md"),
             format!(
-                "---\ntimeout: 1\n---\n## `app {helper_mode} \"{}\"`\n{extra}",
+                "---\ntimeout: 1\n---\n```markmason\napp {helper_mode} \"{}\"\n```\n{extra}",
                 started.display()
             ),
         )
@@ -819,24 +855,27 @@ fn interrupts_reap_commands_stop_descendants_and_clean_up_fixtures() {
             );
             let markdown = match mode {
                 "setup" => format!(
-                    "---\nsetup: '{tree}'\n---\n## `app mark \"{}\"`\n",
+                    "---\nsetup: '{tree}'\n---\n```markmason\napp mark \"{}\"\n```\n",
                     later.display()
                 ),
                 "pty" => format!(
-                    "## `{tree}`\n```pty\nmatch: never\nsend: y\n```\n## `app mark \"{}\"`\n",
+                    "```markmason\n{tree}\n```\n```pty\nmatch: never\nsend: y\n```\n```markmason\napp mark \"{}\"\n```\n",
                     later.display()
                 ),
                 "writer" => format!(
-                    "## `{tree}`\n```stdin\n{}\n```\n## `app mark \"{}\"`\n",
+                    "```markmason\n{tree}\n```\n```stdin\n{}\n```\n```markmason\napp mark \"{}\"\n```\n",
                     "x".repeat(256 * 1024),
                     later.display()
                 ),
-                _ => format!("## `{tree}`\n## `app mark \"{}\"`\n", later.display()),
+                _ => format!(
+                    "```markmason\n{tree}\n```\n```markmason\napp mark \"{}\"\n```\n",
+                    later.display()
+                ),
             };
             fs::write(dir.path().join("a.md"), markdown).unwrap();
             fs::write(
                 dir.path().join("b.md"),
-                format!("## `app mark \"{}\"`\n", later.display()),
+                format!("```markmason\napp mark \"{}\"\n```\n", later.display()),
             )
             .unwrap();
             let mut runner = command(dir.path())
@@ -923,7 +962,7 @@ fn oversized_pty_input_cannot_block_timeout_or_cancellation() {
         let started = dir.path().join("started");
         fs::write(
             dir.path().join("blocked.md"),
-            format!("---\ntimeout: {}\n---\n## `app nonreading \"{}\"`\n```pty\nmatch: Ready?\nsend: {}\n```\n",
+            format!("---\ntimeout: {}\n---\n```markmason\napp nonreading \"{}\"\n```\n```pty\nmatch: Ready?\nsend: {}\n```\n",
                 if signal.is_some() { 30 } else { 1 },
                 started.display(), "x".repeat(2 * 1024 * 1024)),
         ).unwrap();

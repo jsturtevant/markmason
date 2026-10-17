@@ -7,7 +7,11 @@ setup: mm-test-cli setup ../fixtures/setup.fixture
 Setup runs once per file; its cases then run in order and share a temporary home.
 The [test CLI](../support/README.md) uses `TEST_HOME`, set by `just test-markdown`.
 
-## `mm-test-cli state`
+## Read the state created by setup
+
+```markmason
+mm-test-cli state
+```
 
 Setup found its argument relative to this spec and wrote the initial state.
 
@@ -15,11 +19,19 @@ Setup found its argument relative to this spec and wrote the initial state.
 ready
 ```
 
-## `mm-test-cli mark "$TEST_HOME/state"`
+## Change shared state
+
+```markmason
+mm-test-cli mark "$TEST_HOME/state"
+```
 
 Overwrite that state using the runner-provided home variable.
 
-## `mm-test-cli state`
+## Read the changed state
+
+```markmason
+mm-test-cli state
+```
 
 The next command sees the change. Run this file as a whole, not just this case.
 
@@ -27,7 +39,11 @@ The next command sees the change. Run this file as a whole, not just this case.
 unexpected
 ```
 
-## `mm tests/fixtures/isolation --home-env TEST_HOME`
+## Keep state isolated between files
+
+```markmason
+mm tests/fixtures/isolation --home-env TEST_HOME
+```
 
 [These two files](../fixtures/isolation) get separate homes.
 The second cannot see the first file's home or configuration state.

@@ -38,7 +38,7 @@ struct Options {
     tags: Option<String>,
     #[arg(long)]
     tags_exclude: Option<String>,
-    /// Regex matching a file name or command heading.
+    /// Regex matching a file name or command.
     #[arg(long = "test-name-pattern")]
     name_patterns: Vec<String>,
     /// Default per-command timeout in seconds; frontmatter takes precedence.
@@ -413,7 +413,7 @@ fn run(options: Options) -> Result<bool> {
         cancellation::check()?;
         println!("{file}");
         if spec.cases.is_empty() {
-            eprintln!("  FAIL: No test cases found. Expected headings like ## `command`");
+            eprintln!("  FAIL: No test cases found. Expected a fenced markmason command block");
             failed += 1;
             continue;
         }

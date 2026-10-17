@@ -6,4 +6,8 @@ timeout: 1
 
 This file's one-second timeout overrides the command-line default.
 
-## `mm-test-cli sleep`
+## Exceed the per-file timeout
+
+```markmason
+mm-test-cli sleep
+```

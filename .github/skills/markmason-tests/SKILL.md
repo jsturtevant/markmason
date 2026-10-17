@@ -31,8 +31,9 @@ description: >-
   why its output matters.
 - Keep the prose brief and natural. Avoid filler, marketing language, and
   repeated "this test verifies" introductions.
-- Keep command headings executable: use `## ` followed by a backtick-wrapped command.
-  Do not hide commands inside prose headings or change parser behavior for layout.
+- Use descriptive headings and put each command in a `markmason` fenced block.
+  Keep one command line per block; headings themselves never execute.
+  Put assertions and input blocks after the command, before the next heading.
 - Keep every Markdown file in the scanned spec directory executable.
   Put indexes, references, and templates elsewhere; a case-free README there fails.
 
@@ -42,7 +43,7 @@ description: >-
 - Move bad arguments, invalid specs, failed setup, output mismatches, no-match
   errors, and failure-recovery checks into `errors.md` or a separate error topic.
 - State at the top of error files that the failures are deliberate.
-  Explain `(exit N)` and why an expected error can pass.
+  Put `(exit N)` on the opening `markmason` fence and explain why an expected error can pass.
 - Keep passing sample suites genuinely successful. Do not make normal docs
   print confusing `PASS` lines for deliberately failing commands.
 - Preserve negative coverage when moving examples. Update affected totals,
@@ -71,7 +72,7 @@ description: >-
 
 - Describe `--file-pattern` as matching relative file paths only.
   A matching file runs all its cases.
-- Describe `--test-name-pattern` as matching file paths or command headings.
+- Describe `--test-name-pattern` as matching file paths or command text, not headings.
   A file match runs the whole file; a command match selects individual cases.
 - Show whole-file and anchored command matches when documenting the difference.
 - Explain that file filters narrow the selection first, and that selecting a

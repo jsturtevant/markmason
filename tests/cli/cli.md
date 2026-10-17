@@ -2,10 +2,14 @@
 
 Find available options and check the installed version.
 
-These examples run as tests. `expected` checks the full output;
-`expected-contains` checks selected lines.
+Each `markmason` block runs its command; the headings describe what it does.
+`expected` checks the full output; `expected-contains` checks selected lines.
 
-## `mm --help`
+## Find available options
+
+```markmason
+mm --help
+```
 
 List the available options. Only the help and version entries are shown here.
 
@@ -17,7 +21,11 @@ Print help
 Print version
 ```
 
-## `mm --version`
+## Check the installed version
+
+```markmason
+mm --version
+```
 
 Print the installed version, not the help text describing the flag.
 

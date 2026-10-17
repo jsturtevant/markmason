@@ -27,7 +27,12 @@ Save as `tests/cli/greet.md`:
 ````markdown
 # Greetings
 
-## `bash -c "echo Hello, world!"`
+## Say hello
+
+```markmason
+bash -c "echo Hello, world!"
+```
+
 ```expected
 Hello, world!
 ```
@@ -70,9 +75,10 @@ that prints text, shows prompts, and writes test state. Both go on `PATH`.
 
 | Feature | Syntax |
 |---------|--------|
+| Run a command | `markmason` block |
 | Exact output | `expected` block |
 | Ordered whole-line matching | `expected-contains` block; no unmatched trailing lines |
-| Expected failure | ``## `command` (exit 1)`` |
+| Expected failure | `markmason (exit 1)` on the opening fence |
 | Piped input | `stdin` block |
 | Interactive terminal | `pty` block with `match:` / `send:` |
 | Per-file setup | `setup: python3 setup.py` in YAML frontmatter |
@@ -81,6 +87,9 @@ that prints text, shows prompts, and writes test state. Both go on `PATH`.
 
 Commands resolve from `PATH`, without a shell. Each file gets an isolated home
 and configuration directory; its cases run in order and share state.
+
+Headings describe the behavior; only `markmason` blocks run commands.
+The old backtick-wrapped command headings are no longer supported.
 
 See the [specification reference](docs/specification.md) for setup, matching,
 PTYs, variables, filters, and cleanup details. Use `mm --help` for CLI options.

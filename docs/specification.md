@@ -2,8 +2,36 @@
 
 ## Commands and output
 
-Use ``## `command` `` headings with an optional `(exit N)`; the default is exit 0.
-Without an expected block, only the exit code is checked.
+Write descriptive headings and put each command in a `markmason` fenced block.
+The default expected exit code is 0; add `(exit N)` to the opening fence to
+require a different code:
+
+````markdown
+## Reject an unknown option
+
+```markmason (exit 2)
+mycli --not-an-option
+```
+
+```expected
+error: unknown option --not-an-option
+```
+````
+
+Each block contains one nonempty command line, optionally surrounded by blank
+lines. Multiline command scripts are not supported; use `stdin` with an explicit
+interpreter when needed. Without an expected block, only the exit code is checked.
+
+Output, stdin, and PTY blocks belong to the preceding command until the next
+command or heading. Keep them in the same section as their command.
+Ordinary code blocks and examples nested inside longer fences do not run.
+Backtick and tilde fences of at least three characters are supported, indented
+by at most three spaces; close with the same character and at least the opening
+length. Recognized blocks must be closed.
+
+**Breaking change:** backtick-wrapped command headings are no longer executable.
+Move their commands into `markmason` blocks and move any `(exit N)` annotation
+onto the opening fence.
 
 | Block | Behavior |
 |-------|----------|
@@ -58,7 +86,7 @@ Quote paths with spaces, for example `setup: 'python3 "setup fixtures.py"'`.
 
 ## Variables
 
-Command headings and expected blocks substitute:
+Command blocks and expected blocks substitute:
 
 | Variable | Value |
 |----------|-------|
@@ -72,7 +100,12 @@ Stdin and PTY directives remain literal.
 ## Interactive terminals
 
 ````markdown
-## `mycli init`
+## Create a project
+
+```markmason
+mycli init
+```
+
 ```pty
 match: Project name?
 send: demo{enter}
@@ -110,7 +143,7 @@ Raw and ANSI-stripped matches advance separate cursors.
 - `--env-prefix` changes the environment prefix. Explicit flags take precedence.
 - Tags are comma-separated and case-insensitive. Inclusion requires all tags;
   exclusion rejects any matching tag.
-- `--test-name-pattern REGEX` matches a relative spec path or command heading.
+- `--test-name-pattern REGEX` matches a relative spec path or command text, not headings.
   Matching a file runs all its cases; selecting a command skips earlier prerequisites.
 - File and name patterns use Rust regex syntax.
 - `--list` discovers cases without executing setup or creating fixtures.

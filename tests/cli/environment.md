@@ -3,7 +3,11 @@
 Environment variables select the same [sample specs](filtering.md) as CLI flags.
 [`mm-test-cli with-env`](../support/README.md) sets them for one command, without shell-specific syntax.
 
-## `mm-test-cli with-env E2E_FILE_PATTERN basic -- mm tests/fixtures/passing`
+## Include paths from the environment
+
+```markmason
+mm-test-cli with-env E2E_FILE_PATTERN basic -- mm tests/fixtures/passing
+```
 
 Include files whose relative paths match the pattern.
 
@@ -15,7 +19,11 @@ pass 2
 fail 0
 ```
 
-## `mm-test-cli with-env E2E_FILE_EXCLUDE basic -- mm tests/fixtures/passing`
+## Exclude paths from the environment
+
+```markmason
+mm-test-cli with-env E2E_FILE_EXCLUDE basic -- mm tests/fixtures/passing
+```
 
 Exclude matching file paths.
 
@@ -26,7 +34,11 @@ pass 1
 fail 0
 ```
 
-## `mm-test-cli with-env E2E_TAGS SMOKE,cli -- mm tests/fixtures/passing`
+## Require tags from the environment
+
+```markmason
+mm-test-cli with-env E2E_TAGS SMOKE,cli -- mm tests/fixtures/passing
+```
 
 Require every listed tag, ignoring case.
 
@@ -38,7 +50,11 @@ pass 2
 fail 0
 ```
 
-## `mm-test-cli with-env E2E_TAGS_EXCLUDE smoke -- mm tests/fixtures/passing`
+## Exclude tags from the environment
+
+```markmason
+mm-test-cli with-env E2E_TAGS_EXCLUDE smoke -- mm tests/fixtures/passing
+```
 
 Exclude files with any listed tag.
 
@@ -49,7 +65,11 @@ pass 1
 fail 0
 ```
 
-## `mm-test-cli with-env E2E_TAGS extra DOC_TAGS smoke -- mm tests/fixtures/passing --env-prefix DOC_`
+## Choose a different variable prefix
+
+```markmason
+mm-test-cli with-env E2E_TAGS extra DOC_TAGS smoke -- mm tests/fixtures/passing --env-prefix DOC_
+```
 
 Change the filter prefix. `DOC_TAGS` is used; the default `E2E_TAGS` is ignored.
 
@@ -61,7 +81,11 @@ pass 2
 fail 0
 ```
 
-## `mm-test-cli with-env E2E_FILE_PATTERN extra -- mm tests/fixtures/passing --file-pattern basic`
+## Override the include pattern
+
+```markmason
+mm-test-cli with-env E2E_FILE_PATTERN extra -- mm tests/fixtures/passing --file-pattern basic
+```
 
 An explicit file pattern replaces the environment's include pattern.
 
@@ -73,7 +97,11 @@ pass 2
 fail 0
 ```
 
-## `mm-test-cli with-env E2E_FILE_EXCLUDE basic -- mm tests/fixtures/passing --file-exclude extra`
+## Override the exclude pattern
+
+```markmason
+mm-test-cli with-env E2E_FILE_EXCLUDE basic -- mm tests/fixtures/passing --file-exclude extra
+```
 
 An explicit file exclusion replaces the environment's exclusion.
 
@@ -85,7 +113,11 @@ pass 2
 fail 0
 ```
 
-## `mm-test-cli with-env E2E_TAGS extra -- mm tests/fixtures/passing --tags smoke`
+## Override required tags
+
+```markmason
+mm-test-cli with-env E2E_TAGS extra -- mm tests/fixtures/passing --tags smoke
+```
 
 Explicit tags replace the environment's required tags.
 
@@ -97,7 +129,11 @@ pass 2
 fail 0
 ```
 
-## `mm-test-cli with-env E2E_TAGS_EXCLUDE smoke -- mm tests/fixtures/passing --tags-exclude extra`
+## Override excluded tags
+
+```markmason
+mm-test-cli with-env E2E_TAGS_EXCLUDE smoke -- mm tests/fixtures/passing --tags-exclude extra
+```
 
 Explicit tag exclusions replace the environment's excluded tags.
 
@@ -109,7 +145,11 @@ pass 2
 fail 0
 ```
 
-## `mm-test-cli with-env VERBOSE " YES " -- mm tests/fixtures/diagnostics`
+## Enable verbose output from the environment
+
+```markmason
+mm-test-cli with-env VERBOSE " YES " -- mm tests/fixtures/diagnostics
+```
 
 `VERBOSE` accepts `1`, `true`, or `yes`, ignoring case and surrounding spaces.
 It shows captured output and the comparison diff, just like `--verbose`.
