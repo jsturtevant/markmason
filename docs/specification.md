@@ -29,6 +29,8 @@ file state but not shell variables or `cd` changes. Use an explicit interpreter
 for shell scripts. A `stdin` block supplies input to the first command only;
 later commands start with empty stdin. A `pty` block's match/send steps advance
 across commands in order, and must all finish by the end of the block.
+Each PTY command uses a separate terminal session; their output is joined on
+line boundaries.
 Timeouts apply to each command (and each pipeline stage), not the whole block.
 
 Output, stdin, and PTY blocks belong to the preceding `markmason` block until

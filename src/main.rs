@@ -319,6 +319,14 @@ fn execute(
             }
             output.context("Pipeline produced no output")?
         };
+        // ConPTY can omit the final newline; separate distinct terminal sessions.
+        if case.pty.is_some()
+            && !output.text.is_empty()
+            && !output.text.ends_with('\n')
+            && !result.text.is_empty()
+        {
+            output.text.push('\n');
+        }
         output.text.push_str(&result.text);
         output.code = result.code;
         if output.code != 0 {
