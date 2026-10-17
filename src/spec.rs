@@ -15,6 +15,7 @@ pub struct Spec {
 
 #[derive(Debug)]
 pub struct Case {
+    pub title: Option<String>,
     pub command: String,
     pub expected: Option<String>,
     pub exit_code: i32,
@@ -160,10 +161,21 @@ pub fn parse(content: &str) -> Result<Spec> {
     };
     let command_info = Regex::new(r"^markmason(?:\s+\(exit\s+(\d+)\))?$").unwrap();
     let mut current = None;
+    let mut title = None;
     let mut events = Parser::new(body).into_offset_iter();
     while let Some((event, range)) = events.next() {
         if matches!(event, Event::Start(Tag::Heading { .. })) {
             current = None;
+            let mut text = String::new();
+            for (event, _) in events.by_ref() {
+                match event {
+                    Event::Text(part) | Event::Code(part) => text.push_str(&part),
+                    Event::SoftBreak | Event::HardBreak => text.push(' '),
+                    Event::End(TagEnd::Heading(_)) => break,
+                    _ => {}
+                }
+            }
+            title = Some(text);
             continue;
         }
         let Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) = event else {
@@ -214,6 +226,7 @@ pub fn parse(content: &str) -> Result<Spec> {
                     bail!("A markmason block must contain nonempty commands");
                 }
                 spec.cases.push(Case {
+                    title: title.clone(),
                     command: commands.join("\n"),
                     exit_code: caps.get(1).map_or(Ok(0), |m| m.as_str().parse()).context(
                         "Invalid markmason exit code: expected a nonnegative 32-bit integer",

@@ -16,6 +16,7 @@ name = "mm-test-cli"
 path = "tests/support/test_cli.rs"
 
 [dependencies]
+anstream = "1"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 dunce = "1"

@@ -1,8 +1,9 @@
 use std::{
     fs,
+    io::{self, BufRead, Write},
     path::{Path, PathBuf},
-    process::{Command, Output},
-    sync::OnceLock,
+    process::{Child, ChildStdin, Command, Output, Stdio},
+    sync::{OnceLock, mpsc},
     time::{Duration, Instant},
 };
 use tempfile::TempDir;
@@ -63,6 +64,372 @@ fn text(output: &Output) -> String {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     )
+}
+
+fn step_process(
+    specs: &Path,
+    args: &[&str],
+) -> (Child, ChildStdin, mpsc::Receiver<io::Result<String>>) {
+    let mut child = command(specs)
+        .arg("--step")
+        .args(args)
+        .env("NO_COLOR", "1")
+        .env_remove("CLICOLOR_FORCE")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let (send, receive) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in io::BufReader::new(stdout).lines() {
+            if send.send(line.map(|line| line + "\n")).is_err() {
+                break;
+            }
+        }
+    });
+    (child, stdin, receive)
+}
+
+fn step_output(specs: &Path, args: &[&str], input: &str) -> Output {
+    let (child, mut stdin, receive) = step_process(specs, args);
+    stdin.write_all(input.as_bytes()).unwrap();
+    drop(stdin);
+    let mut output = child.wait_with_output().unwrap();
+    output.stdout = receive
+        .into_iter()
+        .map(Result::unwrap)
+        .collect::<String>()
+        .into_bytes();
+    output
+}
+
+fn next_step(
+    child: &mut Child,
+    receive: &mpsc::Receiver<io::Result<String>>,
+    transcript: &mut String,
+) {
+    loop {
+        match receive.recv_timeout(Duration::from_secs(10)) {
+            Ok(Ok(line)) => {
+                let prompt = line.starts_with("Enter:");
+                transcript.push_str(&line);
+                if prompt {
+                    return;
+                }
+            }
+            error => {
+                if child.try_wait().unwrap().is_none() {
+                    child.kill().unwrap();
+                }
+                child.wait().unwrap();
+                panic!("Walkthrough did not reach a pause: {error:?}\n{transcript}");
+            }
+        }
+    }
+}
+
+#[test]
+fn step_mode_filters_files_and_checks_combined_output_after_the_block() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("lesson.md"),
+        "---\ntags: [tutorial]\n---\n## Print **two** lines\n\n```markmason\napp echo first\napp echo second\n```\n```expected\nfirst\nsecond\n```\n",
+    ).unwrap();
+    fs::write(dir.path().join("other.md"), "```markmason\napp fail\n```\n").unwrap();
+    let output = step_output(
+        dir.path(),
+        &[
+            "--file-pattern",
+            "^lesson\\.md$",
+            "--tags",
+            "tutorial",
+            "--test-name-pattern",
+            "^app echo second$",
+            "--verbose",
+        ],
+        "\n\n",
+    );
+    let result = text(&output);
+    assert!(output.status.success(), "{result}");
+    for expected in [
+        "MARKMASON WALKTHROUGH",
+        "lesson.md  |  Block 1 of 1",
+        "Print two lines",
+        "COMMAND 1 OF 2",
+        "$ app echo first",
+        "EXPECTED OUTPUT (whole block; exact, exit 0)\n  | first\n  | second",
+        "ACTUAL OUTPUT SO FAR\n  | first\n\n",
+        "IN PROGRESS",
+        "COMMAND 2 OF 2",
+        "ACTUAL OUTPUT\n  | first\n  | second",
+        "Finish walkthrough",
+        "Walkthrough finished",
+        "Passed blocks: 1\nFailed blocks: 0",
+    ] {
+        assert!(result.contains(expected), "missing {expected:?}\n{result}");
+    }
+    assert!(!result.contains("other.md"), "{result}");
+    assert!(!result.contains("DIFF (expected vs actual)"), "{result}");
+    assert!(!result.contains('\x1b'), "{result}");
+}
+
+#[test]
+fn step_mode_waits_after_every_command_and_quits_mid_block() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("first");
+    let second = dir.path().join("second");
+    let third = dir.path().join("third");
+    fs::write(
+        dir.path().join("lesson.md"),
+        format!(
+            "```markmason\napp mark \"{}\"\napp mark \"{}\"\napp mark \"{}\"\n```\n",
+            first.display(),
+            second.display(),
+            third.display()
+        ),
+    )
+    .unwrap();
+    let (mut child, mut stdin, receive) = step_process(dir.path(), &[]);
+    let mut transcript = String::new();
+    next_step(&mut child, &receive, &mut transcript);
+    assert!(first.exists(), "{transcript}");
+    assert!(!second.exists(), "{transcript}");
+    stdin.write_all(b"not a key\n").unwrap();
+    next_step(&mut child, &receive, &mut transcript);
+    assert!(!second.exists(), "{transcript}");
+    stdin.write_all(b"\n").unwrap();
+    next_step(&mut child, &receive, &mut transcript);
+    assert!(second.exists(), "{transcript}");
+    assert!(!third.exists(), "{transcript}");
+    stdin.write_all(b"q\n").unwrap();
+    drop(stdin);
+    let output = child.wait_with_output().unwrap();
+    transcript.extend(receive.into_iter().map(Result::unwrap));
+    assert!(output.status.success(), "{transcript}\n{}", text(&output));
+    assert!(!third.exists(), "{transcript}");
+    assert!(transcript.contains("Walkthrough stopped"), "{transcript}");
+    assert!(
+        transcript.contains("Passed blocks: 0\nFailed blocks: 0"),
+        "{transcript}"
+    );
+    assert!(!transcript.contains("Input closed"), "{transcript}");
+    assert!(!transcript.contains("COMMAND 3 OF 3"), "{transcript}");
+}
+
+#[test]
+fn step_mode_quit_and_eof_skip_remaining_commands_and_clean_up_fixtures() {
+    for input in ["q\n", ""] {
+        let dir = tempfile::tempdir().unwrap();
+        let later = dir.path().join("later");
+        fs::write(
+            dir.path().join("a.md"),
+            format!(
+                "```markmason\napp env TEST_HOME XDG_CONFIG_HOME\napp mark \"{}\"\n```\n",
+                later.display()
+            ),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("b.md"),
+            format!("```markmason\napp mark \"{}\"\n```\n", later.display()),
+        )
+        .unwrap();
+        let output = step_output(dir.path(), &[], input);
+        let result = text(&output);
+        assert!(output.status.success(), "{result}");
+        assert!(result.contains("Walkthrough stopped"), "{result}");
+        assert!(!later.exists(), "{result}");
+        assert!(!result.contains("b.md  |"), "{result}");
+        let actual = result.split("ACTUAL OUTPUT SO FAR\n").nth(1).unwrap();
+        let paths: Vec<_> = actual
+            .lines()
+            .filter_map(|line| line.strip_prefix("  | "))
+            .take(2)
+            .collect();
+        assert_eq!(paths.len(), 2, "{result}");
+        for path in paths {
+            assert!(
+                !Path::new(path).exists(),
+                "Fixture survived quitting: {path}"
+            );
+        }
+        assert_eq!(
+            result.contains("Input closed"),
+            input.is_empty(),
+            "{result}"
+        );
+    }
+}
+
+#[test]
+fn step_mode_shows_expected_errors_and_keeps_failure_status_after_continuing() {
+    let dir = tempfile::tempdir().unwrap();
+    let skipped = dir.path().join("skipped");
+    fs::write(
+        dir.path().join("lesson.md"),
+        format!(
+            "## An expected error\n```markmason (exit 2)\napp echo before\napp fail\napp mark \"{}\"\n```\n```expected\nbefore\nstdout\nstderr\n```\n\
+             ## A mismatch\n```markmason\napp echo actual\n```\n```expected\ndifferent\n```\n\
+             ## Continue after failure\n```markmason\napp echo after\n```\n```expected\nafter\n```\n",
+            skipped.display()
+        ),
+    ).unwrap();
+    let output = step_output(dir.path(), &[], "\n\n\n\n");
+    let result = text(&output);
+    assert!(!output.status.success(), "{result}");
+    assert!(!skipped.exists(), "{result}");
+    for expected in [
+        "Command exited 2",
+        "PASS  Block matched expectations.",
+        "Line 1 mismatch",
+        "Continue after failure",
+        "Passed blocks: 2\nFailed blocks: 1",
+    ] {
+        assert!(result.contains(expected), "missing {expected:?}\n{result}");
+    }
+    assert!(!result.contains("COMMAND 3 OF 3"), "{result}");
+}
+
+#[test]
+fn step_mode_reports_execution_errors_without_treating_them_as_expected_exits() {
+    for (command, message) in [
+        ("missing-executable-markmason", "Failed to start"),
+        ("app sleep", "timed out"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("lesson.md"),
+            format!("---\ntimeout: 0.15\n---\n```markmason (exit 1)\n{command}\n```\n"),
+        )
+        .unwrap();
+        let output = step_output(dir.path(), &[], "q\n");
+        let result = text(&output);
+        assert!(!output.status.success(), "{result}");
+        assert!(result.contains(message), "{result}");
+        assert!(result.contains("OUTPUT CAPTURED BEFORE ERROR"), "{result}");
+        assert!(
+            result.contains("Passed blocks: 0\nFailed blocks: 1"),
+            "{result}"
+        );
+    }
+}
+
+#[test]
+fn step_mode_keeps_walkthrough_input_separate_from_stdin_and_terminal_scripts() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("lesson.md"),
+        "```markmason\napp cat\napp echo end | app cat\n```\n```stdin\npayload\n```\n```expected\npayload\nend\n```\n\
+         ```markmason\napp interactive\napp interactive\n```\n```pty\n\
+         match: Ready?\nsend: yes{enter}\nmatch: Ready?\nsend: no{enter}\n\
+         match: Ready?\nsend: first{enter}\nmatch: Ready?\nsend: last{enter}\n```\n\
+         ```expected-contains\ndone no\ndone last\n```\n",
+    ).unwrap();
+    let output = step_output(dir.path(), &[], "\n\n\n\n");
+    let result = text(&output);
+    assert!(output.status.success(), "{result}");
+    assert!(
+        result.contains("Passed blocks: 2\nFailed blocks: 0"),
+        "{result}"
+    );
+    assert!(
+        result.contains("ACTUAL OUTPUT\n  | payload\n  | end"),
+        "{result}"
+    );
+    assert!(result.contains("ordered lines"), "{result}");
+    assert!(!result.contains('\x1b'), "{result}");
+}
+
+#[test]
+fn step_mode_names_files_when_setup_fails_or_no_commands_exist() {
+    for (markdown, expected) in [
+        (
+            "---\nsetup: app fail\n---\n```markmason\napp echo must-not-run\n```\n",
+            "FAIL setup (lesson.md): Setup command failed",
+        ),
+        ("# No commands\n", "FAIL (lesson.md): No test cases found"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("lesson.md"), markdown).unwrap();
+        let output = step_output(dir.path(), &[], "");
+        let result = text(&output);
+        assert!(!output.status.success(), "{result}");
+        assert!(result.contains(expected), "{result}");
+        assert!(!result.contains("must-not-run"), "{result}");
+        assert!(
+            result.contains("Passed blocks: 0\nFailed blocks: 1"),
+            "{result}"
+        );
+    }
+}
+
+#[test]
+fn step_mode_cannot_be_combined_with_listing() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = command(dir.path())
+        .args(["--step", "--list"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert!(
+        text(&output).contains("cannot be used with"),
+        "{}",
+        text(&output)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn step_mode_cancellation_while_paused_cleans_up_without_advancing() {
+    for signal in [libc::SIGINT, libc::SIGTERM] {
+        let dir = tempfile::tempdir().unwrap();
+        let later = dir.path().join("later");
+        fs::write(
+            dir.path().join("lesson.md"),
+            format!(
+                "```markmason\napp env TEST_HOME XDG_CONFIG_HOME\napp mark \"{}\"\n```\n",
+                later.display()
+            ),
+        )
+        .unwrap();
+        let (mut child, stdin, receive) = step_process(dir.path(), &[]);
+        let mut transcript = String::new();
+        next_step(&mut child, &receive, &mut transcript);
+        assert_eq!(unsafe { libc::kill(child.id() as i32, signal) }, 0);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while child.try_wait().unwrap().is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if child.try_wait().unwrap().is_none() {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!("Walkthrough did not cancel while paused: {transcript}");
+        }
+        drop(stdin);
+        let output = child.wait_with_output().unwrap();
+        transcript.extend(receive.into_iter().map(Result::unwrap));
+        assert_eq!(
+            output.status.code(),
+            Some(128 + signal),
+            "{transcript}\n{}",
+            text(&output)
+        );
+        assert!(!later.exists(), "{transcript}");
+        let actual = transcript.split("ACTUAL OUTPUT SO FAR\n").nth(1).unwrap();
+        for path in actual
+            .lines()
+            .filter_map(|line| line.strip_prefix("  | "))
+            .take(2)
+        {
+            assert!(
+                !Path::new(path).exists(),
+                "Fixture survived cancellation: {path}"
+            );
+        }
+    }
 }
 
 #[test]

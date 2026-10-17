@@ -2,6 +2,7 @@ mod cancellation;
 mod matching;
 mod process;
 mod spec;
+mod step;
 #[cfg(windows)]
 mod windows;
 
@@ -47,6 +48,9 @@ struct Options {
     /// Print commands without executing them or creating fixtures.
     #[arg(long)]
     list: bool,
+    /// Walk through commands interactively, inspecting expected and actual output.
+    #[arg(long, conflicts_with = "list")]
+    step: bool,
     #[arg(long)]
     verbose: bool,
 }
@@ -272,8 +276,10 @@ fn execute(
     dir: &Path,
     timeout: Duration,
     verbose: bool,
-) -> Result<()> {
+    mut stepping: Option<&mut step::Session>,
+) -> Result<bool> {
     let commands: Vec<_> = case.command.lines().collect();
+    let expected = case.expected.as_ref().map(|text| fixture.substitute(text));
     let mut output = process::Output {
         text: String::new(),
         code: 0,
@@ -282,42 +288,62 @@ fn execute(
     let mut step_index = 0;
     for (index, command) in commands.iter().enumerate() {
         let command = fixture.substitute(command);
-        let result = if let Some(steps) = &case.pty {
-            let (result, completed) = process::pty(
-                &resolve(&command, dir)?,
-                &fixture.cwd,
-                &fixture.env,
-                &steps[step_index..],
-                timeout,
-                &fixture.processes,
-                index + 1 == commands.len(),
+        if let Some(session) = stepping.as_deref_mut() {
+            session.preview(
+                case,
+                &command,
+                expected.as_deref(),
+                index + 1,
+                commands.len(),
             )?;
-            step_index += completed;
-            result
-        } else {
-            let stages = spec::split_pipeline(&command);
-            if stages.is_empty() {
-                bail!("Empty pipeline: no commands to execute");
-            }
-            let mut input = stdin.take();
-            let mut output = None;
-            for stage in stages {
-                let result = process::run(
-                    &resolve(&stage, dir)?,
+        }
+        let result = (|| -> Result<process::Output> {
+            if let Some(steps) = &case.pty {
+                let (result, completed) = process::pty(
+                    &resolve(&command, dir)?,
                     &fixture.cwd,
                     &fixture.env,
-                    input,
+                    &steps[step_index..],
                     timeout,
                     &fixture.processes,
+                    index + 1 == commands.len(),
                 )?;
-                if result.code != 0 {
-                    output = Some(result);
-                    break;
+                step_index += completed;
+                Ok(result)
+            } else {
+                let stages = spec::split_pipeline(&command);
+                if stages.is_empty() {
+                    bail!("Empty pipeline: no commands to execute");
                 }
-                input = Some(result.text.as_bytes().to_vec());
-                output = Some(result);
+                let mut input = stdin.take();
+                let mut output = None;
+                for stage in stages {
+                    let result = process::run(
+                        &resolve(&stage, dir)?,
+                        &fixture.cwd,
+                        &fixture.env,
+                        input,
+                        timeout,
+                        &fixture.processes,
+                    )?;
+                    if result.code != 0 {
+                        output = Some(result);
+                        break;
+                    }
+                    input = Some(result.text.as_bytes().to_vec());
+                    output = Some(result);
+                }
+                output.context("Pipeline produced no output")
             }
-            output.context("Pipeline produced no output")?
+        })();
+        let result = match result {
+            Ok(result) => result,
+            Err(error) => {
+                if let Some(session) = stepping.as_deref_mut() {
+                    session.inspect(&output.text, None, step::Status::ExecutionError(&error))?;
+                }
+                return Err(error);
+            }
         };
         // ConPTY can omit the final newline; separate distinct terminal sessions.
         if case.pty.is_some()
@@ -329,21 +355,50 @@ fn execute(
         }
         output.text.push_str(&result.text);
         output.code = result.code;
+        if let Some(session) = stepping.as_deref_mut() {
+            let complete = index + 1 == commands.len() || output.code != 0;
+            let verdict = if complete {
+                check_output(case, expected.as_deref(), &output, false, false)
+            } else {
+                Ok(())
+            };
+            let status = match &verdict {
+                Err(error) => step::Status::Failed(error),
+                Ok(()) if complete => step::Status::Passed,
+                Ok(()) => step::Status::Progress,
+            };
+            session.inspect(&output.text, Some(output.code), status)?;
+            if complete {
+                return verdict.map(|()| true);
+            }
+            if session.stopped() {
+                return Ok(false);
+            }
+        }
         if output.code != 0 {
             break;
         }
     }
+    check_output(case, expected.as_deref(), &output, verbose, true).map(|()| true)
+}
+
+fn check_output(
+    case: &spec::Case,
+    expected: Option<&str>,
+    output: &process::Output,
+    verbose: bool,
+    diagnostics: bool,
+) -> Result<()> {
     if verbose {
         println!("ACTUAL:\n{}", output.text);
     }
-    if let Some(expected) = &case.expected {
-        let expected = fixture.substitute(expected);
-        let result = matching::check(&output.text, &expected, case.contains || case.pty.is_some());
-        if verbose || result.is_err() {
+    if let Some(expected) = expected {
+        let result = matching::check(&output.text, expected, case.contains || case.pty.is_some());
+        if verbose || (diagnostics && result.is_err()) {
             println!(
                 "ACTUAL:\n{}\nDIFF (expected vs actual):\n{}",
                 output.text,
-                matching::diff(&output.text, &expected)
+                matching::diff(&output.text, expected)
             );
         }
         result?;
@@ -435,11 +490,28 @@ fn run(options: Options) -> Result<bool> {
         Some(gh_config_dir()?)
     };
     let (mut passed, mut failed) = (0, 0);
+    let blocks = specs.iter().map(|(_, _, indices)| indices.len()).sum();
+    let mut stepping = options
+        .step
+        .then(|| step::Session::new(blocks))
+        .transpose()?;
+    let mut block_number = 0;
     for (file, spec, indices) in specs {
         cancellation::check()?;
-        println!("{file}");
+        let first_block = block_number;
+        block_number += indices.len();
+        let location = if options.step {
+            format!(" ({file})")
+        } else {
+            String::new()
+        };
+        if stepping.is_none() {
+            println!("{file}");
+        }
         if spec.cases.is_empty() {
-            eprintln!("  FAIL: No test cases found. Expected a fenced markmason command block");
+            eprintln!(
+                "  FAIL{location}: No test cases found. Expected a fenced markmason command block"
+            );
             failed += 1;
             continue;
         }
@@ -466,7 +538,7 @@ fn run(options: Options) -> Result<bool> {
         ) {
             Ok(fixture) => fixture,
             Err(error) => {
-                eprintln!("  FAIL setup: {error:#}");
+                eprintln!("  FAIL setup{location}: {error:#}");
                 cancellation::check()?;
                 failed += 1;
                 continue;
@@ -494,34 +566,54 @@ fn run(options: Options) -> Result<bool> {
             Ok(())
         })();
         if let Err(error) = setup_result {
-            eprintln!("  FAIL setup: {error:#}");
+            eprintln!("  FAIL setup{location}: {error:#}");
             failed += 1;
         } else {
-            for index in indices {
+            for (offset, index) in indices.into_iter().enumerate() {
                 if cancellation::signal().is_some() {
                     break;
                 }
                 let case = &spec.cases[index];
                 let label = case.command.replace('\n', "\n       ");
-                match execute(case, &fixture, &dir, timeout, verbose) {
-                    Ok(()) => {
+                let result = if let Some(session) = stepping.as_mut() {
+                    session
+                        .begin_block(&file, case.title.as_deref(), first_block + offset + 1)
+                        .and_then(|()| execute(case, &fixture, &dir, timeout, false, Some(session)))
+                } else {
+                    execute(case, &fixture, &dir, timeout, verbose, None)
+                };
+                match result {
+                    Ok(true) => {
                         passed += 1;
-                        println!("  PASS {label}");
+                        if stepping.is_none() {
+                            println!("  PASS {label}");
+                        }
                     }
+                    Ok(false) => {}
                     Err(error) => {
                         failed += 1;
-                        eprintln!("  FAIL {label}: {error:#}");
+                        if stepping.is_none() {
+                            eprintln!("  FAIL {label}: {error:#}");
+                        }
                     }
+                }
+                if stepping.as_ref().is_some_and(step::Session::stopped) {
+                    break;
                 }
             }
         }
         if let Err(error) = fixture.close() {
-            eprintln!("  FAIL cleanup: {error:#}");
+            eprintln!("  FAIL cleanup{location}: {error:#}");
             failed += 1;
         }
         cancellation::check()?;
+        if stepping.as_ref().is_some_and(step::Session::stopped) {
+            break;
+        }
     }
-    if !options.list {
+    if let Some(session) = stepping.as_mut() {
+        session.finish(passed, failed)?;
+    } else if !options.list {
         println!("\npass {passed}\nfail {failed}");
     }
     Ok(failed == 0)
