@@ -43,18 +43,25 @@ With `bash` on `PATH`, run:
 ```sh
 mm                         # Defaults to tests/cli
 mm path/to/specs            # Another directory
+mm path/to/walkthrough.md   # One Markdown file
 mm --list                  # Discover without executing
 mm --file-pattern greet    # Select files by regex
 mm --step                  # Pick a file and walk through it
 mm --step --file-pattern '^greet\.md$'  # Skip the picker
+mm path/to/walkthrough.md --step       # Walk through one file directly
 ```
 
 With `--step`, choose a file using the arrow keys or type to search, then press
 **Enter**. **Esc** cancels without running anything. An explicit `--file-pattern`
-(or its environment variable) skips the picker.
+(or its environment variable) or a direct Markdown file path skips the picker.
 
 During the walkthrough, inspect each command's expected and actual output.
 Press **Enter** to continue, or **q then Enter** to quit.
+
+To prepare a walkthrough from another Markdown document, add
+`setup: mm gettingstarted.md` in its frontmatter. The prerequisite runs
+automatically in the walkthrough's shared environment, so the state it creates
+is available to later steps. See [setup and state](tests/cli/state.md).
 
 ## Live examples
 

@@ -19,7 +19,7 @@ use tempfile::{Builder, TempDir};
 #[derive(Debug, Parser)]
 #[command(name = "mm", version, about)]
 struct Options {
-    /// Directory containing Markdown specifications, searched recursively.
+    /// Markdown specification file, or directory searched recursively.
     #[arg(default_value = "tests/cli")]
     spec_dir: PathBuf,
     /// Working directory for specs without clone frontmatter.
@@ -48,7 +48,7 @@ struct Options {
     /// Print commands without executing them or creating fixtures.
     #[arg(long)]
     list: bool,
-    /// Walk through commands; pick a file interactively unless --file-pattern is set.
+    /// Walk through commands; pick a file unless a file path or --file-pattern is set.
     #[arg(long, conflicts_with = "list")]
     step: bool,
     #[arg(long)]
@@ -414,6 +414,86 @@ fn check_output(
     Ok(())
 }
 
+fn run_setup(
+    spec: &spec::Spec,
+    dir: &Path,
+    fixture: &Fixture,
+    setup_cwd: &Path,
+    timeout: Duration,
+    verbose: bool,
+    chain: &mut Vec<PathBuf>,
+) -> Result<()> {
+    let Some(setup) = &spec.setup else {
+        return Ok(());
+    };
+    let args = resolve_setup(setup, dir)?;
+    let executable = Path::new(&args[0]);
+    let markdown = args.len() == 2
+        && executable
+            .file_name()
+            .is_some_and(|name| name == "mm" || name == "mm.exe")
+        && Path::new(&args[1])
+            .extension()
+            .is_some_and(|ext| ext == "md");
+    if markdown {
+        let path = dunce::canonicalize(dir.join(&args[1]))
+            .with_context(|| format!("Cannot find Markdown setup {}", args[1]))?;
+        if chain.contains(&path) {
+            bail!("Circular Markdown setup: {}", path.display());
+        }
+        let setup_spec = spec::parse(&fs::read_to_string(&path)?)
+            .with_context(|| format!("Invalid Markdown setup {}", path.display()))?;
+        if setup_spec.clone.is_some() {
+            bail!(
+                "Markdown setup {} cannot use clone; put clone in the calling file",
+                path.display()
+            );
+        }
+        if setup_spec.cases.is_empty() {
+            bail!("No test cases found in Markdown setup {}", path.display());
+        }
+        let dir = path
+            .parent()
+            .context("Markdown setup has no parent directory")?;
+        let timeout = setup_spec.timeout.unwrap_or(timeout);
+        chain.push(path.clone());
+        run_setup(
+            &setup_spec,
+            dir,
+            fixture,
+            setup_cwd,
+            timeout,
+            verbose,
+            chain,
+        )
+        .with_context(|| format!("Markdown setup {} failed", path.display()))?;
+        for case in &setup_spec.cases {
+            cancellation::check()?;
+            execute(case, fixture, dir, timeout, verbose, None).with_context(|| {
+                format!("Markdown setup {} failed: {}", path.display(), case.command)
+            })?;
+        }
+        chain.pop();
+    } else {
+        let result = process::run(
+            &args,
+            setup_cwd,
+            &fixture.env,
+            None,
+            timeout,
+            &fixture.processes,
+        )
+        .with_context(|| format!("Setup command failed: {setup}"))?;
+        if result.code != 0 {
+            bail!("Setup command failed: {setup}\n{}", result.text);
+        }
+        if verbose {
+            println!("Setup ({setup}):\n{}", result.text);
+        }
+    }
+    Ok(())
+}
+
 fn run(options: Options) -> Result<bool> {
     if options.home_env.is_empty() || options.home_env.contains(['=', '\0']) {
         bail!("Invalid --home-env name");
@@ -440,14 +520,36 @@ fn run(options: Options) -> Result<bool> {
     let verbose = options.verbose
         || env::var("VERBOSE")
             .is_ok_and(|v| ["1", "true", "yes"].contains(&v.trim().to_lowercase().as_str()));
-    let root = dunce::canonicalize(&options.spec_dir).with_context(|| {
+    let input = dunce::canonicalize(&options.spec_dir).with_context(|| {
         format!(
-            "Cannot find specification directory {}",
+            "Cannot find specification path {}",
             options.spec_dir.display()
         )
     })?;
+    let single_file = input.is_file();
     let mut files = Vec::new();
-    discover(&root, &root, &mut files)?;
+    let root = if single_file {
+        if input.extension().is_none_or(|ext| ext != "md") {
+            bail!(
+                "Specification file must have a .md extension: {}",
+                input.display()
+            );
+        }
+        files.push(
+            input
+                .file_name()
+                .context("Specification has no file name")?
+                .to_string_lossy()
+                .into_owned(),
+        );
+        input
+            .parent()
+            .context("Specification has no parent directory")?
+            .to_owned()
+    } else {
+        discover(&input, &input, &mut files)?;
+        input
+    };
     files.sort();
     let mut specs = Vec::new();
     for file in files {
@@ -483,7 +585,7 @@ fn run(options: Options) -> Result<bool> {
     if specs.is_empty() {
         bail!("No markdown test specs matched in {}", root.display());
     }
-    if options.step && include.is_none() {
+    if options.step && include.is_none() && !single_file {
         let files: Vec<_> = specs.iter().map(|(file, _, _)| file.as_str()).collect();
         let Some(index) = step::pick_file(&files)? else {
             println!("Walkthrough cancelled. No commands were run.");
@@ -552,27 +654,15 @@ fn run(options: Options) -> Result<bool> {
                 continue;
             }
         };
-        let setup_result = (|| -> Result<()> {
-            if let Some(setup) = &spec.setup {
-                let args = resolve_setup(setup, &dir)?;
-                let result = process::run(
-                    &args,
-                    &options.cwd,
-                    &fixture.env,
-                    None,
-                    timeout,
-                    &fixture.processes,
-                )
-                .with_context(|| format!("Setup command failed: {setup}"))?;
-                if result.code != 0 {
-                    bail!("Setup command failed: {setup}\n{}", result.text);
-                }
-                if verbose {
-                    println!("Setup ({setup}):\n{}", result.text);
-                }
-            }
-            Ok(())
-        })();
+        let setup_result = run_setup(
+            &spec,
+            &dir,
+            &fixture,
+            &options.cwd,
+            timeout,
+            verbose,
+            &mut vec![root.join(&file)],
+        );
         if let Err(error) = setup_result {
             eprintln!("  FAIL setup{location}: {error:#}");
             failed += 1;
