@@ -2061,6 +2061,97 @@ fn windows_jobs_clean_up_descendants_even_after_the_command_exits() {
 
 #[cfg(unix)]
 #[test]
+fn bash_job_control_process_groups_are_cleaned_on_every_exit_path() {
+    for mode in ["success", "error", "exit", "timeout", "interrupt", "quit"] {
+        let dir = tempfile::tempdir().unwrap();
+        let started = dir.path().join("started");
+        let lesson = dir.path().join("lesson.md");
+        let finish = match mode {
+            "error" => "false",
+            "exit" => "exit 0",
+            "timeout" | "interrupt" => "app sleep",
+            _ => "true",
+        };
+        fs::write(
+            &lesson,
+            format!(
+                "---\nshell: bash\ntimeout: 2\n---\n```markmason\nset -m\n\
+                 app tree \"{}\" &\n\
+                 while test ! -f \"{}\"; do sleep 0.01; done\n{finish}\n```\n",
+                shell_path(&started),
+                shell_path(&started)
+            ),
+        )
+        .unwrap();
+        let output = if mode == "quit" {
+            step_output(&lesson, &[], "\n\nq\n")
+        } else if mode == "interrupt" {
+            let mut child = command(&lesson)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !started.exists() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if !started.exists() {
+                child.kill().unwrap();
+                panic!(
+                    "Job-control helper did not start: {}",
+                    text(&child.wait_with_output().unwrap())
+                );
+            }
+            assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGINT) }, 0);
+            child.wait_with_output().unwrap()
+        } else {
+            command(&lesson).output().unwrap()
+        };
+        let result = text(&output);
+        assert_eq!(
+            output.status.success(),
+            ["success", "quit"].contains(&mode),
+            "{mode}: {result}"
+        );
+        let info = fs::read_to_string(&started).unwrap();
+        let info: Vec<_> = info.lines().collect();
+        let mut survivors = Vec::new();
+        for pid in &info[..2] {
+            let pid = pid.parse().unwrap();
+            let stopped = || {
+                let stopped = unsafe { libc::kill(pid, 0) } == -1;
+                #[cfg(target_os = "linux")]
+                let stopped = stopped
+                    || fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+                        stat.split(") ")
+                            .nth(1)
+                            .is_some_and(|state| state.starts_with('Z'))
+                    });
+                stopped
+            };
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while !stopped() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if !stopped() {
+                survivors.push(pid);
+            }
+        }
+        for pid in &survivors {
+            unsafe { libc::kill(*pid, libc::SIGKILL) };
+        }
+        assert!(
+            survivors.is_empty(),
+            "{mode}: processes {survivors:?} survived cleanup"
+        );
+        for path in &info[2..] {
+            assert!(!Path::new(path).exists(), "{mode}: fixture {path} survived");
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn interrupts_reap_commands_stop_descendants_and_clean_up_fixtures() {
     for signal in [libc::SIGINT, libc::SIGTERM] {
         for mode in ["command", "setup", "pty", "drain", "writer", "shell"] {

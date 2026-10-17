@@ -145,6 +145,73 @@ fn kill_group(pid: u32) -> Result<()> {
     send(libc::SIGKILL)
 }
 
+#[cfg(target_os = "linux")]
+fn unix_pids() -> Result<Vec<i32>> {
+    let mut pids = Vec::new();
+    for entry in std::fs::read_dir("/proc").context("Failed listing process IDs")? {
+        let entry = entry?;
+        if let Ok(pid) = entry.file_name().to_string_lossy().parse::<i32>() {
+            pids.push(pid);
+        }
+    }
+    Ok(pids)
+}
+
+#[cfg(target_os = "macos")]
+fn unix_pids() -> Result<Vec<i32>> {
+    let mut pids = vec![0i32; 1024];
+    loop {
+        let size = i32::try_from(std::mem::size_of_val(pids.as_slice()))?;
+        // libproc's PROC_ALL_PIDS selector is not exported by libc.
+        let count = unsafe { libc::proc_listpids(1, 0, pids.as_mut_ptr().cast(), size) };
+        if count <= 0 {
+            return Err(std::io::Error::last_os_error()).context("Failed listing process IDs");
+        }
+        if count < size {
+            pids.truncate(usize::try_from(count)? / std::mem::size_of::<i32>());
+            pids.retain(|pid| *pid > 0);
+            return Ok(pids);
+        }
+        pids.resize(
+            pids.len().checked_mul(2).context("Too many process IDs")?,
+            0,
+        );
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn kill_terminal_session(session: u32) -> Result<()> {
+    let mut groups = std::collections::BTreeSet::new();
+    for pid in unix_pids()? {
+        let owner = unsafe { libc::getsid(pid) };
+        if owner == -1 {
+            let error = std::io::Error::last_os_error();
+            if matches!(error.raw_os_error(), Some(libc::ESRCH | libc::EPERM)) {
+                continue;
+            }
+            return Err(error).context("Failed reading process session");
+        }
+        if owner == session as i32 {
+            let group = unsafe { libc::getpgid(pid) };
+            if group == -1 {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() == Some(libc::ESRCH) {
+                    continue;
+                }
+                return Err(error).context("Failed reading terminal process group");
+            }
+            groups.insert(u32::try_from(group)?);
+        }
+    }
+    kill_group(session)?;
+    for group in groups {
+        if group != session {
+            kill_group(group)?;
+        }
+    }
+    Ok(())
+}
+
 pub fn run(
     args: &[String],
     cwd: &Path,
@@ -428,7 +495,9 @@ impl Terminal {
         if self.finished {
             return Ok(());
         }
-        #[cfg(unix)]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        kill_terminal_session(self.child.process_id().context("Missing PTY process ID")?)?;
+        #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
         kill_group(self.child.process_id().context("Missing PTY process ID")?)?;
         #[cfg(windows)]
         if let Some(tree) = &self.tree {

@@ -196,6 +196,8 @@ See the [executable shell guide](../tests/cli/shell.md) and the
 - The caller's GitHub authentication directory is preserved.
 - Cleanup removes fixtures after success or failure.
 - Unix SIGINT/SIGTERM cancel the process group, clean up, and exit 130/143.
+- On Linux and macOS, terminal cleanup also terminates other process groups
+  in the owned terminal session, including jobs started with Bash `set -m`.
 - Windows Job Objects own commands and descendants until file cleanup.
   Successful background jobs survive for later cases; timeouts and execution
   errors terminate the affected job immediately.
