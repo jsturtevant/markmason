@@ -8,6 +8,14 @@ pub fn strip_ansi(text: &str) -> String {
     ANSI.replace_all(text, "").into_owned()
 }
 
+pub fn pty_text(text: &str) -> String {
+    // ConPTY can start a new line with a cursor move instead of a newline.
+    // Preserve those boundaries in the transcript, without changing raw matching.
+    static LINE_START: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\x1b\[[0-9]+;1[Hf]").unwrap());
+    strip_ansi(&LINE_START.replace_all(text, "\n"))
+}
+
 fn lines(text: &str) -> Vec<String> {
     text.replace("\\\\", "/")
         .replace('\\', "/")

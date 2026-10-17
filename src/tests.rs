@@ -278,6 +278,25 @@ fn fenced_literal_examples_in_containers_do_not_run_or_hide_real_tests() -> Resu
 }
 
 #[test]
+fn pty_transcripts_preserve_conpty_cursor_encoded_line_starts() {
+    let raw = "\x1b[?25lTitle\x1b[9;1HCOMMAND 1 OF 1\r\n\
+               echo hello\x1b[12;1HEXPECTED OUTPUT\r\n\
+               \x1b[32mhello\x1b[0m\x1b[2;1HWalkthrough cancelled.\x1b[K";
+    assert_eq!(
+        matching::pty_text(raw),
+        "Title\nCOMMAND 1 OF 1\r\necho hello\nEXPECTED OUTPUT\r\nhello\nWalkthrough cancelled."
+    );
+    assert_eq!(
+        matching::strip_ansi(raw),
+        "TitleCOMMAND 1 OF 1\r\necho helloEXPECTED OUTPUT\r\nhelloWalkthrough cancelled."
+    );
+    assert_eq!(
+        matching::pty_text("\x1b[3;1fnext\r\nline\x1b[1;5Hsame row"),
+        "\nnext\r\nlinesame row"
+    );
+}
+
+#[test]
 fn fenced_commands_in_containers_preserve_their_input_and_assertions() -> Result<()> {
     for (opener, prefix) in [("- ", "  "), ("1. ", "   "), ("> ", "> ")] {
         let spec = spec::parse(&format!(
@@ -442,8 +461,8 @@ fn key_placeholders_and_ansi() {
         "\x1b[?25l\x1b[?25h\x1b[2J\x1b[?1049h\x1b[2J"
     );
     assert_eq!(
-        spec::input_keys("a{ENTER}{up}{Down}{space}{backspace}"),
-        "a\r\x1b[A\x1b[B \x7f"
+        spec::input_keys("a{ENTER}{up}{Down}{space}{backspace}{Escape}"),
+        "a\r\x1b[A\x1b[B \x7f\x1b"
     );
     assert_eq!(
         matching::strip_ansi("\x1b[31mred\x1b[0m\x1b[?25l\x1b]0;title\x07"),
