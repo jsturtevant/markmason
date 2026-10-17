@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 use regex::Regex;
 use serde_yaml::Value;
 use std::time::Duration;
@@ -158,58 +159,45 @@ pub fn parse(content: &str) -> Result<Spec> {
         content
     };
     let command_info = Regex::new(r"^markmason(?:\s+\(exit\s+(\d+)\))?$").unwrap();
-    let heading = Regex::new(r"^ {0,3}#{1,6}(?:\s|$)").unwrap();
-    let setext_underline = Regex::new(r"^ {0,3}(?:=+|-+)[ \t]*$").unwrap();
-    let lines: Vec<_> = body.split('\n').map(|s| s.trim_end_matches('\r')).collect();
     let mut current = None;
-    let mut paragraph = false;
-    let mut i = 0;
-    while i < lines.len() {
-        if heading.is_match(lines[i]) || (paragraph && setext_underline.is_match(lines[i])) {
+    let mut events = Parser::new(body).into_offset_iter();
+    while let Some((event, range)) = events.next() {
+        if matches!(event, Event::Start(Tag::Heading { .. })) {
             current = None;
-            paragraph = false;
-            i += 1;
             continue;
         }
-        let Some((marker, length, info)) = fence(lines[i]) else {
-            paragraph = !lines[i].trim().is_empty()
-                && !setext_underline.is_match(lines[i])
-                && !lines[i].starts_with("    ")
-                && !lines[i].starts_with('\t');
-            i += 1;
+        let Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) = event else {
             continue;
         };
-        paragraph = false;
-        let indent = lines[i].len() - lines[i].trim_start_matches(' ').len();
         let kind = info.split_whitespace().next().unwrap_or("");
         let recognized = matches!(
             kind,
             "markmason" | "expected" | "expected-contains" | "stdin" | "pty"
         );
-        i += 1;
-        let start = i;
-        while i < lines.len()
-            && !fence(lines[i]).is_some_and(|(end_marker, end_length, end_info)| {
-                end_marker == marker && end_length >= length && end_info.is_empty()
-            })
-        {
-            i += 1;
+        let mut block = String::new();
+        let mut content_end = body[range.clone()]
+            .find('\n')
+            .map_or(range.end, |offset| range.start + offset + 1);
+        for (event, text_range) in events.by_ref() {
+            match event {
+                Event::Text(text) => {
+                    block.push_str(&text);
+                    content_end = text_range.end;
+                }
+                Event::End(TagEnd::CodeBlock) => break,
+                _ => {}
+            }
         }
         if recognized {
-            if i == lines.len() {
+            // CommonMark accepts unclosed fences; executable specs require a closing fence.
+            let marker = body.as_bytes()[range.start];
+            if body[content_end..range.end].trim_end().as_bytes().last() != Some(&marker) {
                 bail!("Unterminated {kind} block");
             }
-            let block_lines: Vec<_> = lines[start..i]
-                .iter()
-                .map(|line| {
-                    let removed = line.bytes().take(indent).take_while(|b| *b == b' ').count();
-                    &line[removed..]
-                })
-                .collect();
-            let block = block_lines.join("\n");
+            let block = block.strip_suffix('\n').unwrap_or(&block);
             if kind == "markmason" {
                 let caps = command_info
-                    .captures(info)
+                    .captures(&info)
                     .context("Invalid markmason fence: expected markmason or markmason (exit N)")?;
                 let commands: Vec<_> = block
                     .lines()
@@ -238,37 +226,19 @@ pub fn parse(content: &str) -> Result<Spec> {
                 current = Some(spec.cases.len() - 1);
             } else if let Some(index) = current {
                 let case = &mut spec.cases[index];
-                match info {
+                match info.as_ref() {
                     "expected" | "expected-contains" => {
-                        case.expected = Some(block);
-                        case.contains = info == "expected-contains";
+                        case.expected = Some(block.to_owned());
+                        case.contains = info.as_ref() == "expected-contains";
                     }
-                    "stdin" => case.stdin = Some(block + "\n"),
-                    "pty" => case.pty = Some(parse_steps(&block_lines)?),
+                    "stdin" => case.stdin = Some(format!("{block}\n")),
+                    "pty" => case.pty = Some(parse_steps(&block.lines().collect::<Vec<_>>())?),
                     _ => bail!("Invalid {kind} fence: unexpected metadata"),
                 }
             }
         }
-        i += 1;
     }
     Ok(spec)
-}
-
-fn fence(line: &str) -> Option<(u8, usize, &str)> {
-    let text = line.trim_start_matches(' ');
-    if line.len() - text.len() > 3 {
-        return None;
-    }
-    let marker = *text.as_bytes().first()?;
-    if !matches!(marker, b'`' | b'~') {
-        return None;
-    }
-    let length = text.bytes().take_while(|byte| *byte == marker).count();
-    let info = text[length..].trim();
-    if length < 3 || (marker == b'`' && info.contains('`')) {
-        return None;
-    }
-    Some((marker, length, info))
 }
 
 // Deliberately not shell parsing: backslashes are literal, and empty quoted arguments survive.
