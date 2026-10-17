@@ -81,10 +81,11 @@ Failed blocks: 0
 mm tests/fixtures/walkthrough --step --home-env TEST_HOME
 ```
 
-Without a file filter, choose the lesson by typing its name. Only that file runs.
+Without a file filter, choose the lesson by typing its name. The default choice is
+`a-other.md`, so the lesson only runs if the search selects it.
 
 ```pty
-match: other.md
+match: a-other.md
 send: lesson{enter}
 match: Enter: Next command
 send: {enter}
@@ -112,7 +113,7 @@ mm tests/fixtures/walkthrough --step --home-env TEST_HOME
 ```
 
 ```pty
-match: other.md
+match: a-other.md
 send: {escape}
 ```
 

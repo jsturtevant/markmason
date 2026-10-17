@@ -477,6 +477,10 @@ pub fn pty(
                 && !sending
             {
                 let code = status.exit_code() as i32;
+                #[cfg(windows)]
+                if args.iter().any(|arg| arg == "--step") {
+                    eprintln!("PTY raw diagnostic: {raw:?}");
+                }
                 if (final_command || code != 0) && step_index < steps.len() {
                     bail!(
                         "PTY exited before completing step {step_index}: match {:?}\nOutput:\n{clean}",
