@@ -226,6 +226,75 @@ fn fenced_cases_stop_at_setext_headings() -> Result<()> {
 }
 
 #[test]
+fn fenced_assertions_survive_lists_and_thematic_breaks() -> Result<()> {
+    for prose in [
+        "***\n---",
+        "- Explanation\n---",
+        "1. Explanation\n---",
+        "> Explanation\n\n---",
+        "<hr>\n\n---",
+    ] {
+        let spec = spec::parse(&format!(
+            "```markmason\ncmd\n```\n\n{prose}\n\n```expected\nmust match\n```\n"
+        ))?;
+        assert_eq!(spec.cases.len(), 1);
+        assert_eq!(
+            spec.cases[0].expected.as_deref(),
+            Some("must match"),
+            "{prose}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn fenced_literal_examples_in_containers_do_not_run_or_hide_real_tests() -> Result<()> {
+    for marker in ["`", "~"] {
+        for (opener, prefix) in [
+            ("- ", "  "),
+            ("+ ", "  "),
+            ("* ", "  "),
+            ("1. ", "   "),
+            ("12) ", "    "),
+            ("> ", "> "),
+            ("- > ", "  > "),
+        ] {
+            let spec = spec::parse(&format!(
+                "{opener}{marker}{marker}{marker}{marker}markdown\n\
+                 {prefix}{marker}{marker}{marker}markmason\n\
+                 {prefix}example-command\n\
+                 {prefix}{marker}{marker}{marker}\n\
+                 {prefix}{marker}{marker}{marker}{marker}\n\n\
+                 ~~~markmason\nreal-command\n~~~\n"
+            ))?;
+            assert_eq!(spec.cases.len(), 1, "{marker}, {opener:?}");
+            assert_eq!(
+                spec.cases[0].command, "real-command",
+                "{marker}, {opener:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn fenced_commands_in_containers_preserve_their_input_and_assertions() -> Result<()> {
+    for (opener, prefix) in [("- ", "  "), ("1. ", "   "), ("> ", "> ")] {
+        let spec = spec::parse(&format!(
+            "{opener}```markmason\n{prefix}app cat\n{prefix}```\n\
+             {prefix}```stdin\n{prefix}if True:\n{prefix}    print(\"ok\")\n{prefix}```\n\
+             {prefix}```expected\n{prefix}ok\n{prefix}```"
+        ))?;
+        assert_eq!(spec.cases.len(), 1, "{opener:?}");
+        let case = &spec.cases[0];
+        assert_eq!(case.command, "app cat");
+        assert_eq!(case.stdin.as_deref(), Some("if True:\n    print(\"ok\")\n"));
+        assert_eq!(case.expected.as_deref(), Some("ok"));
+    }
+    Ok(())
+}
+
+#[test]
 fn fenced_contents_remove_only_the_opening_indentation() -> Result<()> {
     for marker in ["```", "~~~"] {
         for indent in 0..=3 {
@@ -272,6 +341,22 @@ fn invalid_command_fences_report_errors() {
         ("```markmason\n", "Unterminated markmason block"),
         ("```markmason\ncmd\n~~~\n", "Unterminated markmason block"),
         ("````markmason\ncmd\n```\n", "Unterminated markmason block"),
+        (
+            "```markmason\ncmd\n``` not a closing fence",
+            "Unterminated markmason block",
+        ),
+        (
+            "- ```markmason\n  cmd\n\noutside\n",
+            "Unterminated markmason block",
+        ),
+        (
+            "> ~~~markmason\n> cmd\n\noutside\n",
+            "Unterminated markmason block",
+        ),
+        (
+            "> ~~~markmason\n> cmd\n>   ",
+            "Unterminated markmason block",
+        ),
         ("```markmason\n```\n", "must contain nonempty commands"),
         ("```markmason\n  \n```\n", "must contain nonempty commands"),
         (

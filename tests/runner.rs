@@ -292,6 +292,34 @@ after
 }
 
 #[test]
+fn literal_examples_do_not_execute_and_prose_does_not_drop_assertions() {
+    let dir = tempfile::tempdir().unwrap();
+    for prose in ["***\n---", "- Explanation\n---"] {
+        for (expected, success) in [("wrong output", false), ("actual", true)] {
+            fs::write(
+                dir.path().join("markdown.md"),
+                format!(
+                    "- ~~~~markdown\n  ~~~markmason\n  missing-executable-markmason\n  ~~~\n  ~~~~\n\n\
+                     ~~~markmason\napp echo actual\n~~~\n\n{prose}\n\n\
+                     ~~~expected\n{expected}\n~~~\n"
+                ),
+            )
+            .unwrap();
+            let output = command(dir.path()).output().unwrap();
+            let result = text(&output);
+            assert_eq!(output.status.success(), success, "{result}");
+            if success {
+                assert!(result.contains("pass 1\nfail 0"), "{result}");
+            } else {
+                assert!(result.contains("Line 1 mismatch"), "{result}");
+                assert!(result.contains("pass 0\nfail 1"), "{result}");
+            }
+            assert!(!result.contains("missing-executable-markmason"), "{result}");
+        }
+    }
+}
+
+#[test]
 fn each_file_chooses_its_own_setup_command() {
     let dir = tempfile::Builder::new()
         .prefix("markdown e2e ")

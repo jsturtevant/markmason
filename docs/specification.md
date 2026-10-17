@@ -37,11 +37,15 @@ Output, stdin, and PTY blocks belong to the preceding `markmason` block until
 the next command block or heading. Keep them in the same section.
 Both `#` headings and headings underlined with `=` or `-` start a new section.
 Ordinary code blocks and examples nested inside longer fences do not run.
+Markdown follows CommonMark structure, including lists, block quotes, and HTML.
+Literal fenced examples inside those containers remain documentation, not tests.
 Backtick and tilde fences of at least three characters are supported, indented
 by at most three spaces; close with the same character and at least the opening
 length. Recognized blocks must be closed.
 Content loses up to the opening fence's indentation; additional indentation
 inside scripts is preserved.
+For command blocks in lists or block quotes, Markdown container prefixes are
+also removed from their contents.
 
 | Block | Behavior |
 |-------|----------|
