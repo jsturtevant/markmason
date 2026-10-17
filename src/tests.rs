@@ -336,6 +336,21 @@ fn fenced_contents_remove_only_the_opening_indentation() -> Result<()> {
 }
 
 #[test]
+fn case_titles_follow_markdown_headings_without_changing_commands() -> Result<()> {
+    let spec = spec::parse(
+        "```markmason\nno-title\n```\n\
+         ## **Send** `input`\n```markmason\nfirst\n```\n```markmason\nsecond\n```\n\
+         Another *section*\n---\n```markmason\nthird\n```\n",
+    )?;
+    assert_eq!(spec.cases[0].title, None);
+    assert_eq!(spec.cases[1].title.as_deref(), Some("Send input"));
+    assert_eq!(spec.cases[2].title.as_deref(), Some("Send input"));
+    assert_eq!(spec.cases[3].title.as_deref(), Some("Another section"));
+    assert_eq!(spec.cases[3].command, "third");
+    Ok(())
+}
+
+#[test]
 fn invalid_command_fences_report_errors() {
     for (markdown, expected) in [
         ("```markmason\n", "Unterminated markmason block"),

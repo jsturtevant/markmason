@@ -45,7 +45,16 @@ mm                         # Defaults to tests/cli
 mm path/to/specs            # Another directory
 mm --list                  # Discover without executing
 mm --file-pattern greet    # Select files by regex
+mm --step                  # Pick a file and walk through it
+mm --step --file-pattern '^greet\.md$'  # Skip the picker
 ```
+
+With `--step`, choose a file using the arrow keys or type to search, then press
+**Enter**. **Esc** cancels without running anything. An explicit `--file-pattern`
+(or its environment variable) skips the picker.
+
+During the walkthrough, inspect each command's expected and actual output.
+Press **Enter** to continue, or **q then Enter** to quit.
 
 ## Live examples
 
@@ -53,6 +62,7 @@ Learn more with real examples from `mm`:
 
 - [Getting started](tests/cli/cli.md)
 - [Command blocks](tests/cli/commands.md)
+- [Step-by-step walkthrough](tests/cli/walkthrough.md)
 - [Running tests](tests/cli/running.md)
 - [Filtering](tests/cli/filtering.md)
 - [Stdin and pipes](tests/cli/input.md)
@@ -77,6 +87,7 @@ that prints text, shows prompts, and writes test state. Both go on `PATH`.
 | Feature | Syntax |
 |---------|--------|
 | Run a command | `markmason` block |
+| Interactive walkthrough | `--step`, combined with the usual filters |
 | Exact output | `expected` block |
 | Ordered whole-line matching | `expected-contains` block; no unmatched trailing lines |
 | Expected failure | `markmason (exit 1)` on the opening fence |

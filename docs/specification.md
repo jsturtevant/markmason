@@ -111,6 +111,51 @@ Command blocks and expected blocks substitute:
 
 Stdin and PTY directives remain literal.
 
+## Walkthrough mode
+
+Use `--step` to turn the same specs into a guided tutorial:
+
+```sh
+mm tests/cli --step
+```
+
+A searchable picker lists the files matching your filters. Use the arrow keys
+or type to search, then press **Enter** to choose one file. **Esc** cancels before
+any setup, commands, or fixtures run. This also works when only one file matches.
+
+To skip the picker, select files with `--file-pattern` (or its environment
+variable). Without an interactive terminal, a file filter is required:
+
+```sh
+mm tests/cli --step --file-pattern '^greet\.md$'
+```
+
+Each command shows its section heading, block and command progress, resolved
+command text, expected output, actual output, exit code, and result.
+Colors are automatic in supported terminals; `NO_COLOR=1` disables them.
+Output redirected to a file or pipe remains readable without color.
+
+- After file selection, setup and the first command run immediately. After each
+  command, **Enter** advances to the next command or block. The final pause lets
+  you inspect the last result before finishing.
+- **q then Enter** quits. Closed input also stops; neither runs the remaining
+  commands. Temporary fixtures stay available while paused and are cleaned up
+  when you finish, quit, or cancel.
+- Within a multi-command block, expected output applies to the whole block.
+  Intermediate pauses show actual output collected so far; the assertion runs
+  only when the block finishes or a command exits nonzero.
+- A pipeline is one command for stepping. App stdin and scripted PTY input
+  remain separate from the walkthrough's Enter/quit controls.
+- Failures still pause for inspection. Continue to the next block or quit;
+  any recorded failure keeps the final exit status nonzero. Quitting without
+  failures exits zero, but the summary says **stopped**, not finished, and
+  unfinished blocks are not counted as passed.
+- File, tag, and command-name filters behave as usual. A matching command
+  selects its whole block; earlier prerequisite blocks are not added.
+  `--step` and `--list` cannot be combined.
+
+Try the [executable walkthrough](../tests/cli/walkthrough.md) in this checkout.
+
 ## Interactive terminals
 
 ````markdown
@@ -163,5 +208,6 @@ Raw and ANSI-stripped matches advance separate cursors.
 - File and name patterns use Rust regex syntax.
 - `--list` discovers cases without executing setup or creating fixtures.
 - No matches, malformed specs, and failed assertions return nonzero exits.
-- `--verbose` or `VERBOSE=1` (`true` / `yes` also work) prints output and diffs.
+- Outside walkthrough mode, `--verbose` or `VERBOSE=1` (`true` / `yes` also work)
+  prints output and diffs.
   Failures always include diagnostics.
