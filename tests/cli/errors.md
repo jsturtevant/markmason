@@ -131,5 +131,22 @@ stdout
 stderr
 ```
 
+## Stop a command block on failure
+
+The first nonzero exit stops the block. Output from earlier commands is kept,
+including stdout and stderr from the failed command.
+
+```markmason (exit 2)
+mm-test-cli echo before
+mm-test-cli fail
+mm-test-cli echo must-not-run
+```
+
+```expected
+before
+stdout
+stderr
+```
+
 See [matching errors](matching-errors.md) and [runtime errors](runtime-errors.md)
 for failed assertions, timeouts, and incomplete terminal scripts.

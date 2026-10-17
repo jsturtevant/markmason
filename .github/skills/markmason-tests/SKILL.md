@@ -31,8 +31,9 @@ description: >-
   why its output matters.
 - Keep the prose brief and natural. Avoid filler, marketing language, and
   repeated "this test verifies" introductions.
-- Use descriptive headings and put each command in a `markmason` fenced block.
-  Keep one command line per block; headings themselves never execute.
+- Use descriptive headings and put commands in `markmason` fenced blocks.
+  Group related commands in one block, one per line. The block is one test:
+  output is combined and the first nonzero exit stops it.
   Put assertions and input blocks after the command, before the next heading.
 - Keep every Markdown file in the scanned spec directory executable.
   Put indexes, references, and templates elsewhere; a case-free README there fails.
@@ -73,7 +74,7 @@ description: >-
 - Describe `--file-pattern` as matching relative file paths only.
   A matching file runs all its cases.
 - Describe `--test-name-pattern` as matching file paths or command text, not headings.
-  A file match runs the whole file; a command match selects individual cases.
+  A file match runs the whole file; a command match selects its whole block.
 - Show whole-file and anchored command matches when documenting the difference.
 - Explain that file filters narrow the selection first, and that selecting a
   command does not run earlier prerequisite cases.

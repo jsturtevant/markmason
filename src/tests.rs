@@ -203,18 +203,15 @@ fn invalid_command_fences_report_errors() {
         ("```markmason\n", "Unterminated markmason block"),
         ("```markmason\ncmd\n~~~\n", "Unterminated markmason block"),
         ("````markmason\ncmd\n```\n", "Unterminated markmason block"),
-        ("```markmason\n```\n", "exactly one nonempty command line"),
-        (
-            "```markmason\n  \n```\n",
-            "exactly one nonempty command line",
-        ),
+        ("```markmason\n```\n", "must contain nonempty commands"),
+        ("```markmason\n  \n```\n", "must contain nonempty commands"),
         (
             "```markmason\n\"\"\n```\n",
-            "exactly one nonempty command line",
+            "must contain nonempty commands",
         ),
         (
-            "```markmason\nfirst\nsecond\n```\n",
-            "exactly one nonempty command line",
+            "```markmason\nfirst\n\"\"\nsecond\n```\n",
+            "must contain nonempty commands",
         ),
         (
             "```markmason (exit -1)\ncmd\n```\n",
@@ -252,6 +249,21 @@ fn invalid_command_fences_report_errors() {
         let error = spec::parse(markdown).unwrap_err().to_string();
         assert!(error.contains(expected), "{markdown:?}: {error}");
     }
+}
+
+#[test]
+fn command_blocks_allow_multiple_commands_and_blank_lines() -> Result<()> {
+    let spec = spec::parse(
+        "## Run several commands\r\n\r\n```markmason (exit 2)\r\n\r\n\
+         first \"two words\"\r\n\r\n  second | third  \r\nlast\r\n\r\n```\r\n\
+         ```expected\r\ncombined output\r\n```\r\n",
+    )?;
+    assert_eq!(spec.cases.len(), 1);
+    let case = &spec.cases[0];
+    assert_eq!(case.command, "first \"two words\"\nsecond | third\nlast");
+    assert_eq!(case.exit_code, 2);
+    assert_eq!(case.expected.as_deref(), Some("combined output"));
+    Ok(())
 }
 
 #[test]

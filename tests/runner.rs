@@ -132,6 +132,166 @@ app bulk
 }
 
 #[test]
+fn command_blocks_combine_output_share_state_and_filter_as_one_test() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("commands.md"),
+        r#"## Run commands in order
+
+```markmason
+app write-state TEST_HOME ready
+
+app state
+app echo "hello | world" | app cat
+```
+```expected
+ready
+hello | world
+```
+
+## Send stdin only to the first command
+
+```markmason
+app cat
+app cat
+```
+```stdin
+input once
+```
+```expected
+input once
+```
+
+## An independent case
+
+```markmason
+app echo unselected
+```
+"#,
+    )
+    .unwrap();
+    let output = command(dir.path()).output().unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(
+        text(&output).contains("pass 3\nfail 0"),
+        "{}",
+        text(&output)
+    );
+    let output = command(dir.path())
+        .args(["--test-name-pattern", "^app state$"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(
+        text(&output).contains("pass 1\nfail 0"),
+        "{}",
+        text(&output)
+    );
+    assert!(!text(&output).contains("unselected"), "{}", text(&output));
+    let output = command(dir.path()).arg("--list").output().unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(
+        text(&output).contains(
+            "  app write-state TEST_HOME ready\n  app state\n  app echo \"hello | world\" | app cat"
+        ),
+        "{}",
+        text(&output)
+    );
+}
+
+#[test]
+fn command_blocks_stop_on_failure_and_check_the_combined_output_and_exit() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("must not run");
+    for failing in ["app fail", "app fail | app echo must-not-run"] {
+        for (exit, expected, success) in [
+            (2, "before\nstdout\nstderr", true),
+            (0, "before\nstdout\nstderr", false),
+            (2, "wrong output", false),
+        ] {
+            fs::write(
+                dir.path().join("commands.md"),
+                format!(
+                    "```markmason (exit {exit})\napp echo before\n{failing}\napp mark \"{}\"\n```\n```expected\n{expected}\n```\n",
+                    marker.display()
+                ),
+            )
+            .unwrap();
+            let output = command(dir.path()).output().unwrap();
+            assert_eq!(output.status.success(), success, "{}", text(&output));
+            assert!(!marker.exists(), "Commands continued after failure");
+        }
+    }
+    fs::write(
+        dir.path().join("commands.md"),
+        format!(
+            "```markmason (exit 1)\napp echo before\nmissing-executable-markmason\napp mark \"{}\"\n```\n",
+            marker.display()
+        ),
+    )
+    .unwrap();
+    let output = command(dir.path()).output().unwrap();
+    assert!(!output.status.success(), "{}", text(&output));
+    assert!(
+        text(&output).contains("Failed to start"),
+        "{}",
+        text(&output)
+    );
+    assert!(!marker.exists(), "Commands continued after a startup error");
+}
+
+#[test]
+fn command_blocks_share_terminal_steps_across_processes() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("commands.md"),
+        r#"```markmason
+app echo before
+app interactive
+app interactive
+app echo after
+```
+```pty
+match: Ready?
+send: yes{enter}
+match: Ready?
+send: no{enter}
+match: Ready?
+send: first{enter}
+match: Ready?
+send: last{enter}
+```
+```expected-contains
+before
+done no
+done last
+after
+```
+"#,
+    )
+    .unwrap();
+    let output = command(dir.path()).output().unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(
+        text(&output).contains("pass 1\nfail 0"),
+        "{}",
+        text(&output)
+    );
+    fs::write(
+        dir.path().join("commands.md"),
+        "```markmason\napp interactive\napp premature\n```\n```pty\nmatch: Ready?\nsend: yes{enter}\nmatch: Ready?\nsend: no{enter}\nmatch: missing\nsend: unused\n```\n",
+    )
+    .unwrap();
+    let output = command(dir.path()).output().unwrap();
+    assert!(!output.status.success(), "{}", text(&output));
+    assert!(
+        text(&output).contains("before completing step"),
+        "{}",
+        text(&output)
+    );
+}
+
+#[test]
 fn each_file_chooses_its_own_setup_command() {
     let dir = tempfile::Builder::new()
         .prefix("markdown e2e ")

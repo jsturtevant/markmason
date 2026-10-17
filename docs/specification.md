@@ -2,7 +2,7 @@
 
 ## Commands and output
 
-Write descriptive headings and put each command in a `markmason` fenced block.
+Write descriptive headings and put commands in `markmason` fenced blocks.
 The default expected exit code is 0; add `(exit N)` to the opening fence to
 require a different code:
 
@@ -18,20 +18,25 @@ error: unknown option --not-an-option
 ```
 ````
 
-Each block contains one nonempty command line, optionally surrounded by blank
-lines. Multiline command scripts are not supported; use `stdin` with an explicit
-interpreter when needed. Without an expected block, only the exit code is checked.
+Each block is one test. Put one command on each line; blank lines are ignored.
+Commands run in order and their output is concatenated for the following
+expected block. The first nonzero exit stops the block and becomes its exit
+code; if all commands succeed, the block exits 0.
+Without an expected block, only the exit code is checked.
 
-Output, stdin, and PTY blocks belong to the preceding command until the next
-command or heading. Keep them in the same section as their command.
+Each command starts in the file's working directory and environment, sharing
+file state but not shell variables or `cd` changes. Use an explicit interpreter
+for shell scripts. A `stdin` block supplies input to the first command only;
+later commands start with empty stdin. A `pty` block's match/send steps advance
+across commands in order, and must all finish by the end of the block.
+Timeouts apply to each command (and each pipeline stage), not the whole block.
+
+Output, stdin, and PTY blocks belong to the preceding `markmason` block until
+the next command block or heading. Keep them in the same section.
 Ordinary code blocks and examples nested inside longer fences do not run.
 Backtick and tilde fences of at least three characters are supported, indented
 by at most three spaces; close with the same character and at least the opening
 length. Recognized blocks must be closed.
-
-**Breaking change:** backtick-wrapped command headings are no longer executable.
-Move their commands into `markmason` blocks and move any `(exit N)` annotation
-onto the opening fence.
 
 | Block | Behavior |
 |-------|----------|
@@ -144,7 +149,8 @@ Raw and ANSI-stripped matches advance separate cursors.
 - Tags are comma-separated and case-insensitive. Inclusion requires all tags;
   exclusion rejects any matching tag.
 - `--test-name-pattern REGEX` matches a relative spec path or command text, not headings.
-  Matching a file runs all its cases; selecting a command skips earlier prerequisites.
+  Matching a file runs all its cases; matching any command selects its whole block.
+  Selecting a block skips earlier blocks, including their prerequisites.
 - File and name patterns use Rust regex syntax.
 - `--list` discovers cases without executing setup or creating fixtures.
 - No matches, malformed specs, and failed assertions return nonzero exits.

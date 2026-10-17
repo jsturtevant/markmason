@@ -50,7 +50,7 @@ error: unknown option --not-an-option
 
 | Syntax | Meaning |
 |--------|---------|
-| `markmason` fence | Execute its single command line; require exit 0 by default |
+| `markmason` fence | Run commands in order as one test; require exit 0 by default |
 | `markmason (exit N)` opening fence | Require exit N, without treating execution errors as success |
 | `expected` fence | Match output after path, whitespace, blank-line, and wrapping normalization |
 | `expected-contains` fence | Match whole lines in order; no unmatched trailing lines |
@@ -58,14 +58,19 @@ error: unknown option --not-an-option
 | `pty` fence | Use paired `match:` / `send:` or `match-raw:` / `send:` steps |
 
 - Commands run without a shell. Quote arguments with spaces; backslashes are literal.
+- Put one command on each line; blank lines are ignored. Combine their output
+  for the assertion, and stop at the first nonzero exit.
+- Share file state between commands, not shell variables or directory changes.
+  Use an explicit interpreter for scripts.
 - Do not use shell assignments, redirects, `&&`, or arbitrary environment expansion.
 - Pipelines connect stdout and stop at the first failing stage.
 - Compare stdout on success; compare stdout followed by stderr on failure.
 - Without an expected block, only the exit code is checked.
-- Use headings for descriptions, not commands. The old command-heading syntax
-  is no longer supported. Keep input and output blocks before the next heading.
+- Use descriptive headings. Keep input and output blocks before the next heading.
 - Wrap literal Markdown examples in a longer fence so their commands do not run.
 - PTY output uses contains matching. Every scripted step must finish.
+- Send `stdin` to the first command only. Advance PTY match/send steps across
+  commands in order. Apply timeouts per command or pipeline stage.
 - Use `{enter}`, `{up}`, `{down}`, `{space}`, and `{backspace}` for PTY input.
   Sends do not append a newline automatically.
 
@@ -93,6 +98,7 @@ timeout: 30
 
 - Use `--file-pattern` / `--file-exclude` for relative file paths.
 - Use `--test-name-pattern` for relative file paths or command text, not headings.
+- Select the whole block when any of its commands matches.
 - Use Rust regex syntax, for example `'^mm --version$'` for an exact command.
 - Use `--tags smoke,cli` for files with both tags; matching ignores case.
 - Use `--tags-exclude slow` to reject files with that tag.

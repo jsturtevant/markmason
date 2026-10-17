@@ -273,41 +273,58 @@ fn execute(
     timeout: Duration,
     verbose: bool,
 ) -> Result<()> {
-    let command = fixture.substitute(&case.command);
-    let output = if let Some(steps) = &case.pty {
-        process::pty(
-            &resolve(&command, dir)?,
-            &fixture.cwd,
-            &fixture.env,
-            steps,
-            timeout,
-            &fixture.processes,
-        )?
-    } else {
-        let stages = spec::split_pipeline(&command);
-        if stages.is_empty() {
-            bail!("Empty pipeline: no commands to execute");
-        }
-        let mut input = case.stdin.as_ref().map(|s| s.as_bytes().to_vec());
-        let mut output = None;
-        for stage in stages {
-            let result = process::run(
-                &resolve(&stage, dir)?,
+    let commands: Vec<_> = case.command.lines().collect();
+    let mut output = process::Output {
+        text: String::new(),
+        code: 0,
+    };
+    let mut stdin = case.stdin.as_ref().map(|s| s.as_bytes().to_vec());
+    let mut step_index = 0;
+    for (index, command) in commands.iter().enumerate() {
+        let command = fixture.substitute(command);
+        let result = if let Some(steps) = &case.pty {
+            let (result, completed) = process::pty(
+                &resolve(&command, dir)?,
                 &fixture.cwd,
                 &fixture.env,
-                input,
+                &steps[step_index..],
                 timeout,
                 &fixture.processes,
+                index + 1 == commands.len(),
             )?;
-            if result.code != 0 {
-                output = Some(result);
-                break;
+            step_index += completed;
+            result
+        } else {
+            let stages = spec::split_pipeline(&command);
+            if stages.is_empty() {
+                bail!("Empty pipeline: no commands to execute");
             }
-            input = Some(result.text.as_bytes().to_vec());
-            output = Some(result);
+            let mut input = stdin.take();
+            let mut output = None;
+            for stage in stages {
+                let result = process::run(
+                    &resolve(&stage, dir)?,
+                    &fixture.cwd,
+                    &fixture.env,
+                    input,
+                    timeout,
+                    &fixture.processes,
+                )?;
+                if result.code != 0 {
+                    output = Some(result);
+                    break;
+                }
+                input = Some(result.text.as_bytes().to_vec());
+                output = Some(result);
+            }
+            output.context("Pipeline produced no output")?
+        };
+        output.text.push_str(&result.text);
+        output.code = result.code;
+        if output.code != 0 {
+            break;
         }
-        output.context("Pipeline produced no output")?
-    };
+    }
     if verbose {
         println!("ACTUAL:\n{}", output.text);
     }
@@ -389,9 +406,10 @@ fn run(options: Options) -> Result<bool> {
             .enumerate()
             .filter(|(_, case)| {
                 names.is_empty()
-                    || names
-                        .iter()
-                        .any(|re| re.is_match(&file) || re.is_match(&case.command))
+                    || names.iter().any(|re| {
+                        re.is_match(&file)
+                            || case.command.lines().any(|command| re.is_match(command))
+                    })
             })
             .map(|(i, _)| i)
             .collect();
@@ -419,7 +437,7 @@ fn run(options: Options) -> Result<bool> {
         }
         if options.list {
             for index in indices {
-                println!("  {}", spec.cases[index].command);
+                println!("  {}", spec.cases[index].command.replace('\n', "\n  "));
             }
             continue;
         }
@@ -476,14 +494,15 @@ fn run(options: Options) -> Result<bool> {
                     break;
                 }
                 let case = &spec.cases[index];
+                let label = case.command.replace('\n', "\n       ");
                 match execute(case, &fixture, &dir, timeout, verbose) {
                     Ok(()) => {
                         passed += 1;
-                        println!("  PASS {}", case.command);
+                        println!("  PASS {label}");
                     }
                     Err(error) => {
                         failed += 1;
-                        eprintln!("  FAIL {}: {error:#}", case.command);
+                        eprintln!("  FAIL {label}: {error:#}");
                     }
                 }
             }

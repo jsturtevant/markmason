@@ -52,6 +52,7 @@ mm --file-pattern greet    # Select files by regex
 Learn more with real examples from `mm`:
 
 - [Getting started](tests/cli/cli.md)
+- [Command blocks](tests/cli/commands.md)
 - [Running tests](tests/cli/running.md)
 - [Filtering](tests/cli/filtering.md)
 - [Stdin and pipes](tests/cli/input.md)
@@ -88,8 +89,8 @@ that prints text, shows prompts, and writes test state. Both go on `PATH`.
 Commands resolve from `PATH`, without a shell. Each file gets an isolated home
 and configuration directory; its cases run in order and share state.
 
-Headings describe the behavior; only `markmason` blocks run commands.
-The old backtick-wrapped command headings are no longer supported.
+Headings describe the behavior. Each `markmason` block is one test: commands run
+in order, combine their output, and stop at the first nonzero exit.
 
 See the [specification reference](docs/specification.md) for setup, matching,
 PTYs, variables, filters, and cleanup details. Use `mm --help` for CLI options.

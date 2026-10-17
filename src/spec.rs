@@ -193,17 +193,22 @@ pub fn parse(content: &str) -> Result<Spec> {
                 let caps = command_info
                     .captures(info)
                     .context("Invalid markmason fence: expected markmason or markmason (exit N)")?;
-                let command = block.trim();
-                if command.is_empty()
-                    || command.contains('\n')
-                    || split_command(command)
-                        .first()
-                        .is_none_or(|arg| arg.is_empty())
+                let commands: Vec<_> = block
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .collect();
+                if commands.is_empty()
+                    || commands.iter().any(|command| {
+                        split_command(command)
+                            .first()
+                            .is_none_or(|arg| arg.is_empty())
+                    })
                 {
-                    bail!("A markmason block must contain exactly one nonempty command line");
+                    bail!("A markmason block must contain nonempty commands");
                 }
                 spec.cases.push(Case {
-                    command: command.to_owned(),
+                    command: commands.join("\n"),
                     exit_code: caps.get(1).map_or(Ok(0), |m| m.as_str().parse()).context(
                         "Invalid markmason exit code: expected a nonnegative 32-bit integer",
                     )?,
