@@ -53,6 +53,43 @@ Passed blocks: 2
 Failed blocks: 0
 ```
 
+## Keep a real Bash session alive between pauses
+
+```markmason
+mm tests/fixtures/shell/lesson.md --step
+```
+
+Shared Markdown setup runs without pausing. Assignments and substitutions are
+real commands, so the first block pauses three times. The multiline loop is one
+logical command, not one pause per physical line.
+
+```pty
+match: Enter: Next command
+send: {enter}
+match: Enter: Next command
+send: {enter}
+match: Enter: Next block
+send: {enter}
+match: Enter: Finish walkthrough
+send: {enter}
+```
+
+```expected-contains
+lesson.md | Block 1 of 2
+COMMAND 1 OF 3
+COMMAND 2 OF 3
+| ready
+COMMAND 3 OF 3
+| shared setup is ready
+lesson.md | Block 2 of 2
+COMMAND 1 OF 1
+| one
+| two
+Walkthrough finished
+Passed blocks: 2
+Failed blocks: 0
+```
+
 ## Quit before the next command runs
 
 ```markmason

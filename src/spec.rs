@@ -6,11 +6,17 @@ use std::time::Duration;
 
 #[derive(Debug, Default)]
 pub struct Spec {
+    pub shell: Option<Shell>,
     pub clone: Option<String>,
     pub setup: Option<String>,
     pub tags: Vec<String>,
     pub timeout: Option<Duration>,
     pub cases: Vec<Case>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shell {
+    Bash,
 }
 
 #[derive(Debug)]
@@ -99,7 +105,14 @@ fn parse_steps(lines: &[&str]) -> Result<Vec<Step>> {
 }
 
 pub fn parse(content: &str) -> Result<Spec> {
-    let mut spec = Spec::default();
+    parse_with_shell(content, None)
+}
+
+pub fn parse_with_shell(content: &str, shell: Option<Shell>) -> Result<Spec> {
+    let mut spec = Spec {
+        shell,
+        ..Spec::default()
+    };
     let frontmatter = Regex::new(r"\A---\r?\n([\s\S]*?)\r?\n---\r?\n").unwrap();
     let body = if let Some(caps) = frontmatter.captures(content) {
         let value: Value = serde_yaml::from_str(&caps[1]).context("Invalid YAML frontmatter")?;
@@ -107,6 +120,15 @@ pub fn parse(content: &str) -> Result<Spec> {
             let map = value
                 .as_mapping()
                 .context("Frontmatter must be a YAML object")?;
+            if let Some(value) = map
+                .get(Value::from("shell"))
+                .filter(|value| !value.is_null())
+            {
+                if value.as_str() != Some("bash") {
+                    bail!("Frontmatter shell must be bash");
+                }
+                spec.shell = Some(Shell::Bash);
+            }
             for (key, target) in [("clone", &mut spec.clone), ("setup", &mut spec.setup)] {
                 if let Some(value) = map.get(Value::from(key)).filter(|v| !v.is_null()) {
                     *target = Some(
@@ -217,7 +239,9 @@ pub fn parse(content: &str) -> Result<Spec> {
                     .map(str::trim)
                     .filter(|line| !line.is_empty())
                     .collect();
-                if commands.is_empty()
+                if spec.shell.is_some() {
+                    crate::shell::commands(block)?;
+                } else if commands.is_empty()
                     || commands.iter().any(|command| {
                         split_command(command)
                             .first()
@@ -228,7 +252,11 @@ pub fn parse(content: &str) -> Result<Spec> {
                 }
                 spec.cases.push(Case {
                     title: title.clone(),
-                    command: commands.join("\n"),
+                    command: if spec.shell.is_some() {
+                        block.to_owned()
+                    } else {
+                        commands.join("\n")
+                    },
                     exit_code: caps.get(1).map_or(Ok(0), |m| m.as_str().parse()).context(
                         "Invalid markmason exit code: expected a nonnegative 32-bit integer",
                     )?,

@@ -70,7 +70,13 @@ fn step_process(
     specs: &Path,
     args: &[&str],
 ) -> (Child, ChildStdin, mpsc::Receiver<io::Result<String>>) {
-    let mut command = command(specs);
+    step_command(command(specs), args)
+}
+
+fn step_command(
+    mut command: Command,
+    args: &[&str],
+) -> (Child, ChildStdin, mpsc::Receiver<io::Result<String>>) {
     command.arg("--step");
     if !args
         .iter()
@@ -136,6 +142,428 @@ fn next_step(
             }
         }
     }
+}
+
+#[test]
+fn bash_sessions_isolate_files_ignore_startup_scripts_and_preserve_shell_quoting() {
+    let dir = tempfile::tempdir().unwrap();
+    let working = dir.path().join("working dir's");
+    fs::create_dir(&working).unwrap();
+    let startup = dir.path().join("must-not-source.sh");
+    fs::write(&startup, "printf 'unexpected startup\\n'\nexit 99\n").unwrap();
+    fs::write(
+        dir.path().join("a.md"),
+        "---\nshell: bash\n---\n\
+         ```markmason\nprintf '%s\\n' \"${ONLY_IN_A-unset}\"\n\
+         test \"$PWD\" -ef \"$REPO_ROOT\"\n\
+         printf '%s\\n' '${TEST_HOME}'\n\
+         ONLY_IN_A=private\numask 0777\nexport PATH=\nprintf 'builtins still work\\n'\n```\n\
+         ```expected\nunset\n${TEST_HOME}\nbuiltins still work\n```\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("b.md"),
+        "---\nshell: bash\n---\n```markmason\nprintf '%s\\n' \"${ONLY_IN_A-unset}\"\n```\n\
+         ```expected\nunset\n```\n",
+    )
+    .unwrap();
+    let output = command(dir.path())
+        .arg("--cwd")
+        .arg(&working)
+        .env("BASH_ENV", &startup)
+        .env("ENV", &startup)
+        .env_remove("ONLY_IN_A")
+        .output()
+        .unwrap();
+    let result = text(&output);
+    assert!(output.status.success(), "{result}");
+    assert!(result.contains("pass 2\nfail 0"), "{result}");
+    assert!(!result.contains("unexpected startup"), "{result}");
+}
+
+#[test]
+fn bash_setup_requires_a_shell_caller_and_assertion_failures_stop_stateful_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let lesson = dir.path().join("lesson.md");
+    fs::write(
+        dir.path().join("setup.md"),
+        "---\nshell: bash\n---\n```markmason\nVALUE=prepared\n```\n",
+    )
+    .unwrap();
+    fs::write(
+        &lesson,
+        "---\nsetup: mm setup.md\n---\n```markmason\napp echo later\n```\n",
+    )
+    .unwrap();
+    let output = command(&lesson).output().unwrap();
+    assert!(!output.status.success(), "{}", text(&output));
+    assert!(text(&output).contains("specify shell: bash in the calling file"));
+    let marker = dir.path().join("must-not-run");
+    fs::write(
+        &lesson,
+        format!(
+            "---\nshell: bash\nsetup: mm setup.md\n---\n\
+             ```markmason\nprintf '%s\\n' \"$VALUE\"\n```\n```expected\ndifferent\n```\n\
+             ```markmason\napp mark \"{}\"\n```\n",
+            shell_path(&marker)
+        ),
+    )
+    .unwrap();
+    let output = command(&lesson).output().unwrap();
+    let result = text(&output);
+    assert!(!output.status.success(), "{result}");
+    assert!(result.contains("Line 1 mismatch"), "{result}");
+    assert!(!marker.exists(), "{result}");
+    let output = step_output(&lesson, &[], "\n");
+    let result = text(&output);
+    assert!(!output.status.success(), "{result}");
+    assert!(result.contains("Enter: Stop this file"), "{result}");
+    assert!(!result.contains("Enter: Next block"), "{result}");
+    assert!(!marker.exists(), "{result}");
+}
+
+#[test]
+fn bash_sessions_preserve_previous_status_and_noclobber_in_both_capture_modes() {
+    for pty in ["", "```pty\n```\n"] {
+        let dir = tempfile::tempdir().unwrap();
+        let lesson = dir.path().join("lesson.md");
+        fs::write(
+            &lesson,
+            format!(
+                "---\nshell: bash\n---\n\
+                 ```markmason\nmkdir -p \"$TEST_HOME/work\"\ncd \"$_\"\n\
+                 test \"$PWD\" -ef \"$TEST_HOME/work\"\ntrue\ntest \"$?\" -eq 0\n\
+                 set -C\nprintf 'noclobber retained\\n'\n```\n\
+                 {pty}```expected\nnoclobber retained\n```\n\
+                 ```markmason (exit 7)\n(exit 7)\n```\n{pty}\
+                 ```markmason\ntest \"$?\" -eq 7\ntest -o noclobber\nprintf 'status retained\\n'\n```\n\
+                 {pty}```expected\nstatus retained\n```\n\
+                 ```markmason (exit 1)\nset -e\n! true\n```\n{pty}\
+                 ```markmason\ntest \"$?\" -eq 1\nset +e\nprintf 'negated status retained\\n'\n```\n\
+                 {pty}```expected\nnegated status retained\n```\n"
+            ),
+        )
+        .unwrap();
+        let output = command(&lesson).output().unwrap();
+        let result = text(&output);
+        assert!(output.status.success(), "{result}");
+        assert!(result.contains("pass 5\nfail 0"), "{result}");
+    }
+}
+
+#[test]
+fn bash_tracing_preserves_user_options_without_tracing_transport() {
+    for pty in ["", "```pty\n```\n"] {
+        let dir = tempfile::tempdir().unwrap();
+        let lesson = dir.path().join("lesson.md");
+        fs::write(
+            &lesson,
+            format!(
+                "---\nshell: bash\n---\n\
+                 ```markmason\nPS4='USER_TRACE '\nset -xv\n```\n{pty}\
+                 ```markmason\n[[ $- == *x* && $- == *v* ]]\nprintf '%s\\n' traced\n```\n\
+                 {pty}```expected-contains\ntraced\n```\n\
+                 ```markmason\nset +xv\n[[ $- != *x* && $- != *v* ]]\nprintf '%s\\n' after\n```\n\
+                 {pty}```expected-contains\nafter\n```\n"
+            ),
+        )
+        .unwrap();
+        let output = command(&lesson).arg("--verbose").output().unwrap();
+        let result = text(&output);
+        assert!(output.status.success(), "{result}");
+        assert!(result.contains("pass 3\nfail 0"), "{result}");
+        assert!(!result.contains("__markmason_"), "{result}");
+        assert!(!result.contains("MARKMASON_END"), "{result}");
+        if !pty.is_empty() {
+            assert!(result.contains("USER_TRACE printf"), "{result}");
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn bash_relative_sleep_path_survives_directory_changes_and_step_pauses() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("tools")).unwrap();
+    fs::create_dir(dir.path().join("nested")).unwrap();
+    std::os::unix::fs::symlink("/bin/sleep", dir.path().join("tools/sleep")).unwrap();
+    let lesson = dir.path().join("lesson.md");
+    fs::write(
+        &lesson,
+        "---\nshell: bash\n---\n```markmason\ncd nested\nprintf 'changed\\n'\n```\n\
+         ```expected\nchanged\n```\n",
+    )
+    .unwrap();
+    let mut command = command(&lesson);
+    let path = command
+        .get_envs()
+        .find(|(key, _)| *key == "PATH")
+        .unwrap()
+        .1
+        .unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(PathBuf::from("tools")).chain(std::env::split_paths(path)),
+    )
+    .unwrap();
+    command.env("PATH", path).arg("--cwd").arg(dir.path());
+    let (mut child, mut input, receive) = step_command(command, &[]);
+    let mut transcript = String::new();
+    next_step(&mut child, &receive, &mut transcript);
+    std::thread::sleep(Duration::from_millis(150));
+    input.write_all(b"\n\n").unwrap();
+    drop(input);
+    let output = child.wait_with_output().unwrap();
+    transcript.extend(receive.into_iter().map(Result::unwrap));
+    let result = format!("{transcript}{}", text(&output));
+    assert!(output.status.success(), "{result}");
+    assert!(result.contains("Passed blocks: 1"), "{result}");
+}
+
+#[test]
+fn bash_background_output_survives_until_wait_in_both_capture_modes() {
+    for pty in ["", "```pty\n```\n"] {
+        let dir = tempfile::tempdir().unwrap();
+        let lesson = dir.path().join("lesson.md");
+        fs::write(
+            &lesson,
+            format!(
+                "---\nshell: bash\n---\n\
+                 ```markmason\n(while test ! -f \"$TEST_HOME/go\"; do sleep 0.01; done; printf 'late\\n') &\nJOB=$!\n```\n{pty}\
+                 ```markmason\n: > \"$TEST_HOME/go\"\nwait \"$JOB\"\nprintf 'done\\n'\n```\n\
+                 {pty}```expected\nlate\ndone\n```\n"
+            ),
+        )
+        .unwrap();
+        let output = command(&lesson).output().unwrap();
+        assert!(output.status.success(), "{}", text(&output));
+    }
+}
+
+#[test]
+fn bash_terminal_output_during_a_step_pause_is_not_discarded() {
+    let dir = tempfile::tempdir().unwrap();
+    let release = dir.path().join("release");
+    let printed = dir.path().join("printed");
+    let lesson = dir.path().join("lesson.md");
+    fs::write(
+        &lesson,
+        format!(
+            "---\nshell: bash\n---\n```markmason\n\
+             (while test ! -f \"{}\"; do sleep 0.01; done; printf 'ready\\n'; : > \"{}\") &\n\
+             wait \"$!\"\nprintf 'done\\n'\n```\n```pty\n```\n\
+             ```expected\nready\ndone\n```\n",
+            shell_path(&release),
+            shell_path(&printed),
+        ),
+    )
+    .unwrap();
+    let (mut child, mut input, receive) = step_process(&lesson, &[]);
+    let mut transcript = String::new();
+    next_step(&mut child, &receive, &mut transcript);
+    fs::write(release, "").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !printed.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        printed.exists(),
+        "Background output was not produced while paused"
+    );
+    input.write_all(b"\n\n\n").unwrap();
+    drop(input);
+    let output = child.wait_with_output().unwrap();
+    transcript.extend(receive.into_iter().map(Result::unwrap));
+    assert!(output.status.success(), "{transcript}\n{}", text(&output));
+    assert!(transcript.contains("Passed blocks: 1"), "{transcript}");
+}
+
+#[test]
+fn bash_terminal_interactions_span_logical_commands_without_losing_prompts() {
+    for (prompt, expected) in [
+        ("printf 'Name?\\n'", "Name?"),
+        ("printf 'Your '\nprintf 'name?\\n'", "Your name?"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let lesson = dir.path().join("lesson.md");
+        fs::write(
+            &lesson,
+            format!(
+                "---\nshell: bash\n---\n```markmason\n{prompt}\nread -r ANSWER\n\
+                 printf 'Hello %s\\n' \"$ANSWER\"\n```\n\
+                 ```pty\nmatch: {expected}\nsend: Ada{{enter}}\n```\n\
+                 ```expected\n{expected}\nHello Ada\n```\n"
+            ),
+        )
+        .unwrap();
+        let output = command(&lesson).output().unwrap();
+        let result = text(&output);
+        assert!(output.status.success(), "{result}");
+        assert!(!result.contains("MARKMASON_END"), "{result}");
+    }
+}
+
+#[test]
+fn bash_session_shares_setup_state_functions_cwd_and_application_input() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("preset env.sh"),
+        "export FROM_SCRIPT=ready\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("sharedset.md"),
+        "---\nsetup: source \"preset env.sh\"\n---\n\
+         ```markmason\nexport SHARED=prepared\nSHELL_PID=$$\n\
+         greet() {\n  printf '%s %s\\n' \"$FROM_SCRIPT\" \"$SHARED\"\n}\n\
+         mkdir -p \"$TEST_HOME/nested path\"\ncd \"$TEST_HOME/nested path\"\n```\n",
+    )
+    .unwrap();
+    let lesson = dir.path().join("lesson.md");
+    fs::write(
+        &lesson,
+        "---\nshell: bash\nsetup: mm sharedset.md\n---\n\
+         ```markmason\ntest \"$SHELL_PID\" = \"$$\"\n\
+         test \"$PWD\" -ef \"$TEST_HOME/nested path\"\ngreet\napp env SHARED\n```\n\
+         ```expected\nready prepared\nprepared\n```\n\
+         ```markmason\nread -r ANSWER\nprintf '%s\\n' \"$ANSWER\"\n```\n\
+         ```stdin\napplication input\n```\n```expected\napplication input\n```\n\
+         ```markmason\nread -r UNEXPECTED || printf 'input closed\\n'\n\
+         printf '%s\\n' \"$ANSWER\"\n```\n```expected\ninput closed\napplication input\n```\n",
+    )
+    .unwrap();
+    let output = command(&lesson).output().unwrap();
+    let result = text(&output);
+    assert!(output.status.success(), "{result}");
+    assert!(result.contains("pass 3\nfail 0"), "{result}");
+}
+
+#[test]
+fn bash_session_handles_compound_commands_and_preserves_state_after_expected_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let lesson = dir.path().join("lesson.md");
+    fs::write(
+        &lesson,
+        "---\nshell: bash\n---\n\
+        ```markmason\nif shopt -q failglob; then false; fi\n\
+        VALUE=before\nsleep 0.1 &\nBACKGROUND=$!\nwait \"$BACKGROUND\"\n\
+         for value in one two; do\n  printf '%s\\n' \"$value\"\ndone\n\
+         cat <<'END'\n  heredoc text\nEND\n\
+         printf '%s\\n' continued \\\n  command | cat\n```\n\
+         ```expected\none\ntwo\nheredoc text\ncontinued\ncommand\n```\n\
+         ```markmason (exit 1)\nprintf 'pipeline output\\n' | cat\nfalse | cat\n\
+         VALUE=must-not-run\n```\n```expected\npipeline output\n```\n\
+         ```markmason\nprintf '%s\\n' \"$VALUE\"\n```\n```expected\nbefore\n```\n",
+    )
+    .unwrap();
+    let output = command(&lesson)
+        .env("SHELLOPTS", "errexit:noclobber")
+        .env("BASHOPTS", "failglob")
+        .output()
+        .unwrap();
+    let result = text(&output);
+    assert!(output.status.success(), "{result}");
+    assert!(result.contains("pass 3\nfail 0"), "{result}");
+}
+
+#[test]
+fn bash_session_shares_state_with_scripted_terminal_commands() {
+    let dir = tempfile::tempdir().unwrap();
+    let lesson = dir.path().join("lesson.md");
+    fs::write(
+        &lesson,
+        "---\nshell: bash\n---\n\
+         ```markmason\nask() {\n  printf 'Name?\\n'\n  read -r ANSWER\n  printf 'hello %s\\n' \"$ANSWER\"\n}\n```\n\
+         ```markmason\nask\n```\n```pty\nmatch: Name?\nsend: redis{enter}\n```\n\
+         ```expected\nName?\nhello redis\n```\n\
+         ```markmason\nprintf '%s\\n' \"$ANSWER\"\n```\n```expected\nredis\n```\n",
+    )
+    .unwrap();
+    let output = command(&lesson).output().unwrap();
+    let result = text(&output);
+    assert!(output.status.success(), "{result}");
+    assert!(result.contains("pass 3\nfail 0"), "{result}");
+    assert!(!result.contains("MARKMASON_END"), "{result}");
+}
+
+#[test]
+fn bash_session_steps_after_logical_commands_not_physical_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("lesson.md"),
+        "---\nshell: bash\n---\n\
+         ```markmason\nVALUE=ready\n\
+         for value in one two; do\n  printf '%s\\n' \"$value\"\ndone\n\
+         printf '%s\\n' \"$VALUE\"\n```\n```expected\none\ntwo\nready\n```\n",
+    )
+    .unwrap();
+    let output = step_output(dir.path(), &[], "\n\n\n");
+    let result = text(&output);
+    assert!(output.status.success(), "{result}");
+    assert_eq!(result.matches("\nEnter:").count(), 3, "{result}");
+    assert!(result.contains("COMMAND 3 OF 3"), "{result}");
+    assert!(result.contains("Passed blocks: 1"), "{result}");
+}
+
+#[test]
+fn bash_sessions_stop_the_file_on_errors_and_never_restart_silently() {
+    for (script, expected) in [
+        ("false", "expected exit 0"),
+        ("exit 0", "Bash session exited"),
+        ("exec app echo replaced", "Bash session exited"),
+        ("app sleep", "timed out"),
+        (
+            ": \"${MISSING_MARKMASON_VALUE:?missing value}\"",
+            "Bash session exited",
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("must-not-run");
+        let lesson = dir.path().join("lesson.md");
+        fs::write(
+            &lesson,
+            format!(
+                "---\nshell: bash\ntimeout: 2\n---\n\
+                 ```markmason\n{script}\n```\n\
+                 ```markmason\napp mark \"{}\"\n```\n",
+                shell_path(&marker)
+            ),
+        )
+        .unwrap();
+        let output = command(&lesson).output().unwrap();
+        let result = text(&output);
+        assert!(!output.status.success(), "{result}");
+        assert!(result.contains(expected), "{expected}: {result}");
+        assert!(result.contains("pass 0\nfail 1"), "{result}");
+        assert!(!marker.exists(), "{result}");
+    }
+}
+
+fn shell_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+#[test]
+fn bash_session_listing_needs_no_bash_and_missing_bash_fails_before_commands() {
+    let dir = tempfile::tempdir().unwrap();
+    let lesson = dir.path().join("lesson.md");
+    fs::write(
+        &lesson,
+        "---\nshell: bash\n---\n```markmason\nprintf 'hello\\n'\n```\n",
+    )
+    .unwrap();
+    let empty_path = dir.path().join("empty");
+    fs::create_dir(&empty_path).unwrap();
+    let output = command(&lesson)
+        .env("PATH", &empty_path)
+        .arg("--list")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+    let output = command(&lesson).env("PATH", &empty_path).output().unwrap();
+    let result = text(&output);
+    assert!(!output.status.success(), "{result}");
+    assert!(result.contains("requires Bash on PATH"), "{result}");
+    assert!(result.contains("pass 0\nfail 1"), "{result}");
 }
 
 #[test]
@@ -1770,9 +2198,115 @@ fn windows_jobs_clean_up_descendants_even_after_the_command_exits() {
 
 #[cfg(unix)]
 #[test]
+fn bash_job_control_process_groups_are_cleaned_on_every_exit_path() {
+    for mode in ["success", "error", "exit", "timeout", "interrupt", "quit"] {
+        let dir = tempfile::tempdir().unwrap();
+        let started = dir.path().join("started");
+        let lesson = dir.path().join("lesson.md");
+        let finish = match mode {
+            "error" => "false",
+            "exit" => "exit 0",
+            "timeout" | "interrupt" => "app sleep",
+            _ => "true",
+        };
+        fs::write(
+            &lesson,
+            format!(
+                "---\nshell: bash\ntimeout: 2\n---\n```markmason\nset -m\n\
+                 app tree \"{}\" &\n\
+                 while test ! -f \"{}\"; do sleep 0.01; done\n{finish}\n```\n",
+                shell_path(&started),
+                shell_path(&started)
+            ),
+        )
+        .unwrap();
+        let output = if mode == "quit" {
+            step_output(&lesson, &[], "\n\nq\n")
+        } else if mode == "interrupt" {
+            let mut child = command(&lesson)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !started.exists() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if !started.exists() {
+                child.kill().unwrap();
+                panic!(
+                    "Job-control helper did not start: {}",
+                    text(&child.wait_with_output().unwrap())
+                );
+            }
+            assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGINT) }, 0);
+            child.wait_with_output().unwrap()
+        } else {
+            command(&lesson).output().unwrap()
+        };
+        let result = text(&output);
+        assert_eq!(
+            output.status.success(),
+            ["success", "quit"].contains(&mode),
+            "{mode}: {result}"
+        );
+        let info = fs::read_to_string(&started).unwrap();
+        let info: Vec<_> = info.lines().collect();
+        let mut survivors = Vec::new();
+        for pid in &info[..2] {
+            let pid = pid.parse().unwrap();
+            let stopped = || {
+                let stopped = unsafe { libc::kill(pid, 0) } == -1;
+                #[cfg(target_os = "macos")]
+                let stopped = stopped || {
+                    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+                    let size = i32::try_from(std::mem::size_of_val(&info)).unwrap();
+                    let count = unsafe {
+                        libc::proc_pidinfo(
+                            pid,
+                            libc::PROC_PIDTBSDINFO,
+                            0,
+                            (&mut info as *mut libc::proc_bsdinfo).cast(),
+                            size,
+                        )
+                    };
+                    count == size && info.pbi_status == libc::SZOMB
+                };
+                #[cfg(target_os = "linux")]
+                let stopped = stopped
+                    || fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+                        stat.split(") ")
+                            .nth(1)
+                            .is_some_and(|state| state.starts_with('Z'))
+                    });
+                stopped
+            };
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while !stopped() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if !stopped() {
+                survivors.push(pid);
+            }
+        }
+        for pid in &survivors {
+            unsafe { libc::kill(*pid, libc::SIGKILL) };
+        }
+        assert!(
+            survivors.is_empty(),
+            "{mode}: processes {survivors:?} survived cleanup"
+        );
+        for path in &info[2..] {
+            assert!(!Path::new(path).exists(), "{mode}: fixture {path} survived");
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn interrupts_reap_commands_stop_descendants_and_clean_up_fixtures() {
     for signal in [libc::SIGINT, libc::SIGTERM] {
-        for mode in ["command", "setup", "pty", "drain", "writer"] {
+        for mode in ["command", "setup", "pty", "drain", "writer", "shell"] {
             let dir = tempfile::tempdir().unwrap();
             let started = dir.path().join("started");
             let later = dir.path().join("later");
@@ -1788,6 +2322,10 @@ fn interrupts_reap_commands_stop_descendants_and_clean_up_fixtures() {
             let markdown = match mode {
                 "setup" => format!(
                     "---\nsetup: '{tree}'\n---\n```markmason\napp mark \"{}\"\n```\n",
+                    later.display()
+                ),
+                "shell" => format!(
+                    "---\nshell: bash\n---\n```markmason\n{tree}\n```\n```markmason\napp mark \"{}\"\n```\n",
                     later.display()
                 ),
                 "pty" => format!(

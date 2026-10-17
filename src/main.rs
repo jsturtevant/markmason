@@ -1,6 +1,7 @@
 mod cancellation;
 mod matching;
 mod process;
+mod shell;
 mod spec;
 mod step;
 #[cfg(windows)]
@@ -10,6 +11,7 @@ use anyhow::{Context, Result, bail};
 use clap::Parser;
 use regex::Regex;
 use std::{
+    cell::RefCell,
     env, fs,
     path::{Path, PathBuf},
     time::Duration,
@@ -132,6 +134,7 @@ fn resolve_setup(command: &str, dir: &Path) -> Result<Vec<String>> {
 }
 
 struct Fixture {
+    shell: RefCell<Option<shell::Session>>,
     processes: process::Scope,
     _home: TempDir,
     _config: TempDir,
@@ -236,7 +239,26 @@ impl Fixture {
                 config.path().to_string_lossy().into_owned(),
             ),
         ];
+        let shell = if spec.shell.is_some() {
+            let mut shell_env = env.clone();
+            for (key, value) in &vars {
+                process::set_env(
+                    &mut shell_env,
+                    key.trim_start_matches('$'),
+                    shell::path(Path::new(value)),
+                );
+            }
+            Some(shell::Session::new(
+                &cwd,
+                &shell_env,
+                spec.timeout
+                    .unwrap_or(Duration::from_secs_f64(options.timeout)),
+            )?)
+        } else {
+            None
+        };
         Ok(Self {
+            shell: RefCell::new(shell),
             processes,
             _home: home,
             _config: config,
@@ -256,6 +278,9 @@ impl Fixture {
     }
 
     fn close(self) -> Result<()> {
+        if let Some(shell) = self.shell.into_inner() {
+            shell.close()?;
+        }
         self.processes.close()?;
         if let Some(repo) = self._repo {
             repo.close().context("Failed to clean up cloned fixture")?;
@@ -278,7 +303,12 @@ fn execute(
     verbose: bool,
     mut stepping: Option<&mut step::Session>,
 ) -> Result<bool> {
-    let commands: Vec<_> = case.command.lines().collect();
+    let shell_mode = fixture.shell.borrow().is_some();
+    let commands = if shell_mode {
+        shell::commands(&case.command)?
+    } else {
+        case.command.lines().map(str::to_owned).collect()
+    };
     let expected = case.expected.as_ref().map(|text| fixture.substitute(text));
     let mut output = process::Output {
         text: String::new(),
@@ -286,8 +316,13 @@ fn execute(
     };
     let mut stdin = case.stdin.as_ref().map(|s| s.as_bytes().to_vec());
     let mut step_index = 0;
+    let mut shell_block = case.pty.as_deref().map(shell::Block::new);
     for (index, command) in commands.iter().enumerate() {
-        let command = fixture.substitute(command);
+        let command = if shell_mode {
+            command.clone()
+        } else {
+            fixture.substitute(command)
+        };
         if let Some(session) = stepping.as_deref_mut() {
             session.preview(
                 case,
@@ -298,7 +333,15 @@ fn execute(
             )?;
         }
         let result = (|| -> Result<process::Output> {
-            if let Some(steps) = &case.pty {
+            if let Some(shell) = fixture.shell.borrow_mut().as_mut() {
+                shell.run(
+                    &command,
+                    stdin.take(),
+                    shell_block.as_mut(),
+                    timeout,
+                    index + 1 == commands.len(),
+                )
+            } else if let Some(steps) = &case.pty {
                 let (result, completed) = process::pty(
                     &resolve(&command, dir)?,
                     &fixture.cwd,
@@ -340,13 +383,19 @@ fn execute(
             Ok(result) => result,
             Err(error) => {
                 if let Some(session) = stepping.as_deref_mut() {
-                    session.inspect(&output.text, None, step::Status::ExecutionError(&error))?;
+                    session.inspect(
+                        &output.text,
+                        None,
+                        step::Status::ExecutionError(&error),
+                        shell_mode,
+                    )?;
                 }
                 return Err(error);
             }
         };
         // ConPTY can omit the final newline; separate distinct terminal sessions.
-        if case.pty.is_some()
+        if !shell_mode
+            && case.pty.is_some()
             && !output.text.is_empty()
             && !output.text.ends_with('\n')
             && !result.text.is_empty()
@@ -367,7 +416,12 @@ fn execute(
                 Ok(()) if complete => step::Status::Passed,
                 Ok(()) => step::Status::Progress,
             };
-            session.inspect(&output.text, Some(output.code), status)?;
+            session.inspect(
+                &output.text,
+                Some(output.code),
+                status,
+                shell_mode && verdict.is_err(),
+            )?;
             if complete {
                 return verdict.map(|()| true);
             }
@@ -441,8 +495,16 @@ fn run_setup(
         if chain.contains(&path) {
             bail!("Circular Markdown setup: {}", path.display());
         }
-        let setup_spec = spec::parse(&fs::read_to_string(&path)?)
+        let inherited_shell = fixture
+            .shell
+            .borrow()
+            .is_some()
+            .then_some(spec::Shell::Bash);
+        let setup_spec = spec::parse_with_shell(&fs::read_to_string(&path)?, inherited_shell)
             .with_context(|| format!("Invalid Markdown setup {}", path.display()))?;
+        if setup_spec.shell.is_some() && inherited_shell.is_none() {
+            bail!("Markdown setup uses shell: bash; specify shell: bash in the calling file");
+        }
         if setup_spec.clone.is_some() {
             bail!(
                 "Markdown setup {} cannot use clone; put clone in the calling file",
@@ -475,14 +537,30 @@ fn run_setup(
         }
         chain.pop();
     } else {
-        let result = process::run(
-            &args,
-            setup_cwd,
-            &fixture.env,
-            None,
-            timeout,
-            &fixture.processes,
-        )
+        let result = if let Some(shell) = fixture.shell.borrow_mut().as_mut() {
+            let command = args
+                .iter()
+                .map(|arg| {
+                    let text = if Path::new(arg).is_absolute() {
+                        shell::path(Path::new(arg))
+                    } else {
+                        arg.clone()
+                    };
+                    shell::quote(&text)
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            shell.run(&command, None, None, timeout, true)
+        } else {
+            process::run(
+                &args,
+                setup_cwd,
+                &fixture.env,
+                None,
+                timeout,
+                &fixture.processes,
+            )
+        }
         .with_context(|| format!("Setup command failed: {setup}"))?;
         if result.code != 0 {
             bail!("Setup command failed: {setup}\n{}", result.text);
@@ -680,6 +758,7 @@ fn run(options: Options) -> Result<bool> {
                 } else {
                     execute(case, &fixture, &dir, timeout, verbose, None)
                 };
+                let stop_file = spec.shell.is_some() && result.is_err();
                 match result {
                     Ok(true) => {
                         passed += 1;
@@ -695,7 +774,7 @@ fn run(options: Options) -> Result<bool> {
                         }
                     }
                 }
-                if stepping.as_ref().is_some_and(step::Session::stopped) {
+                if stop_file || stepping.as_ref().is_some_and(step::Session::stopped) {
                     break;
                 }
             }

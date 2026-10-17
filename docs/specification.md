@@ -18,18 +18,18 @@ error: unknown option --not-an-option
 ```
 ````
 
-Each block is one test. Put one command on each line; blank lines are ignored.
+Each block is one test. By default, put one command on each line; blank lines are ignored.
 Commands run in order and their output is concatenated for the following
 expected block. The first nonzero exit stops the block and becomes its exit
 code; if all commands succeed, the block exits 0.
 Without an expected block, only the exit code is checked.
 
-Each command starts in the file's working directory and environment, sharing
+Without `shell: bash`, each command starts in the file's working directory and environment, sharing
 file state but not shell variables or `cd` changes. Use an explicit interpreter
 for shell scripts. A `stdin` block supplies input to the first command only;
 later commands start with empty stdin. A `pty` block's match/send steps advance
 across commands in order, and must all finish by the end of the block.
-Each PTY command uses a separate terminal session; their output is joined on
+In default direct-execution mode, each PTY command uses a separate terminal session; their output is joined on
 line boundaries.
 Timeouts apply to each command (and each pipeline stage), not the whole block.
 
@@ -55,8 +55,8 @@ also removed from their contents.
 | `pty` | Script an interactive terminal |
 
 - Successful non-PTY commands compare stdout; failures compare stdout followed by stderr.
-- Pipelines pass stdout to the next stage and stop at the first nonzero exit.
-- Commands do not run through a shell. Quotes group arguments; backslashes stay literal.
+- In direct-execution mode, pipelines pass stdout to the next stage and stop at the first nonzero exit.
+- Unless `shell: bash` is set, commands do not run through a shell. Quotes group arguments; backslashes stay literal.
 - Executables resolve through `PATH`, relative to the working directory.
 - `node ./helper.js` resolves the script beside the Markdown file.
 
@@ -72,6 +72,7 @@ timeout: 30
 
 | Field | Meaning |
 |-------|---------|
+| `shell` | Optional `bash`; keep one Bash session for this file and its Markdown prerequisites |
 | `setup` | Complete command, or `mm file.md` to reuse a Markdown setup document |
 | `clone` | GitHub `owner/repo` to clone with `gh auth status` / `gh repo clone` |
 | `tags` | Array of tags for filtering |
@@ -106,10 +107,92 @@ overrides the caller's timeout. Failure stops setup immediately and skips the
 calling file's commands. Further Markdown prerequisites are supported; cycles
 are errors. Put `clone` on the calling file, not a shared setup document.
 Other setup commands continue to run as external executables.
+In Bash mode, external setup commands execute inside the shared shell instead,
+so `setup: source "preset env.sh"` can retain variables and functions.
+Setup argument quoting and spec-relative path resolution still apply; the
+frontmatter value itself does not gain shell expansion or pipelines.
 `--list` does not execute or expand prerequisites.
 
 See the executable [setup example](../tests/cli/state.md) and its
 [getting-started document](../tests/fixtures/markdown-setup/gettingstarted.md).
+
+## Persistent Bash sessions
+
+Opt in with `shell: bash` on the calling file:
+
+````markdown
+---
+shell: bash
+setup: mm sharedset.md
+---
+
+```markmason
+export MESSAGE="hello"
+for word in one two; do
+  printf '%s: %s\n' "$MESSAGE" "$word"
+done
+```
+```expected
+hello: one
+hello: two
+```
+````
+
+One real Bash process owns assignments, exports, functions, shell options,
+and directory changes across blocks and Markdown setup. The previous
+user-command status (`$?`), last argument (`$_`), and options such as `noclobber` survive runner
+bookkeeping too. A prerequisite inherits its caller's shell mode; it can also
+declare `shell: bash` to work standalone.
+A Bash prerequisite cannot silently change a direct-execution caller's mode:
+add `shell: bash` to the caller too. Independently selected files never share
+shell sessions.
+
+The shell starts with `nounset` and `pipefail`, but not `errexit`. Markmason checks
+each top-level logical command's status; compound commands retain normal Bash
+semantics. Bash pipelines return the rightmost failing stage's status.
+An expected nonzero exit ends its block without destroying the session.
+An unexpected exit code, assertion failure, shell exit (`exit` or `exec`), or
+timeout stops the rest of that file. The runner never silently restarts Bash.
+
+Write ordinary Bash syntax directly: substitutions, redirects, `&&`, loops,
+functions, heredocs, multiline pipelines, indentation, and blank lines are
+preserved. Complete top-level shell constructs are individual commands, including
+semicolon-separated commands. With `--step`, a complete loop or function
+definition gets one pause, not one per physical line. Syntax is parsed before
+execution; Bash itself still determines which features its installed version supports.
+
+Commands are sourced separately. Interpreter metadata such as `BASH_SOURCE`,
+`LINENO`, and `PIPESTATUS` reflects that transport, not one monolithic Markdown
+script. Keep a pipeline and inspection of its `PIPESTATUS` in the same compound
+command. Names beginning with `__markmason_` are reserved for the runner.
+Standard tracing options persist, with runner bookkeeping suppressed from
+stderr tracing. Interpreter hooks and custom trace descriptors can observe
+the sourced-command transport.
+
+The shell is noninteractive and does not load profiles, `.bashrc`, `BASH_ENV`,
+or `ENV`, and ignores inherited `SHELLOPTS`/`BASHOPTS` so its starting options
+are predictable. It requires `bash`, `stty`, and `sleep` on `PATH`.
+Linux uses the installed Bash; macOS supports built-in Bash 3.2 regardless of
+the user's login shell. Native Windows requires a local Git Bash installation on
+`PATH`, alongside the native tools being tested. A WSL launcher is not a native
+Bash replacement; run Linux `mm` and Linux tools inside WSL instead.
+No PowerShell, cmd, or other-shell fallback is attempted.
+
+Runner-owned path variables are exported to Bash; on Windows their values use
+forward slashes for Bash and native-tool interoperability. Other inherited values,
+including `KUBECONFIG`, remain unchanged. Commands use real Bash expansion rather
+than textual replacement, so single quotes and escaped dollars work normally.
+Expected blocks retain the usual runner variable substitution.
+
+`stdin` remains application input for the first logical command only; later
+commands get EOF. It never carries runner control messages or walkthrough input.
+Commands with `pty` share the file's live terminal and shell state; commands
+without `pty` still capture stdout/stderr separately using the usual matching
+rules. Quitting, cancellation, failure, and normal cleanup terminate the shell
+and its owned descendants before removing fixtures.
+
+See the [executable shell guide](../tests/cli/shell.md) and the
+[terminal-driven shell walkthrough](../tests/cli/stepping.md).
 
 ## Isolation and cleanup
 
@@ -121,6 +204,8 @@ See the executable [setup example](../tests/cli/state.md) and its
 - The caller's GitHub authentication directory is preserved.
 - Cleanup removes fixtures after success or failure.
 - Unix SIGINT/SIGTERM cancel the process group, clean up, and exit 130/143.
+- On Linux and macOS, terminal cleanup also terminates other process groups
+  in the owned terminal session, including jobs started with Bash `set -m`.
 - Windows Job Objects own commands and descendants until file cleanup.
   Successful background jobs survive for later cases; timeouts and execution
   errors terminate the affected job immediately.
@@ -128,7 +213,7 @@ See the executable [setup example](../tests/cli/state.md) and its
 
 ## Variables
 
-Command blocks and expected blocks substitute:
+In direct-execution mode, command blocks and expected blocks substitute:
 
 | Variable | Value |
 |----------|-------|
@@ -138,6 +223,8 @@ Command blocks and expected blocks substitute:
 | `$E2E_HOME` | Isolated application home; rename with `--home-env` |
 
 Stdin and PTY directives remain literal.
+In Bash mode these values are environment variables in commands; only expected
+blocks use textual substitution.
 
 ## Walkthrough mode
 
@@ -180,6 +267,8 @@ Output redirected to a file or pipe remains readable without color.
   any recorded failure keeps the final exit status nonzero. Quitting without
   failures exits zero, but the summary says **stopped**, not finished, and
   unfinished blocks are not counted as passed.
+- In Bash mode, an unexpected failure instead shows **Stop this file**:
+  later blocks cannot safely continue with potentially damaged shell state.
 - File, tag, and command-name filters behave as usual. A matching command
   selects its whole block; earlier prerequisite blocks are not added.
   `--step` and `--list` cannot be combined.
