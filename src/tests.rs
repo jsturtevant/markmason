@@ -7,12 +7,17 @@ fn bash_terminal_boundaries_preserve_following_output_and_wait_for_complete_fram
         ("output\r\r\nTOKEN\r\r\nlater", "later"),
         ("output\x1b[2;1HTOKEN\x1b[3;1Hlater", "later"),
         ("TOKEN\r\n\x1b[31mlater", "\x1b[31mlater"),
+        ("TOKEN\x1b[0m\r\nlater", "later"),
+        ("trace 'TOKEN'\r\nTOKEN\r\nlater", "later"),
+        ("TOKEN not a frame\r\nTOKEN\r\nlater", "later"),
     ] {
         let end = shell::boundary_end(raw.as_bytes(), "TOKEN").unwrap();
         assert_eq!(&raw[end..], after);
     }
     assert!(shell::boundary_end(b"output\r\nTOKEN", "TOKEN").is_none());
     assert!(shell::boundary_end(b"output\r\nTOKEN\x1b[3;", "TOKEN").is_none());
+    assert!(shell::boundary_end(b"trace TOKEN\r\n", "TOKEN").is_none());
+    assert!(shell::boundary_end(b"TOKEN'\r\n", "TOKEN").is_none());
 }
 
 #[test]

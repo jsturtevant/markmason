@@ -70,7 +70,13 @@ fn step_process(
     specs: &Path,
     args: &[&str],
 ) -> (Child, ChildStdin, mpsc::Receiver<io::Result<String>>) {
-    let mut command = command(specs);
+    step_command(command(specs), args)
+}
+
+fn step_command(
+    mut command: Command,
+    args: &[&str],
+) -> (Child, ChildStdin, mpsc::Receiver<io::Result<String>>) {
     command.arg("--step");
     if !args
         .iter()
@@ -231,15 +237,86 @@ fn bash_sessions_preserve_previous_status_and_noclobber_in_both_capture_modes() 
                  {pty}```expected\nnoclobber retained\n```\n\
                  ```markmason (exit 7)\n(exit 7)\n```\n{pty}\
                  ```markmason\ntest \"$?\" -eq 7\ntest -o noclobber\nprintf 'status retained\\n'\n```\n\
-                 {pty}```expected\nstatus retained\n```\n"
+                 {pty}```expected\nstatus retained\n```\n\
+                 ```markmason (exit 1)\nset -e\n! true\n```\n{pty}\
+                 ```markmason\ntest \"$?\" -eq 1\nset +e\nprintf 'negated status retained\\n'\n```\n\
+                 {pty}```expected\nnegated status retained\n```\n"
             ),
         )
         .unwrap();
         let output = command(&lesson).output().unwrap();
         let result = text(&output);
         assert!(output.status.success(), "{result}");
-        assert!(result.contains("pass 3\nfail 0"), "{result}");
+        assert!(result.contains("pass 5\nfail 0"), "{result}");
     }
+}
+
+#[test]
+fn bash_tracing_preserves_user_options_without_tracing_transport() {
+    for pty in ["", "```pty\n```\n"] {
+        let dir = tempfile::tempdir().unwrap();
+        let lesson = dir.path().join("lesson.md");
+        fs::write(
+            &lesson,
+            format!(
+                "---\nshell: bash\n---\n\
+                 ```markmason\nPS4='USER_TRACE '\nset -xv\n```\n{pty}\
+                 ```markmason\n[[ $- == *x* && $- == *v* ]]\nprintf '%s\\n' traced\n```\n\
+                 {pty}```expected-contains\ntraced\n```\n\
+                 ```markmason\nset +xv\n[[ $- != *x* && $- != *v* ]]\nprintf '%s\\n' after\n```\n\
+                 {pty}```expected-contains\nafter\n```\n"
+            ),
+        )
+        .unwrap();
+        let output = command(&lesson).arg("--verbose").output().unwrap();
+        let result = text(&output);
+        assert!(output.status.success(), "{result}");
+        assert!(result.contains("pass 3\nfail 0"), "{result}");
+        assert!(!result.contains("__markmason_"), "{result}");
+        assert!(!result.contains("MARKMASON_END"), "{result}");
+        if !pty.is_empty() {
+            assert!(result.contains("USER_TRACE printf"), "{result}");
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn bash_relative_sleep_path_survives_directory_changes_and_step_pauses() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("tools")).unwrap();
+    fs::create_dir(dir.path().join("nested")).unwrap();
+    std::os::unix::fs::symlink("/bin/sleep", dir.path().join("tools/sleep")).unwrap();
+    let lesson = dir.path().join("lesson.md");
+    fs::write(
+        &lesson,
+        "---\nshell: bash\n---\n```markmason\ncd nested\nprintf 'changed\\n'\n```\n\
+         ```expected\nchanged\n```\n",
+    )
+    .unwrap();
+    let mut command = command(&lesson);
+    let path = command
+        .get_envs()
+        .find(|(key, _)| *key == "PATH")
+        .unwrap()
+        .1
+        .unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(PathBuf::from("tools")).chain(std::env::split_paths(path)),
+    )
+    .unwrap();
+    command.env("PATH", path).arg("--cwd").arg(dir.path());
+    let (mut child, mut input, receive) = step_command(command, &[]);
+    let mut transcript = String::new();
+    next_step(&mut child, &receive, &mut transcript);
+    std::thread::sleep(Duration::from_millis(150));
+    input.write_all(b"\n\n").unwrap();
+    drop(input);
+    let output = child.wait_with_output().unwrap();
+    transcript.extend(receive.into_iter().map(Result::unwrap));
+    let result = format!("{transcript}{}", text(&output));
+    assert!(output.status.success(), "{result}");
+    assert!(result.contains("Passed blocks: 1"), "{result}");
 }
 
 #[test]

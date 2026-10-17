@@ -165,6 +165,9 @@ Commands are sourced separately. Interpreter metadata such as `BASH_SOURCE`,
 `LINENO`, and `PIPESTATUS` reflects that transport, not one monolithic Markdown
 script. Keep a pipeline and inspection of its `PIPESTATUS` in the same compound
 command. Names beginning with `__markmason_` are reserved for the runner.
+Standard tracing options persist, with runner bookkeeping suppressed from
+stderr tracing. Interpreter hooks and custom trace descriptors can observe
+the sourced-command transport.
 
 The shell is noninteractive and does not load profiles, `.bashrc`, `BASH_ENV`,
 or `ENV`, and ignores inherited `SHELLOPTS`/`BASHOPTS` so its starting options

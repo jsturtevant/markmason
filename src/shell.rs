@@ -13,34 +13,45 @@ use tempfile::TempDir;
 
 const BOOTSTRAP: &str = r#"set -uo pipefail
 readonly __markmason_root=$1
-readonly __markmason_sleep=$(type -P sleep)
+__markmason_sleep=$(type -P sleep)
 : "${__markmason_sleep:?shell: bash requires sleep on PATH}"
+case "$__markmason_sleep" in
+    /*) ;;
+    *) __markmason_sleep="$PWD/$__markmason_sleep" ;;
+esac
+readonly __markmason_sleep
 set --
 command stty -echo || exit
 builtin printf 'ready\n' >| "$__markmason_root/ready"
 __markmason_sequence=0
 __markmason_status=0
 __markmason_last_arg=
-__markmason_previous_status() { return "$__markmason_status"; }
+__markmason_flags=$-
+__markmason_previous_status() {
+    {
+        case "$__markmason_flags" in *v*) set -v ;; esac
+        case "$__markmason_flags" in *x*) set -x ;; esac
+        return "$__markmason_status"
+    } 2>/dev/null
+}
 while :; do
     __markmason_request="$__markmason_root/command-$__markmason_sequence"
     while ! builtin test -f "$__markmason_request/ready"; do
         "$__markmason_sleep" 0.05 || exit
     done
+    __markmason_captured=
     if builtin test -f "$__markmason_request/pty"; then
-        if __markmason_previous_status "$__markmason_last_arg"; then
-            builtin . "$__markmason_request/script"
-        else
-            builtin . "$__markmason_request/script"
-        fi
+        builtin . "$__markmason_request/script"
     else
-        if __markmason_previous_status "$__markmason_last_arg"; then
-            builtin . "$__markmason_request/script" < "$__markmason_request/input" >> "$__markmason_root/stdout" 2>> "$__markmason_root/stderr"
-        else
-            builtin . "$__markmason_request/script" < "$__markmason_request/input" >> "$__markmason_root/stdout" 2>> "$__markmason_root/stderr"
-        fi
+        builtin . "$__markmason_request/script" < "$__markmason_request/input" >> "$__markmason_root/stdout" 2>> "$__markmason_root/stderr"
     fi
-    __markmason_status=$?
+    {
+        __markmason_source_status=$?
+        if builtin test "$__markmason_captured" != yes; then
+            __markmason_status=$__markmason_source_status __markmason_flags=$-
+        fi
+        set +xv
+    } 2>/dev/null
     IFS= builtin read -r __markmason_boundary < "$__markmason_request/boundary"
     builtin printf '\r\n%s\r\n' "$__markmason_boundary"
     builtin printf '%s\n' "$__markmason_status" >| "$__markmason_request/status"
@@ -104,7 +115,7 @@ impl<'a> Block<'a> {
 }
 
 fn before_boundary<'a>(text: &'a str, boundary: &str) -> Option<&'a str> {
-    text.find(boundary).map(|position| {
+    boundary_frame(text.as_bytes(), boundary).map(|(position, _)| {
         let text = &text[..position];
         text.strip_suffix("\r\r\n")
             .or_else(|| text.strip_suffix("\r\n"))
@@ -114,23 +125,28 @@ fn before_boundary<'a>(text: &'a str, boundary: &str) -> Option<&'a str> {
 }
 
 pub(super) fn boundary_end(bytes: &[u8], boundary: &str) -> Option<usize> {
-    static LINE_START: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"\x1b\[[0-9]+;1[Hf]").unwrap());
-    let start = bytes
+    boundary_frame(bytes, boundary).map(|(_, end)| end)
+}
+
+fn boundary_frame(bytes: &[u8], boundary: &str) -> Option<(usize, usize)> {
+    static FRAME_END: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^(?:\r|\x1b\[[?]?[0-9;]*[a-zA-Z])*?(?:\n|\x1b\[[0-9]+;1[Hf])").unwrap()
+    });
+    for (position, _) in bytes
         .windows(boundary.len())
-        .position(|part| part == boundary.as_bytes())?
-        + boundary.len();
-    let suffix = &bytes[start..];
-    let newline = suffix
-        .iter()
-        .position(|byte| *byte == b'\n')
-        .map(|index| index + 1);
-    let cursor = LINE_START.find(suffix).map(|matched| matched.end());
-    newline
-        .into_iter()
-        .chain(cursor)
-        .min()
-        .map(|end| start + end)
+        .enumerate()
+        .filter(|(_, part)| *part == boundary.as_bytes())
+    {
+        let prefix = pty_text(&String::from_utf8_lossy(&bytes[..position]));
+        if !prefix.is_empty() && !prefix.ends_with('\n') {
+            continue;
+        }
+        let start = position + boundary.len();
+        if let Some(end) = FRAME_END.find(&bytes[start..]) {
+            return Some((position, start + end.end()));
+        }
+    }
+    None
 }
 
 fn read_capture(path: &Path, offset: u64) -> Result<Vec<u8>> {
@@ -243,7 +259,10 @@ impl Session {
         fs::write(
             directory.join("script"),
             format!(
-                "{command}\n__markmason_status=$? __markmason_last_arg=${{_-}}\n__markmason_previous_status \"$__markmason_last_arg\"\n"
+                "{{\nif __markmason_previous_status \"$__markmason_last_arg\"; then\n\
+                 {command}\nelse\n{command}\nfi\n\
+                 {{\n__markmason_status=$? __markmason_last_arg=${{_-}} __markmason_flags=$- __markmason_captured=yes\n\
+                 set +xv\n}} 2>/dev/null\n}}\n"
             ),
         )?;
         fs::write(directory.join("input"), input.unwrap_or_default())?;
