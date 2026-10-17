@@ -19,6 +19,7 @@ path = "tests/support/test_cli.rs"
 anstream = "1"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+dialoguer = { version = "0.12", default-features = false, features = ["fuzzy-select"] }
 dunce = "1"
 portable-pty = "0.9"
 pulldown-cmark = { version = "0.13", default-features = false }

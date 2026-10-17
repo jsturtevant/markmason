@@ -45,11 +45,16 @@ mm                         # Defaults to tests/cli
 mm path/to/specs            # Another directory
 mm --list                  # Discover without executing
 mm --file-pattern greet    # Select files by regex
-mm --step --file-pattern '^greet\.md$'  # Walk through one file
+mm --step                  # Pick a file and walk through it
+mm --step --file-pattern '^greet\.md$'  # Skip the picker
 ```
 
-With `--step`, inspect each command's expected and actual output before moving
-on. Press **Enter** to continue, or **q then Enter** to quit.
+With `--step`, choose a file using the arrow keys or type to search, then press
+**Enter**. **Esc** cancels without running anything. An explicit `--file-pattern`
+(or its environment variable) skips the picker.
+
+During the walkthrough, inspect each command's expected and actual output.
+Press **Enter** to continue, or **q then Enter** to quit.
 
 ## Live examples
 

@@ -48,7 +48,7 @@ struct Options {
     /// Print commands without executing them or creating fixtures.
     #[arg(long)]
     list: bool,
-    /// Walk through commands interactively, inspecting expected and actual output.
+    /// Walk through commands; pick a file interactively unless --file-pattern is set.
     #[arg(long, conflicts_with = "list")]
     step: bool,
     #[arg(long)]
@@ -482,6 +482,14 @@ fn run(options: Options) -> Result<bool> {
     }
     if specs.is_empty() {
         bail!("No markdown test specs matched in {}", root.display());
+    }
+    if options.step && include.is_none() {
+        let files: Vec<_> = specs.iter().map(|(file, _, _)| file.as_str()).collect();
+        let Some(index) = step::pick_file(&files)? else {
+            println!("Walkthrough cancelled. No commands were run.");
+            return Ok(true);
+        };
+        specs = vec![specs.swap_remove(index)];
     }
     // Resolve authentication before replacing XDG_CONFIG_HOME in each fixture.
     let gh_config = if options.list {

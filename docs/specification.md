@@ -113,8 +113,18 @@ Stdin and PTY directives remain literal.
 
 ## Walkthrough mode
 
-Use `--step` to turn the same specs into a guided tutorial. Select one file with
-the existing file filter:
+Use `--step` to turn the same specs into a guided tutorial:
+
+```sh
+mm tests/cli --step
+```
+
+A searchable picker lists the files matching your filters. Use the arrow keys
+or type to search, then press **Enter** to choose one file. **Esc** cancels before
+any setup, commands, or fixtures run. This also works when only one file matches.
+
+To skip the picker, select files with `--file-pattern` (or its environment
+variable). Without an interactive terminal, a file filter is required:
 
 ```sh
 mm tests/cli --step --file-pattern '^greet\.md$'
@@ -125,9 +135,9 @@ command text, expected output, actual output, exit code, and result.
 Colors are automatic in supported terminals; `NO_COLOR=1` disables them.
 Output redirected to a file or pipe remains readable without color.
 
-- Setup and the first command run immediately. After each command, **Enter**
-  advances to the next command or block. The final pause lets you inspect the
-  last result before finishing.
+- After file selection, setup and the first command run immediately. After each
+  command, **Enter** advances to the next command or block. The final pause lets
+  you inspect the last result before finishing.
 - **q then Enter** quits. Closed input also stops; neither runs the remaining
   commands. Temporary fixtures stay available while paused and are cleaned up
   when you finish, quit, or cancel.

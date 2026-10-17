@@ -1,8 +1,9 @@
 use crate::{cancellation, matching, spec};
 use anstream::{AutoStream, ColorChoice};
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
+use dialoguer::{FuzzySelect, console::Term, theme::ColorfulTheme};
 use std::{
-    io::{self, BufRead, Write},
+    io::{self, BufRead, IsTerminal, Write},
     sync::mpsc::{self, Receiver},
     thread,
     time::Duration,
@@ -15,6 +16,31 @@ const GREEN: &str = "\x1b[1;32m";
 const RED: &str = "\x1b[1;31m";
 const YELLOW: &str = "\x1b[1;33m";
 const RULE: &str = "------------------------------------------------------------";
+
+pub fn pick_file(files: &[&str]) -> Result<Option<usize>> {
+    if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
+        bail!(
+            "The walkthrough file picker needs an interactive terminal; \
+             select a file with --file-pattern REGEX"
+        );
+    }
+    cancellation::check()?;
+    let term = Term::stderr();
+    term.write_line("Use arrow keys; type to search; Enter selects; Esc cancels.")?;
+    let labels: Vec<_> = files
+        .iter()
+        .map(|file| file.escape_debug().to_string())
+        .collect();
+    let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
+        .with_prompt("Choose a Markdown walkthrough")
+        .items(&labels)
+        .default(0)
+        .interact_on_opt(&term);
+    term.show_cursor()
+        .context("Failed to restore the terminal cursor")?;
+    cancellation::check()?;
+    selection.context("Failed to select a walkthrough file")
+}
 
 pub enum Status<'a> {
     Progress,

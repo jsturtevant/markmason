@@ -70,8 +70,15 @@ fn step_process(
     specs: &Path,
     args: &[&str],
 ) -> (Child, ChildStdin, mpsc::Receiver<io::Result<String>>) {
-    let mut child = command(specs)
-        .arg("--step")
+    let mut command = command(specs);
+    command.arg("--step");
+    if !args
+        .iter()
+        .any(|arg| *arg == "--file-pattern" || arg.starts_with("--file-pattern="))
+    {
+        command.args(["--file-pattern", "."]);
+    }
+    let mut child = command
         .args(args)
         .env("NO_COLOR", "1")
         .env_remove("CLICOLOR_FORCE")
@@ -127,6 +134,150 @@ fn next_step(
                 child.wait().unwrap();
                 panic!("Walkthrough did not reach a pause: {error:?}\n{transcript}");
             }
+        }
+    }
+}
+
+#[test]
+fn step_mode_requires_a_terminal_or_an_explicit_file_filter() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("must-not-run");
+    fs::write(
+        dir.path().join("lesson.md"),
+        format!(
+            "---\nsetup: app mark \"{}\"\n---\n```markmason\napp fail\n```\n",
+            marker.display()
+        ),
+    )
+    .unwrap();
+    let output = command(dir.path()).arg("--step").output().unwrap();
+    let result = text(&output);
+    assert!(!output.status.success(), "{result}");
+    assert!(
+        result.contains("picker needs an interactive terminal"),
+        "{result}"
+    );
+    assert!(result.contains("--file-pattern REGEX"), "{result}");
+    assert!(!marker.exists(), "{result}");
+    assert!(!result.contains("MARKMASON WALKTHROUGH"), "{result}");
+}
+
+#[test]
+fn step_mode_accepts_environment_file_filters_without_a_picker() {
+    for prefix in ["E2E_", "TUTORIAL_"] {
+        let dir = tempfile::tempdir().unwrap();
+        let selected = dir.path().join("selected");
+        let skipped = dir.path().join("skipped");
+        for (name, marker) in [("chosen.md", &selected), ("other.md", &skipped)] {
+            fs::write(
+                dir.path().join(name),
+                format!("```markmason\napp mark \"{}\"\n```\n", marker.display()),
+            )
+            .unwrap();
+        }
+        let output = command(dir.path())
+            .args(["--step", "--env-prefix", prefix])
+            .env(format!("{prefix}FILE_PATTERN"), "^chosen\\.md$")
+            .output()
+            .unwrap();
+        let result = text(&output);
+        assert!(output.status.success(), "{result}");
+        assert!(selected.exists(), "{result}");
+        assert!(!skipped.exists(), "{result}");
+        assert!(result.contains("chosen.md  |  Block 1 of 1"), "{result}");
+        assert!(
+            !result.contains("Choose a Markdown walkthrough"),
+            "{result}"
+        );
+    }
+}
+
+#[test]
+fn step_mode_picker_searches_navigates_and_cancels_before_setup() {
+    for (input, exit) in [
+        ("selected{enter}", 0),
+        ("{down}{enter}", 0),
+        ("\x1b", 0),
+        #[cfg(unix)]
+        ("\x03", 130),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let lessons = dir.path().join("lessons");
+        fs::create_dir_all(lessons.join("nested")).unwrap();
+        for (name, tags) in [
+            ("a-first.md", "tutorial"),
+            ("nested/b selected.md", "tutorial"),
+            ("other.md", "other"),
+            ("ignored.md", "tutorial"),
+        ] {
+            let key = Path::new(name).file_stem().unwrap().to_str().unwrap();
+            fs::write(
+                lessons.join(name),
+                format!(
+                    "---\ntags: [{tags}]\nsetup: app mark \"{}\"\n---\n\
+                     ```markmason\napp mark \"{}\"\n```\n",
+                    dir.path().join(format!("{key}-setup")).display(),
+                    dir.path().join(format!("{key}-command")).display(),
+                ),
+            )
+            .unwrap();
+        }
+        let cancelled = matches!(input, "\x1b" | "\x03");
+        let next = if cancelled {
+            ""
+        } else {
+            "match: Enter: Finish walkthrough\nsend: {enter}\n"
+        };
+        fs::write(
+            dir.path().join("driver.md"),
+            format!(
+                "```markmason (exit {exit})\n\"{}\" \"{}\" --step --home-env TEST_HOME \
+                 --tags tutorial --file-exclude ignored --test-name-pattern \"^app mark\"\n```\n\
+                 ```pty\nmatch: nested/b selected.md\nsend: {input}\n{next}```\n",
+                env!("CARGO_BIN_EXE_mm"),
+                lessons.display(),
+            ),
+        )
+        .unwrap();
+        let output = command(dir.path())
+            .args(["--file-pattern", "^driver\\.md$", "--verbose"])
+            .output()
+            .unwrap();
+        let result = text(&output);
+        assert!(output.status.success(), "{result}");
+        assert!(result.contains("Choose a Markdown walkthrough"), "{result}");
+        assert!(!result.contains("other.md"), "{result}");
+        assert!(!result.contains("ignored.md"), "{result}");
+        for key in ["a-first", "other", "ignored"] {
+            for phase in ["setup", "command"] {
+                assert!(
+                    !dir.path().join(format!("{key}-{phase}")).exists(),
+                    "{result}"
+                );
+            }
+        }
+        for phase in ["setup", "command"] {
+            assert_eq!(
+                dir.path().join(format!("b selected-{phase}")).exists(),
+                !cancelled,
+                "{result}"
+            );
+        }
+        if input == "\x1b" {
+            assert!(
+                result.contains("Walkthrough cancelled. No commands were run."),
+                "{result}"
+            );
+            assert!(!result.contains("MARKMASON WALKTHROUGH"), "{result}");
+        } else if cancelled {
+            assert!(result.contains("Interrupted by signal 2"), "{result}");
+            assert!(!result.contains("MARKMASON WALKTHROUGH"), "{result}");
+        } else {
+            assert!(
+                result.contains("nested/b selected.md  |  Block 1 of 1"),
+                "{result}"
+            );
+            assert!(result.contains("Walkthrough finished"), "{result}");
         }
     }
 }

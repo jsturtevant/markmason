@@ -9,8 +9,13 @@ pace. From this checkout, build `mm` and the [test CLI](../support/README.md) wi
 `just test-markdown`, then put `target/debug` and `target/debug/examples` on `PATH`.
 
 ```sh
+mm --step --home-env TEST_HOME
+# Or select this file directly, without the picker:
 mm --step --file-pattern '^walkthrough\.md$' --home-env TEST_HOME
 ```
+
+In the picker, type `walkthrough` or use the arrow keys to select this file,
+then press Enter. Esc cancels without running any commands.
 
 Press Enter after each result to continue, or type q then Enter to stop.
 The section headings below become the titles in the walkthrough.
