@@ -328,6 +328,9 @@ inputs:
   configured application home are rejected rather than silently overridden.
   `BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `TERM`, and the reserved
   `__markmason_` prefix are also protected.
+- On Windows, input declarations that differ only in capitalization are rejected
+  before prompting or setup. Use identical spelling across prerequisites and
+  Bash commands; Bash variable lookup is case-sensitive even on Windows.
 - These are visible, plain-text prompts: do not use them for secrets.
 
 See the [real-terminal input tests](../tests/cli/inputs.md).

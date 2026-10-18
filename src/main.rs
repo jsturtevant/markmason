@@ -583,13 +583,21 @@ fn collect_inputs(
     inputs: &mut Vec<spec::Input>,
 ) -> Result<()> {
     for input in &spec.inputs {
-        if !inputs.iter().any(|existing| {
+        if let Some(existing) = inputs.iter().find(|existing| {
             if cfg!(windows) {
                 existing.name.eq_ignore_ascii_case(&input.name)
             } else {
                 existing.name == input.name
             }
         }) {
+            if existing.name != input.name {
+                bail!(
+                    "Conflicting input declarations {} and {}: Windows environment names are case-insensitive; use identical spelling across Markdown prerequisites",
+                    existing.name,
+                    input.name
+                );
+            }
+        } else {
             inputs.push(input.clone());
         }
     }

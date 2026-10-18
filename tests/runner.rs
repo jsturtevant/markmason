@@ -1059,6 +1059,46 @@ fn declared_inputs_are_deduplicated_with_setup_but_do_not_leak_between_files() {
 
 #[cfg(windows)]
 #[test]
+fn declared_inputs_reject_windows_case_collisions_before_prompting_or_setup() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("must-not-run");
+    let lesson = dir.path().join("lesson.md");
+    fs::write(
+        &lesson,
+        "---\nshell: bash\ninputs:\n  MARKMASON_CASE_VALUE: Root value\nsetup: mm shared.md\n---\n```markmason\napp echo ready\n```\n",
+    ).unwrap();
+    fs::write(
+        dir.path().join("shared.md"),
+        format!("---\ninputs:\n  markmason_case_value: Prerequisite value\n---\n```markmason\napp mark \"{}\"\n```\n", marker.display()),
+    ).unwrap();
+    for provided in [false, true] {
+        for stepping in [false, true] {
+            let mut cmd = command(&lesson);
+            cmd.env_remove("MARKMASON_CASE_VALUE").stdin(Stdio::null());
+            if provided {
+                cmd.env("MARKMASON_CASE_VALUE", "provided");
+            }
+            if stepping {
+                cmd.arg("--step");
+            }
+            let output = cmd.output().unwrap();
+            let result = text(&output);
+            assert!(!output.status.success(), "{result}");
+            assert!(
+                result.contains("Conflicting input declarations"),
+                "{result}"
+            );
+            assert!(
+                !result.contains("(required; q + Enter cancels):"),
+                "{result}"
+            );
+            assert!(!marker.exists(), "{result}");
+        }
+    }
+}
+
+#[cfg(windows)]
+#[test]
 fn declared_inputs_reuse_windows_environment_values_with_declared_casing_in_bash() {
     let dir = tempfile::tempdir().unwrap();
     let lesson = dir.path().join("lesson.md");
