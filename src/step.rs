@@ -428,6 +428,7 @@ impl Session {
         }
         for line in lines {
             if let Some((_, columns)) = size {
+                let line = line.replace('\t', "    ");
                 writeln!(
                     self.output,
                     "{}",

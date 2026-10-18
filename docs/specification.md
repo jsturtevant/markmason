@@ -256,8 +256,9 @@ execute as complete logical commands, not isolated physical lines.
 Supported terminals redraw the current block in an alternate screen, restoring
 the original screen on finish, quit, or cancellation. Long panes show a focused
 window around the current command or latest output, with hidden-line counts.
-Long display lines are clipped to the terminal width; assertions always use
-complete output. Terminals too small to fit the view fall back to full,
+Long display lines are clipped to the terminal width and tabs are visually
+expanded in the reusable view; assertions always use complete, unmodified
+output. Terminals too small to fit the view fall back to full,
 append-only snapshots on the normal screen. Redirected output and `TERM=dumb` also produce full,
 append-only snapshots. Colors are automatic; `NO_COLOR=1` disables color without
 disabling the reusable view.

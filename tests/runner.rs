@@ -996,10 +996,11 @@ fn step_terminal_reuses_its_viewport_and_restores_the_screen_with_color_disabled
     ] {
         let dir = tempfile::tempdir().unwrap();
         let lesson = dir.path().join("lesson.md");
+        let tabbed = format!("\t{}", "x".repeat(73));
         fs::write(
         &lesson,
-        "## First section\n```markmason\napp echo first\napp echo second\n```\n```expected\nfirst\nsecond\n```\n\
-         ## Second section\n```markmason\napp echo third\n```\n```expected\nthird\n```\n",
+        format!("## First section\n```markmason\napp echo first\napp echo second\napp echo \"{tabbed}\"\n```\n```expected\nfirst\nsecond\n{tabbed}\n```\n\
+         ## Second section\n```markmason\napp echo third\n```\n```expected\nthird\n```\n"),
     ).unwrap();
         if long_diagnostic {
             fs::write(&lesson, r#"---
@@ -1140,6 +1141,13 @@ send: ignored{enter}
         for frame in &frames {
             let screen = frame.split("\x1b[?1049l").next().unwrap();
             assert!(screen.lines().count() < usize::from(rows), "{screen}");
+            for line in screen.lines() {
+                assert!(!line.contains('\t'), "{screen}");
+                assert!(
+                    dialoguer::console::measure_text_width(line) < usize::from(cols),
+                    "{screen}"
+                );
+            }
         }
         assert!(
             frames
