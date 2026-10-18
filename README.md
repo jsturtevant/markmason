@@ -55,8 +55,12 @@ With `--step`, choose a file using the arrow keys or type to search, then press
 **Enter**. **Esc** cancels without running anything. An explicit `--file-pattern`
 (or its environment variable) or a direct Markdown file path skips the picker.
 
-During the walkthrough, inspect each command's expected and actual output.
-Press **Enter** to continue, or **q then Enter** to quit.
+During the walkthrough, a reusable Markdown-style view shows the section heading,
+the code block with a moving execution marker, and expected/actual output.
+Actual output accumulates within the block and resets at the next block.
+Press **Enter** for the next command, **b then Enter** to run to the next block,
+**f then Enter** to finish the file, or **q then Enter** to quit. These shortcuts
+run commands rather than skipping them; failures always pause for inspection.
 
 To prepare a walkthrough from another Markdown document, add
 `setup: mm gettingstarted.md` in its frontmatter. The prerequisite runs

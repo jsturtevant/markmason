@@ -22,6 +22,7 @@ pub enum Shell {
 #[derive(Debug)]
 pub struct Case {
     pub title: Option<String>,
+    pub source: String,
     pub command: String,
     pub expected: Option<String>,
     pub exit_code: i32,
@@ -252,6 +253,7 @@ pub fn parse_with_shell(content: &str, shell: Option<Shell>) -> Result<Spec> {
                 }
                 spec.cases.push(Case {
                     title: title.clone(),
+                    source: block.to_owned(),
                     command: if spec.shell.is_some() {
                         block.to_owned()
                     } else {

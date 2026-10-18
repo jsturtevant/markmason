@@ -17,7 +17,13 @@ mm --step --file-pattern '^walkthrough\.md$' --home-env TEST_HOME
 In the picker, type `walkthrough` or use the arrow keys to select this file,
 then press Enter. Esc cancels without running any commands.
 
-Press Enter after each result to continue, or type q then Enter to stop.
+The current Markdown section stays in view: heading, full code block, moving
+execution marker, expected output, and collecting actual output. The output
+area resets for each new block.
+
+Press Enter after each result to continue, b then Enter to run the rest of the
+block and stop before the next block, f then Enter to finish the file, or q then
+Enter to stop. Running ahead still checks every assertion and pauses on failure.
 The section headings below become the titles in the walkthrough.
 The [walkthrough tests](stepping.md) exercise `mm --step` itself using a real
 terminal and scripted keypresses.

@@ -28,9 +28,9 @@ send: {enter}
 
 ```expected-contains
 lesson.md | Block 1 of 2
-Build output one command at a time
+## Build output one command at a time
 COMMAND 1 OF 2
-$ mm-test-cli echo first
+> mm-test-cli echo first  [running]
 EXPECTED OUTPUT (whole block; exact, exit 0)
 | first
 | second
@@ -38,13 +38,13 @@ ACTUAL OUTPUT SO FAR
 | first
 IN PROGRESS Assertion checked after the block finishes.
 COMMAND 2 OF 2
-$ mm-test-cli echo second
+> mm-test-cli echo second  [running]
 ACTUAL OUTPUT
 | first
 | second
 PASS Block matched expectations.
 lesson.md | Block 2 of 2
-Send input to the application
+## Send input to the application
 | application input
 ACTUAL OUTPUT
 | application input
@@ -87,6 +87,45 @@ COMMAND 1 OF 1
 | two
 Walkthrough finished
 Passed blocks: 2
+Failed blocks: 0
+```
+
+## Run to the next block, then finish the file
+
+The terminal redraws the same Markdown block instead of appending a new command
+card. `b` runs the remaining commands and checks their assertion, then pauses
+before any command in the next block. `f` runs the rest of the file.
+
+```markmason
+mm tests/fixtures/walkthrough/navigation.md --step
+```
+
+```pty
+match-raw: {alt-screen}
+send:
+match: Enter: Next command
+send: b{enter}
+match: Enter: Run first command
+send: f{enter}
+```
+
+```expected-contains
+navigation.md | Block 1 of 3
+> mm-test-cli echo first  [running]
+> mm-test-cli echo second  [running]
+ACTUAL OUTPUT
+| first
+| second
+PASS Block matched expectations.
+navigation.md | Block 2 of 3
+> mm-test-cli echo third  [next]
+ACTUAL OUTPUT SO FAR
+| (empty)
+Ready. No commands in this block have run.
+navigation.md | Block 3 of 3
+| last
+Walkthrough finished
+Passed blocks: 3
 Failed blocks: 0
 ```
 
@@ -215,12 +254,12 @@ send: {enter}
 
 ```expected-contains
 walkthrough.md | Block 1 of 2
-Inspect the prepared application state
+## Inspect the prepared application state
 ACTUAL OUTPUT
 | ready
 PASS Block matched expectations.
 walkthrough.md | Block 2 of 2
-Inspect the prepared configuration
+## Inspect the prepared configuration
 ACTUAL OUTPUT
 | true
 PASS Block matched expectations.

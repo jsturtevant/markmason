@@ -964,7 +964,7 @@ fn step_mode_filters_files_and_checks_combined_output_after_the_block() {
         "lesson.md  |  Block 1 of 1",
         "Print two lines",
         "COMMAND 1 OF 2",
-        "$ app echo first",
+        "```markmason\n > app echo first  [running]\n   app echo second\n```",
         "EXPECTED OUTPUT (whole block; exact, exit 0)\n  | first\n  | second",
         "ACTUAL OUTPUT SO FAR\n  | first\n\n",
         "IN PROGRESS",
@@ -979,6 +979,196 @@ fn step_mode_filters_files_and_checks_combined_output_after_the_block() {
     assert!(!result.contains("other.md"), "{result}");
     assert!(!result.contains("DIFF (expected vs actual)"), "{result}");
     assert!(!result.contains('\x1b'), "{result}");
+}
+
+#[cfg(unix)]
+#[test]
+fn step_terminal_reuses_its_viewport_and_restores_the_screen_with_color_disabled() {
+    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+    use std::io::Read;
+
+    let dir = tempfile::tempdir().unwrap();
+    let lesson = dir.path().join("lesson.md");
+    fs::write(
+        &lesson,
+        "## First section\n```markmason\napp echo first\napp echo second\n```\n```expected\nfirst\nsecond\n```\n\
+         ## Second section\n```markmason\napp echo third\n```\n```expected\nthird\n```\n",
+    ).unwrap();
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_mm"));
+    command.arg(&lesson);
+    command.arg("--step");
+    command.env("NO_COLOR", "1");
+    command.env("TERM", "xterm-256color");
+    command.env(
+        "PATH",
+        std::env::join_paths(
+            std::iter::once(helper().parent().unwrap().to_owned())
+                .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+        )
+        .unwrap(),
+    );
+    let mut child = pair.slave.spawn_command(command).unwrap();
+    drop(pair.slave);
+    let mut input = pair.master.take_writer().unwrap();
+    let mut reader = pair.master.try_clone_reader().unwrap();
+    let (send, receive) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bytes = [0; 4096];
+        loop {
+            match reader.read(&mut bytes) {
+                Ok(0) => break,
+                Ok(count) => {
+                    if send.send(bytes[..count].to_vec()).is_err() {
+                        break;
+                    }
+                }
+                Err(error)
+                    if error.kind() == io::ErrorKind::BrokenPipe
+                        || error.raw_os_error() == Some(libc::EIO) =>
+                {
+                    break;
+                }
+                Err(error) => panic!("Failed reading terminal walkthrough: {error}"),
+            }
+        }
+    });
+    let mut bytes = Vec::new();
+    let mut controls = 0;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if Instant::now() > deadline {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!(
+                "Terminal walkthrough timed out: {}",
+                String::from_utf8_lossy(&bytes)
+            );
+        }
+        if let Ok(chunk) = receive.recv_timeout(Duration::from_millis(20)) {
+            bytes.extend(chunk);
+        }
+        let raw = String::from_utf8_lossy(&bytes);
+        if controls == 0 && raw.contains("Enter: Next command") {
+            input.write_all(b"b\r").unwrap();
+            controls += 1;
+        } else if controls == 1 && raw.contains("Enter: Run first command") {
+            input.write_all(b"f\r").unwrap();
+            controls += 1;
+        }
+        if let Some(status) = child.try_wait().unwrap() {
+            assert!(status.success(), "{raw}");
+            break;
+        }
+    }
+    drop(input);
+    drop(pair.master);
+    bytes.extend(receive.into_iter().flatten());
+    let raw = String::from_utf8_lossy(&bytes);
+    assert!(raw.contains("\x1b[?1049h"), "{raw}");
+    assert!(raw.contains("\x1b[?1049l"), "{raw}");
+    assert!(!raw.contains("\x1b[1;"), "{raw}");
+    let frames: Vec<_> = raw.split("\x1b[H\x1b[2J").skip(1).collect();
+    assert!(frames.len() >= 6, "{raw}");
+    assert!(
+        frames
+            .iter()
+            .any(|frame| frame.contains("> app echo first  [done]\r\n   app echo second")),
+        "{raw}"
+    );
+    assert!(
+        frames.iter().any(|frame| {
+            frame.contains("## Second section")
+                && frame.contains("ACTUAL OUTPUT SO FAR\r\n  | (empty)")
+                && frame.contains("[next]")
+                && !frame.contains("| first")
+        }),
+        "{raw}"
+    );
+    assert!(raw.contains("Passed blocks: 2"), "{raw}");
+}
+
+#[test]
+fn step_navigation_runs_remaining_commands_and_pauses_before_the_next_block() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("first");
+    let second = dir.path().join("second");
+    let third = dir.path().join("third");
+    let last = dir.path().join("last");
+    fs::write(
+        dir.path().join("lesson.md"),
+        format!(
+            "## One\n```markmason\napp mark \"{}\"\napp mark \"{}\"\napp echo first-block\n```\n```expected\nfirst-block\n```\n\
+             ## Two\n```markmason\napp mark \"{}\"\napp echo second-block\n```\n```expected\nsecond-block\n```\n\
+             ## Three\n```markmason\napp mark \"{}\"\n```\n",
+            first.display(), second.display(), third.display(), last.display()
+        ),
+    ).unwrap();
+    let (mut child, mut input, receive) = step_process(dir.path(), &[]);
+    let mut transcript = String::new();
+    next_step(&mut child, &receive, &mut transcript);
+    assert!(first.exists());
+    assert!(!second.exists());
+    input.write_all(b"b\n").unwrap();
+    next_step(&mut child, &receive, &mut transcript);
+    assert!(second.exists(), "{transcript}");
+    assert!(!third.exists(), "{transcript}");
+    let next = transcript.rsplit("Block 2 of 3").next().unwrap();
+    assert!(
+        next.contains("Ready. No commands in this block have run."),
+        "{next}"
+    );
+    assert!(next.contains("ACTUAL OUTPUT SO FAR\n  | (empty)"), "{next}");
+    input.write_all(b"f\n").unwrap();
+    drop(input);
+    let output = child.wait_with_output().unwrap();
+    transcript.extend(receive.into_iter().map(Result::unwrap));
+    assert!(output.status.success(), "{transcript}\n{}", text(&output));
+    assert!(third.exists() && last.exists(), "{transcript}");
+    assert_eq!(transcript.matches("Enter:").count(), 2, "{transcript}");
+    assert!(
+        transcript.contains("Passed blocks: 3\nFailed blocks: 0"),
+        "{transcript}"
+    );
+}
+
+#[test]
+fn step_finish_stops_for_failures_and_does_not_autorun_the_next_file() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("a.md"),
+        "```markmason\napp echo one\napp echo actual\n```\n```expected\none\ndifferent\n```\n",
+    )
+    .unwrap();
+    let output = step_output(dir.path(), &[], "f\nq\n");
+    let result = text(&output);
+    assert!(!output.status.success(), "{result}");
+    assert_eq!(result.matches("Enter:").count(), 2, "{result}");
+    assert!(result.contains("Line 2 mismatch"), "{result}");
+    fs::write(
+        dir.path().join("a.md"),
+        "```markmason\napp echo one\napp echo two\n```\n```expected\none\ntwo\n```\n",
+    )
+    .unwrap();
+    let later = dir.path().join("later");
+    fs::write(
+        dir.path().join("b.md"),
+        format!("```markmason\napp mark \"{}\"\n```\n", later.display()),
+    )
+    .unwrap();
+    let output = step_output(dir.path(), &[], "f\nq\n");
+    let result = text(&output);
+    assert!(output.status.success(), "{result}");
+    assert!(!later.exists(), "{result}");
+    assert!(result.contains("Enter: Run first command"), "{result}");
+    assert!(result.contains("Walkthrough stopped"), "{result}");
 }
 
 #[test]
@@ -1048,7 +1238,7 @@ fn step_mode_quit_and_eof_skip_remaining_commands_and_clean_up_fixtures() {
         assert!(result.contains("Walkthrough stopped"), "{result}");
         assert!(!later.exists(), "{result}");
         assert!(!result.contains("b.md  |"), "{result}");
-        let actual = result.split("ACTUAL OUTPUT SO FAR\n").nth(1).unwrap();
+        let actual = result.rsplit("ACTUAL OUTPUT SO FAR\n").next().unwrap();
         let paths: Vec<_> = actual
             .lines()
             .filter_map(|line| line.strip_prefix("  | "))
@@ -1223,7 +1413,7 @@ fn step_mode_cancellation_while_paused_cleans_up_without_advancing() {
             text(&output)
         );
         assert!(!later.exists(), "{transcript}");
-        let actual = transcript.split("ACTUAL OUTPUT SO FAR\n").nth(1).unwrap();
+        let actual = transcript.rsplit("ACTUAL OUTPUT SO FAR\n").next().unwrap();
         for path in actual
             .lines()
             .filter_map(|line| line.strip_prefix("  | "))
