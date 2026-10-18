@@ -644,6 +644,11 @@ fn input_environment(
             "FORCE_COLOR",
             "GH_PROMPT_DISABLED",
             "GIT_TERMINAL_PROMPT",
+            "BASH_ENV",
+            "ENV",
+            "SHELLOPTS",
+            "BASHOPTS",
+            "TERM",
         ];
         if reserved.iter().any(|name| {
             if cfg!(windows) {

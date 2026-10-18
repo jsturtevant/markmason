@@ -326,6 +326,8 @@ inputs:
 - `--list` does not prompt or require values. Runner-managed environment names
   such as `REPO_ROOT`, `PROJECT_NAME`, `XDG_CONFIG_HOME`, `GH_CONFIG_DIR`, and the
   configured application home are rejected rather than silently overridden.
+  `BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `TERM`, and the reserved
+  `__markmason_` prefix are also protected.
 - These are visible, plain-text prompts: do not use them for secrets.
 
 See the [real-terminal input tests](../tests/cli/inputs.md).

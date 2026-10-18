@@ -1089,19 +1089,39 @@ fn declared_inputs_cancel_before_setup_reject_reserved_names_and_reuse_environme
         "REPO_ROOT",
         "GH_CONFIG_DIR",
         "__markmason_state",
-    ] {
+        "BASH_ENV",
+        "ENV",
+        "SHELLOPTS",
+        "BASHOPTS",
+        "TERM",
+    ]
+    .into_iter()
+    .chain(cfg!(windows).then_some("__MARKMASON_STATE"))
+    {
         fs::write(
             &lesson,
             format!("---\ninputs:\n  {name}: Not allowed\n---\n```markmason\napp echo no\n```\n"),
         )
         .unwrap();
-        let output = command(&lesson).output().unwrap();
-        assert!(!output.status.success());
-        assert!(
-            text(&output).contains("runner-managed"),
-            "{}",
-            text(&output)
-        );
+        for stepping in [false, true] {
+            let mut cmd = command(&lesson);
+            cmd.env(name, "provided").stdin(Stdio::null());
+            if stepping {
+                cmd.arg("--step");
+            }
+            let output = cmd.output().unwrap();
+            assert!(!output.status.success(), "{}", text(&output));
+            assert!(
+                text(&output).contains("runner-managed"),
+                "{}",
+                text(&output)
+            );
+            assert!(
+                !text(&output).contains("(required; q + Enter cancels):"),
+                "{}",
+                text(&output)
+            );
+        }
     }
 }
 
