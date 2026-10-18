@@ -86,20 +86,12 @@ struct Frame {
 
 impl Frame {
     fn new(case: &spec::Case, commands: &[String], expected: Option<&str>) -> Result<Self> {
-        let mut offset = 0;
-        let mut ranges = Vec::new();
-        for command in commands {
-            let start = case.source[offset..]
-                .find(command)
-                .context("Cannot locate command in its Markdown block")?
-                + offset;
-            let end = start + command.len();
-            ranges.push(start..end);
-            offset = end;
+        if commands.len() != case.command_ranges.len() {
+            bail!("Walkthrough command count does not match parsed source ranges");
         }
         Ok(Self {
             source: case.source.clone(),
-            ranges,
+            ranges: case.command_ranges.clone(),
             position: 0,
             expected: expected.map(str::to_owned),
             expected_exit: case.exit_code,
@@ -296,12 +288,7 @@ impl Session {
 
     fn render(&mut self) -> Result<()> {
         self.output.flush()?;
-        let size = if self.screen {
-            if !self.screen_active {
-                io::stdout().write_all(b"\x1b[?1049h")?;
-                self.screen_active = true;
-            }
-            io::stdout().write_all(b"\x1b[H\x1b[2J")?;
+        let mut size = if self.screen {
             Some(Term::stdout().size())
         } else {
             None
@@ -338,6 +325,9 @@ impl Session {
             } else {
                 0
             };
+        if size.is_some_and(|(rows, columns)| usize::from(rows) < fixed_rows + 3 || columns < 40) {
+            size = None;
+        }
         let body = size.map_or(usize::MAX, |(rows, _)| {
             usize::from(rows).saturating_sub(fixed_rows).max(3)
         });
@@ -424,6 +414,15 @@ impl Session {
                     "end of file"
                 }
             ));
+        }
+        if size.is_some() {
+            if !self.screen_active {
+                io::stdout().write_all(b"\x1b[?1049h")?;
+                self.screen_active = true;
+            }
+            io::stdout().write_all(b"\x1b[H\x1b[2J")?;
+        } else {
+            self.restore_screen()?;
         }
         for line in lines {
             if let Some((_, columns)) = size {
@@ -601,7 +600,7 @@ mod tests {
     #[test]
     fn marker_tracks_multiline_commands_without_losing_comments_or_indentation() {
         let parsed = crate::spec::parse(
-            "---\nshell: bash\n---\n## Loop\n```markmason\n# Keep this comment\nVALUE=one\n\nfor value in one two; do\n  printf '%s\\n' \"$value\"\ndone\n```\n",
+            "---\nshell: bash\n---\n## Loop\n```markmason\n# Preview: VALUE=one\nVALUE=one\n\nfor value in one two; do\n  printf '%s\\n' \"$value\"\ndone\n```\n",
         ).unwrap();
         let case = &parsed.cases[0];
         let commands = crate::shell::commands(&case.command).unwrap();
@@ -610,10 +609,15 @@ mod tests {
         frame.phase = Phase::Running;
         let (code, focus) = frame.code();
         assert_eq!(focus, 3);
-        assert_eq!(code[0], "   # Keep this comment");
+        assert_eq!(code[0], "   # Preview: VALUE=one");
         assert_eq!(code[3], " > for value in one two; do  [running]");
         assert_eq!(code[4], " >   printf '%s\\n' \"$value\"  [running]");
         assert_eq!(code[5], " > done  [running]");
+        frame.position = 0;
+        let (code, focus) = frame.code();
+        assert_eq!(focus, 1);
+        assert_eq!(code[0], "   # Preview: VALUE=one");
+        assert_eq!(code[1], " > VALUE=one  [running]");
     }
 
     #[test]

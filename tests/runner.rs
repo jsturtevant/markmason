@@ -987,112 +987,122 @@ fn step_terminal_reuses_its_viewport_and_restores_the_screen_with_color_disabled
     use portable_pty::{CommandBuilder, PtySize, native_pty_system};
     use std::io::Read;
 
-    let dir = tempfile::tempdir().unwrap();
-    let lesson = dir.path().join("lesson.md");
-    fs::write(
+    for rows in [10, 24] {
+        let dir = tempfile::tempdir().unwrap();
+        let lesson = dir.path().join("lesson.md");
+        fs::write(
         &lesson,
         "## First section\n```markmason\napp echo first\napp echo second\n```\n```expected\nfirst\nsecond\n```\n\
          ## Second section\n```markmason\napp echo third\n```\n```expected\nthird\n```\n",
     ).unwrap();
-    let pair = native_pty_system()
-        .openpty(PtySize {
-            rows: 24,
-            cols: 80,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .unwrap();
-    let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_mm"));
-    command.arg(&lesson);
-    command.arg("--step");
-    command.env("NO_COLOR", "1");
-    command.env("TERM", "xterm-256color");
-    command.env(
-        "PATH",
-        std::env::join_paths(
-            std::iter::once(helper().parent().unwrap().to_owned())
-                .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
-        )
-        .unwrap(),
-    );
-    let mut child = pair.slave.spawn_command(command).unwrap();
-    drop(pair.slave);
-    let mut input = pair.master.take_writer().unwrap();
-    let mut reader = pair.master.try_clone_reader().unwrap();
-    let (send, receive) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut bytes = [0; 4096];
-        loop {
-            match reader.read(&mut bytes) {
-                Ok(0) => break,
-                Ok(count) => {
-                    if send.send(bytes[..count].to_vec()).is_err() {
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .unwrap();
+        let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_mm"));
+        command.arg(&lesson);
+        command.arg("--step");
+        command.env("NO_COLOR", "1");
+        command.env("TERM", "xterm-256color");
+        command.env(
+            "PATH",
+            std::env::join_paths(
+                std::iter::once(helper().parent().unwrap().to_owned())
+                    .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+            )
+            .unwrap(),
+        );
+        let mut child = pair.slave.spawn_command(command).unwrap();
+        drop(pair.slave);
+        let mut input = pair.master.take_writer().unwrap();
+        let mut reader = pair.master.try_clone_reader().unwrap();
+        let (send, receive) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut bytes = [0; 4096];
+            loop {
+                match reader.read(&mut bytes) {
+                    Ok(0) => break,
+                    Ok(count) => {
+                        if send.send(bytes[..count].to_vec()).is_err() {
+                            break;
+                        }
+                    }
+                    Err(error)
+                        if error.kind() == io::ErrorKind::BrokenPipe
+                            || error.raw_os_error() == Some(libc::EIO) =>
+                    {
                         break;
                     }
+                    Err(error) => panic!("Failed reading terminal walkthrough: {error}"),
                 }
-                Err(error)
-                    if error.kind() == io::ErrorKind::BrokenPipe
-                        || error.raw_os_error() == Some(libc::EIO) =>
-                {
-                    break;
-                }
-                Err(error) => panic!("Failed reading terminal walkthrough: {error}"),
+            }
+        });
+        let mut bytes = Vec::new();
+        let mut controls = 0;
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            if Instant::now() > deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!(
+                    "Terminal walkthrough timed out: {}",
+                    String::from_utf8_lossy(&bytes)
+                );
+            }
+            if let Ok(chunk) = receive.recv_timeout(Duration::from_millis(20)) {
+                bytes.extend(chunk);
+            }
+            let raw = String::from_utf8_lossy(&bytes);
+            if controls == 0 && raw.contains("Enter: Next command") {
+                input.write_all(b"b\r").unwrap();
+                controls += 1;
+            } else if controls == 1 && raw.contains("Enter: Run first command") {
+                input.write_all(b"f\r").unwrap();
+                controls += 1;
+            }
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(status.success(), "{raw}");
+                break;
             }
         }
-    });
-    let mut bytes = Vec::new();
-    let mut controls = 0;
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        if Instant::now() > deadline {
-            child.kill().unwrap();
-            child.wait().unwrap();
-            panic!(
-                "Terminal walkthrough timed out: {}",
-                String::from_utf8_lossy(&bytes)
-            );
-        }
-        if let Ok(chunk) = receive.recv_timeout(Duration::from_millis(20)) {
-            bytes.extend(chunk);
-        }
+        drop(input);
+        drop(pair.master);
+        bytes.extend(receive.into_iter().flatten());
         let raw = String::from_utf8_lossy(&bytes);
-        if controls == 0 && raw.contains("Enter: Next command") {
-            input.write_all(b"b\r").unwrap();
-            controls += 1;
-        } else if controls == 1 && raw.contains("Enter: Run first command") {
-            input.write_all(b"f\r").unwrap();
-            controls += 1;
+        if rows == 10 {
+            assert!(!raw.contains("\x1b[?1049h"), "{raw}");
+            assert!(!raw.contains("\x1b[2J"), "{raw}");
+            assert!(raw.contains("## First section"), "{raw}");
+            assert!(raw.contains("## Second section"), "{raw}");
+            assert!(raw.contains("Passed blocks: 2"), "{raw}");
+            continue;
         }
-        if let Some(status) = child.try_wait().unwrap() {
-            assert!(status.success(), "{raw}");
-            break;
-        }
+        assert!(raw.contains("\x1b[?1049h"), "{raw}");
+        assert!(raw.contains("\x1b[?1049l"), "{raw}");
+        assert!(!raw.contains("\x1b[1;"), "{raw}");
+        let frames: Vec<_> = raw.split("\x1b[H\x1b[2J").skip(1).collect();
+        assert!(frames.len() >= 6, "{raw}");
+        assert!(
+            frames
+                .iter()
+                .any(|frame| frame.contains("> app echo first  [done]\r\n   app echo second")),
+            "{raw}"
+        );
+        assert!(
+            frames.iter().any(|frame| {
+                frame.contains("## Second section")
+                    && frame.contains("ACTUAL OUTPUT SO FAR\r\n  | (empty)")
+                    && frame.contains("[next]")
+                    && !frame.contains("| first")
+            }),
+            "{raw}"
+        );
+        assert!(raw.contains("Passed blocks: 2"), "{raw}");
     }
-    drop(input);
-    drop(pair.master);
-    bytes.extend(receive.into_iter().flatten());
-    let raw = String::from_utf8_lossy(&bytes);
-    assert!(raw.contains("\x1b[?1049h"), "{raw}");
-    assert!(raw.contains("\x1b[?1049l"), "{raw}");
-    assert!(!raw.contains("\x1b[1;"), "{raw}");
-    let frames: Vec<_> = raw.split("\x1b[H\x1b[2J").skip(1).collect();
-    assert!(frames.len() >= 6, "{raw}");
-    assert!(
-        frames
-            .iter()
-            .any(|frame| frame.contains("> app echo first  [done]\r\n   app echo second")),
-        "{raw}"
-    );
-    assert!(
-        frames.iter().any(|frame| {
-            frame.contains("## Second section")
-                && frame.contains("ACTUAL OUTPUT SO FAR\r\n  | (empty)")
-                && frame.contains("[next]")
-                && !frame.contains("| first")
-        }),
-        "{raw}"
-    );
-    assert!(raw.contains("Passed blocks: 2"), "{raw}");
 }
 
 #[test]
