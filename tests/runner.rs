@@ -987,7 +987,13 @@ fn step_terminal_reuses_its_viewport_and_restores_the_screen_with_color_disabled
     use portable_pty::{CommandBuilder, PtySize, native_pty_system};
     use std::io::Read;
 
-    for rows in [10, 24] {
+    for (rows, cols, invalid_input, long_diagnostic) in [
+        (10, 80, false, false),
+        (24, 40, false, false),
+        (24, 80, false, false),
+        (24, 80, true, false),
+        (10, 80, false, true),
+    ] {
         let dir = tempfile::tempdir().unwrap();
         let lesson = dir.path().join("lesson.md");
         fs::write(
@@ -995,10 +1001,24 @@ fn step_terminal_reuses_its_viewport_and_restores_the_screen_with_color_disabled
         "## First section\n```markmason\napp echo first\napp echo second\n```\n```expected\nfirst\nsecond\n```\n\
          ## Second section\n```markmason\napp echo third\n```\n```expected\nthird\n```\n",
     ).unwrap();
+        if long_diagnostic {
+            fs::write(&lesson, r#"---
+timeout: 0.5
+---
+## Long diagnostic
+```markmason
+bash -c 'echo detail-1; echo detail-2; echo detail-3; echo detail-4; echo detail-5; echo detail-6; echo detail-7; echo detail-8; sleep 5'
+```
+```pty
+match: never-arrives
+send: ignored{enter}
+```
+"#).unwrap();
+        }
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows,
-                cols: 80,
+                cols,
                 pixel_width: 0,
                 pixel_height: 0,
             })
@@ -1057,15 +1077,31 @@ fn step_terminal_reuses_its_viewport_and_restores_the_screen_with_color_disabled
                 bytes.extend(chunk);
             }
             let raw = String::from_utf8_lossy(&bytes);
-            if controls == 0 && raw.contains("Enter: Next command") {
+            if long_diagnostic && controls == 0 && raw.contains("Enter: Finish walkthrough") {
+                input.write_all(b"q\r").unwrap();
+                controls += 1;
+            } else if controls == 0 && raw.contains("Enter: Next command") {
+                input
+                    .write_all(if invalid_input {
+                        b"\xff\r"
+                    } else {
+                        b"invalid\r"
+                    })
+                    .unwrap();
+                controls += 1;
+            } else if controls == 1 && !invalid_input && raw.contains("Use Enter, b then Enter") {
                 input.write_all(b"b\r").unwrap();
                 controls += 1;
-            } else if controls == 1 && raw.contains("Enter: Run first command") {
+            } else if controls == 2 && raw.contains("Enter: Run first command") {
                 input.write_all(b"f\r").unwrap();
                 controls += 1;
             }
             if let Some(status) = child.try_wait().unwrap() {
-                assert!(status.success(), "{raw}");
+                assert_eq!(
+                    status.success(),
+                    !(invalid_input || long_diagnostic),
+                    "{raw}"
+                );
                 break;
             }
         }
@@ -1073,7 +1109,22 @@ fn step_terminal_reuses_its_viewport_and_restores_the_screen_with_color_disabled
         drop(pair.master);
         bytes.extend(receive.into_iter().flatten());
         let raw = String::from_utf8_lossy(&bytes);
-        if rows == 10 {
+        if long_diagnostic {
+            assert!(raw.contains("Output so far:"), "{raw}");
+            assert_eq!(raw.matches("  | detail-8\r\n").count(), 1, "{raw}");
+            assert!(!raw.contains("\x1b[?1049h"), "{raw}");
+            continue;
+        }
+        if invalid_input {
+            let restored = raw.rfind("\x1b[?1049l").expect("screen should be restored");
+            let diagnostic = raw
+                .find("Walkthrough error:")
+                .expect("input error should be reported");
+            assert!(restored < diagnostic, "{raw}");
+            assert!(raw.contains("Failed blocks: 1"), "{raw}");
+            continue;
+        }
+        if rows == 10 || cols == 40 {
             assert!(!raw.contains("\x1b[?1049h"), "{raw}");
             assert!(!raw.contains("\x1b[2J"), "{raw}");
             assert!(raw.contains("## First section"), "{raw}");
@@ -1086,6 +1137,10 @@ fn step_terminal_reuses_its_viewport_and_restores_the_screen_with_color_disabled
         assert!(!raw.contains("\x1b[1;"), "{raw}");
         let frames: Vec<_> = raw.split("\x1b[H\x1b[2J").skip(1).collect();
         assert!(frames.len() >= 6, "{raw}");
+        for frame in &frames {
+            let screen = frame.split("\x1b[?1049l").next().unwrap();
+            assert!(screen.lines().count() < usize::from(rows), "{screen}");
+        }
         assert!(
             frames
                 .iter()

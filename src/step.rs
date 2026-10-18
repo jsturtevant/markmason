@@ -307,27 +307,29 @@ impl Session {
             &frame.actual
         });
         let details = if matches!(frame.phase, Phase::Failed | Phase::ExecutionError) {
-            window(
-                &panel(frame.error.as_deref().context("Missing failure details")?),
-                if size.is_some() { 5 } else { usize::MAX },
-                0,
-            )
+            panel(frame.error.as_deref().context("Missing failure details")?)
         } else {
             Vec::new()
         };
-        let fixed_rows = 9
+        // Reserve space for controls, a retry hint, echoed input, and the cursor.
+        let fixed_rows = 10
             + usize::from(self.title.as_ref().is_some_and(|title| !title.is_empty()))
             + usize::from(frame.exit.is_some() && frame.phase != Phase::Running)
-            + details.len()
+            + if size.is_some() {
+                details.len().min(5)
+            } else {
+                details.len()
+            }
             + usize::from(self.mode != Mode::Command)
             + if self.mode == Mode::Command && frame.phase != Phase::Running {
-                2
+                4
             } else {
                 0
             };
-        if size.is_some_and(|(rows, columns)| usize::from(rows) < fixed_rows + 3 || columns < 40) {
+        if size.is_some_and(|(rows, columns)| usize::from(rows) < fixed_rows + 3 || columns < 60) {
             size = None;
         }
+        let details = window(&details, if size.is_some() { 5 } else { usize::MAX }, 0);
         let body = size.map_or(usize::MAX, |(rows, _)| {
             usize::from(rows).saturating_sub(fixed_rows).max(3)
         });
@@ -487,10 +489,13 @@ impl Session {
                     writeln!(self.output, "Input closed. Stopping walkthrough.")?;
                     return Ok(());
                 }
-                _ => writeln!(
-                    self.output,
-                    "Use Enter, b then Enter, f then Enter, or q then Enter."
-                )?,
+                _ => {
+                    self.render()?;
+                    writeln!(
+                        self.output,
+                        "Use Enter, b then Enter, f then Enter, or q then Enter."
+                    )?;
+                }
             }
         }
     }
@@ -517,6 +522,9 @@ impl Session {
     fn stop_on_error(&mut self, result: Result<()>) -> Result<()> {
         if let Err(error) = &result {
             self.stopped = true;
+            if let Err(restore_error) = self.restore_screen() {
+                eprintln!("Cannot restore walkthrough screen: {restore_error:#}");
+            }
             eprintln!("Walkthrough error: {error:#}");
         }
         result
