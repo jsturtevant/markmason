@@ -668,7 +668,9 @@ fn input_environment(
                 input.name
             );
         }
-        if env::var_os(&input.name).is_none_or(|value| value.is_empty()) {
+        if let Some(value) = env::var_os(&input.name).filter(|value| !value.is_empty()) {
+            process::set_env(&mut env, &input.name, value);
+        } else {
             missing.push(input);
         }
     }

@@ -1057,6 +1057,23 @@ fn declared_inputs_are_deduplicated_with_setup_but_do_not_leak_between_files() {
     assert!(transcript.contains("Passed blocks: 2"), "{transcript}");
 }
 
+#[cfg(windows)]
+#[test]
+fn declared_inputs_reuse_windows_environment_values_with_declared_casing_in_bash() {
+    let dir = tempfile::tempdir().unwrap();
+    let lesson = dir.path().join("lesson.md");
+    fs::write(
+        &lesson,
+        "---\nshell: bash\ninputs:\n  MARKMASON_CASE_VALUE: Required value\n---\n```markmason\nprintf '%s\\n' \"$MARKMASON_CASE_VALUE\"\n```\n```expected\nprovided\n```\n",
+    ).unwrap();
+    let output = command(&lesson)
+        .env_remove("MARKMASON_CASE_VALUE")
+        .env("markmason_case_value", "provided")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+}
+
 #[test]
 fn declared_inputs_cancel_before_setup_reject_reserved_names_and_reuse_environment() {
     let dir = tempfile::tempdir().unwrap();
