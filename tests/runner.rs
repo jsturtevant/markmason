@@ -937,6 +937,175 @@ fn step_mode_picker_searches_navigates_and_cancels_before_setup() {
 }
 
 #[test]
+fn declared_inputs_fail_before_setup_unattended_and_listing_never_prompts() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("must-not-run");
+    let lesson = dir.path().join("lesson.md");
+    fs::write(dir.path().join("shared.md"),
+        format!("---\ninputs:\n  MARKMASON_TEST_SECOND: Second value\n---\n```markmason\napp mark \"{}\"\n```\n", marker.display())
+    ).unwrap();
+    fs::write(&lesson,
+        "---\ninputs:\n  MARKMASON_TEST_FIRST: First value\nsetup: mm shared.md\n---\n```markmason\napp env MARKMASON_TEST_FIRST MARKMASON_TEST_SECOND\n```\n"
+    ).unwrap();
+    let output = command(&lesson)
+        .env_remove("MARKMASON_TEST_FIRST")
+        .env_remove("MARKMASON_TEST_SECOND")
+        .output()
+        .unwrap();
+    let result = text(&output);
+    assert!(!output.status.success(), "{result}");
+    assert!(
+        result.contains("Missing required inputs: MARKMASON_TEST_FIRST, MARKMASON_TEST_SECOND"),
+        "{result}"
+    );
+    assert!(!marker.exists());
+    let output = command(&lesson)
+        .arg("--list")
+        .env_remove("MARKMASON_TEST_FIRST")
+        .env_remove("MARKMASON_TEST_SECOND")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(!marker.exists());
+}
+
+#[test]
+fn declared_inputs_prompt_before_setup_and_treat_answers_as_literal_environment_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("setup");
+    let lesson = dir.path().join("lesson.md");
+    fs::write(dir.path().join("shared.md"),
+        format!("---\ninputs:\n  MARKMASON_TEST_SECOND: Second value\n---\n```markmason\napp mark \"{}\"\n```\n", marker.display())
+    ).unwrap();
+    fs::write(
+        &lesson,
+        "---\nshell: bash\ninputs:\n  MARKMASON_TEST_FIRST: First value\nsetup: mm shared.md\n---\n\
+         ```markmason\nprintf '%s\\n' \"$MARKMASON_TEST_FIRST\" \"$MARKMASON_TEST_SECOND\"\n```\n\
+         ```expected\nspace ' and $literal; text\nprovided\n```\n",
+    )
+    .unwrap();
+    let mut cmd = command(&lesson);
+    cmd.env_remove("MARKMASON_TEST_FIRST")
+        .env("MARKMASON_TEST_SECOND", "provided");
+    let (mut child, mut input, receive) = step_command(cmd, &[]);
+    let mut transcript = String::new();
+    loop {
+        let line = receive
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .unwrap();
+        let prompt = line.starts_with("Input MARKMASON_TEST_FIRST ");
+        transcript.push_str(&line);
+        if prompt {
+            break;
+        }
+    }
+    assert!(!marker.exists(), "{transcript}");
+    input.write_all(b"\nspace ' and $literal; text\n").unwrap();
+    next_step(&mut child, &receive, &mut transcript);
+    assert!(marker.exists(), "{transcript}");
+    assert!(
+        !transcript.contains("Input MARKMASON_TEST_SECOND"),
+        "{transcript}"
+    );
+    assert!(
+        transcript.contains("Enter a nonempty value"),
+        "{transcript}"
+    );
+    input.write_all(b"f\n").unwrap();
+    drop(input);
+    let output = child.wait_with_output().unwrap();
+    transcript.extend(receive.into_iter().map(Result::unwrap));
+    assert!(output.status.success(), "{transcript}\n{}", text(&output));
+    assert!(
+        transcript.contains("| space ' and $literal; text"),
+        "{transcript}"
+    );
+}
+
+#[test]
+fn declared_inputs_are_deduplicated_with_setup_but_do_not_leak_between_files() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("shared.md"),
+        "---\ninputs:\n  MARKMASON_TEST_SCOPED: Shared prompt should not appear\n---\n```markmason\napp echo shared-ready\n```\n",
+    ).unwrap();
+    for value in ["first", "second"] {
+        fs::write(
+            dir.path().join(format!("{value}.md")),
+            format!("---\ninputs:\n  MARKMASON_TEST_SCOPED: Required value\nsetup: mm shared.md\n---\n```markmason\napp env MARKMASON_TEST_SCOPED\n```\n```expected\n{value}\n```\n"),
+        ).unwrap();
+    }
+    let mut cmd = command(dir.path());
+    cmd.env_remove("MARKMASON_TEST_SCOPED");
+    let (child, mut input, receive) =
+        step_command(cmd, &["--file-pattern", r"^(first|second)\.md$"]);
+    input.write_all(b"first\nf\nsecond\nf\n").unwrap();
+    drop(input);
+    let output = child.wait_with_output().unwrap();
+    let transcript = receive.into_iter().map(Result::unwrap).collect::<String>();
+    assert!(output.status.success(), "{transcript}\n{}", text(&output));
+    assert_eq!(
+        transcript.matches("Input MARKMASON_TEST_SCOPED ").count(),
+        2,
+        "{transcript}"
+    );
+    assert!(
+        !transcript.contains("Shared prompt should not appear"),
+        "{transcript}"
+    );
+    assert!(transcript.contains("Passed blocks: 2"), "{transcript}");
+}
+
+#[test]
+fn declared_inputs_cancel_before_setup_reject_reserved_names_and_reuse_environment() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("must-not-run");
+    let lesson = dir.path().join("lesson.md");
+    fs::write(&lesson, format!(
+        "---\ninputs:\n  MARKMASON_TEST_INPUT: Required value\nsetup: app mark \"{}\"\n---\n```markmason\napp env MARKMASON_TEST_INPUT\n```\n```expected\ninherited\n```\n",
+        marker.display()
+    )).unwrap();
+    for answer in ["q\n", ""] {
+        let mut cmd = command(&lesson);
+        cmd.env_remove("MARKMASON_TEST_INPUT");
+        let (child, mut input, receive) = step_command(cmd, &[]);
+        input.write_all(answer.as_bytes()).unwrap();
+        drop(input);
+        let output = child.wait_with_output().unwrap();
+        let transcript = receive.into_iter().map(Result::unwrap).collect::<String>();
+        assert!(output.status.success(), "{transcript}");
+        assert!(!marker.exists());
+        assert!(transcript.contains("Walkthrough stopped"), "{transcript}");
+    }
+    let output = command(&lesson)
+        .env("MARKMASON_TEST_INPUT", "inherited")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(marker.exists());
+    for name in [
+        "TEST_HOME",
+        "REPO_ROOT",
+        "GH_CONFIG_DIR",
+        "__markmason_state",
+    ] {
+        fs::write(
+            &lesson,
+            format!("---\ninputs:\n  {name}: Not allowed\n---\n```markmason\napp echo no\n```\n"),
+        )
+        .unwrap();
+        let output = command(&lesson).output().unwrap();
+        assert!(!output.status.success());
+        assert!(
+            text(&output).contains("runner-managed"),
+            "{}",
+            text(&output)
+        );
+    }
+}
+
+#[test]
 fn step_mode_filters_files_and_checks_combined_output_after_the_block() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(

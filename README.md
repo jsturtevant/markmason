@@ -71,6 +71,20 @@ To prepare a walkthrough from another Markdown document, add
 automatically in the walkthrough's shared environment, so the state it creates
 is available to later steps. See [setup and state](tests/cli/state.md).
 
+Declare required environment values instead of supplying a long command prefix:
+
+```yaml
+inputs:
+  KUBECONFIG: Path to the kubeconfig for your disposable cluster
+  STORAGE_CONFIG: Name of the existing storage configuration
+```
+
+With `--step`, missing inputs are prompted for before setup; existing nonempty
+environment values are reused. Unattended runs fail clearly if inputs are
+missing, and `--list` never prompts. Values are plain text, not secret prompts.
+Inputs declared by Markdown prerequisites are collected before any setup runs.
+See the [executable input examples](tests/cli/inputs.md).
+
 Add `shell: bash` when the tutorial needs shell variables, functions, pipelines,
 or `cd` changes to persist across commands and Markdown setup:
 

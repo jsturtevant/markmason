@@ -164,11 +164,15 @@ fn gh_config_dir() -> Result<PathBuf> {
 }
 
 impl Fixture {
-    fn new(options: &Options, spec: &spec::Spec, gh_config: &Path) -> Result<Self> {
+    fn new(
+        options: &Options,
+        spec: &spec::Spec,
+        gh_config: &Path,
+        mut env: process::Environment,
+    ) -> Result<Self> {
         let home = Builder::new().prefix("markmason-home-").tempdir()?;
         let config = Builder::new().prefix("markmason-xdg-").tempdir()?;
         let processes = process::Scope::default();
-        let mut env: process::Environment = env::vars_os().collect();
         for (key, value) in [
             ("NO_COLOR", "1"),
             ("FORCE_COLOR", "0"),
@@ -572,6 +576,119 @@ fn run_setup(
     Ok(())
 }
 
+fn collect_inputs(
+    spec: &spec::Spec,
+    dir: &Path,
+    chain: &mut Vec<PathBuf>,
+    inputs: &mut Vec<spec::Input>,
+) -> Result<()> {
+    for input in &spec.inputs {
+        if !inputs.iter().any(|existing| {
+            if cfg!(windows) {
+                existing.name.eq_ignore_ascii_case(&input.name)
+            } else {
+                existing.name == input.name
+            }
+        }) {
+            inputs.push(input.clone());
+        }
+    }
+    let Some(setup) = &spec.setup else {
+        return Ok(());
+    };
+    let args = resolve_setup(setup, dir)?;
+    if args.len() == 2
+        && Path::new(&args[0])
+            .file_name()
+            .is_some_and(|name| name == "mm" || name == "mm.exe")
+        && Path::new(&args[1])
+            .extension()
+            .is_some_and(|ext| ext == "md")
+    {
+        let path = dunce::canonicalize(dir.join(&args[1]))
+            .with_context(|| format!("Cannot find Markdown setup {}", args[1]))?;
+        if chain.contains(&path) {
+            bail!("Circular Markdown setup: {}", path.display());
+        }
+        let setup = spec::parse_with_shell(&fs::read_to_string(&path)?, spec.shell)
+            .with_context(|| format!("Invalid Markdown setup {}", path.display()))?;
+        chain.push(path.clone());
+        collect_inputs(
+            &setup,
+            path.parent()
+                .context("Markdown setup has no parent directory")?,
+            chain,
+            inputs,
+        )?;
+        chain.pop();
+    }
+    Ok(())
+}
+
+fn input_environment(
+    inputs: &[spec::Input],
+    home_env: &str,
+    file: &str,
+    mut stepping: Option<&mut step::Session>,
+) -> Result<Option<process::Environment>> {
+    let mut env: process::Environment = env::vars_os().collect();
+    let mut missing = Vec::new();
+    for input in inputs {
+        let reserved = [
+            home_env,
+            "REPO_ROOT",
+            "PROJECT_NAME",
+            "XDG_CONFIG_HOME",
+            "GH_CONFIG_DIR",
+            "NO_COLOR",
+            "FORCE_COLOR",
+            "GH_PROMPT_DISABLED",
+            "GIT_TERMINAL_PROMPT",
+        ];
+        if reserved.iter().any(|name| {
+            if cfg!(windows) {
+                name.eq_ignore_ascii_case(&input.name)
+            } else {
+                *name == input.name
+            }
+        }) || input.name.starts_with("__markmason_")
+            || (cfg!(windows) && input.name.to_ascii_lowercase().starts_with("__markmason_"))
+            || (cfg!(windows)
+                && ["APPDATA", "LOCALAPPDATA"]
+                    .iter()
+                    .any(|name| name.eq_ignore_ascii_case(&input.name)))
+        {
+            bail!(
+                "Input {} conflicts with a runner-managed environment variable",
+                input.name
+            );
+        }
+        if env::var_os(&input.name).is_none_or(|value| value.is_empty()) {
+            missing.push(input);
+        }
+    }
+    if stepping.is_none() && !missing.is_empty() {
+        bail!(
+            "Missing required inputs: {}. Set these environment variables or use --step to be prompted.",
+            missing
+                .iter()
+                .map(|input| input.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    for input in missing {
+        let session = stepping
+            .as_deref_mut()
+            .context("Missing walkthrough input session")?;
+        let Some(value) = session.prompt_input(file, input)? else {
+            return Ok(None);
+        };
+        process::set_env(&mut env, &input.name, value);
+    }
+    Ok(Some(env))
+}
+
 fn run(options: Options) -> Result<bool> {
     if options.home_env.is_empty() || options.home_env.contains(['=', '\0']) {
         bail!("Invalid --home-env name");
@@ -717,14 +834,27 @@ fn run(options: Options) -> Result<bool> {
             .parent()
             .context("Spec has no parent directory")?
             .to_owned();
-        let fixture = match Fixture::new(
-            &options,
-            &spec,
-            gh_config
-                .as_deref()
-                .context("Missing fixture configuration")?,
-        ) {
-            Ok(fixture) => fixture,
+        let fixture = (|| -> Result<Option<Fixture>> {
+            let mut inputs = Vec::new();
+            collect_inputs(&spec, &dir, &mut vec![root.join(&file)], &mut inputs)?;
+            let Some(env) =
+                input_environment(&inputs, &options.home_env, &file, stepping.as_mut())?
+            else {
+                return Ok(None);
+            };
+            Fixture::new(
+                &options,
+                &spec,
+                gh_config
+                    .as_deref()
+                    .context("Missing fixture configuration")?,
+                env,
+            )
+            .map(Some)
+        })();
+        let fixture = match fixture {
+            Ok(Some(fixture)) => fixture,
+            Ok(None) => break,
             Err(error) => {
                 eprintln!("  FAIL setup{location}: {error:#}");
                 cancellation::check()?;

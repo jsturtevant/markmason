@@ -1,6 +1,32 @@
 use super::*;
 
 #[test]
+fn input_frontmatter_requires_named_plain_text_prompts() -> Result<()> {
+    let parsed = spec::parse(
+        "---\ninputs:\n  FIRST: First question\n  SECOND: Second question\n---\n```markmason\napp echo ready\n```\n",
+    )?;
+    assert_eq!(parsed.inputs.len(), 2);
+    assert_eq!(parsed.inputs[0].name, "FIRST");
+    assert_eq!(parsed.inputs[1].prompt, "Second question");
+    for invalid in [
+        "[]",
+        "null",
+        "true",
+        "{BAD-NAME: question}",
+        "{1BAD: question}",
+        "{GOOD: ''}",
+        "{GOOD: 123}",
+        "{GOOD: {prompt: nested}}",
+    ] {
+        assert!(
+            spec::parse(&format!("---\ninputs: {invalid}\n---\n")).is_err(),
+            "{invalid}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn bash_terminal_boundaries_preserve_following_output_and_wait_for_complete_frames() {
     for (raw, after) in [
         ("output\r\nTOKEN\r\nlater", "later"),

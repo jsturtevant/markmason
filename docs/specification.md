@@ -296,6 +296,40 @@ disabling the reusable view.
 
 Try the [executable walkthrough](../tests/cli/walkthrough.md) in this checkout.
 
+## Required environment inputs
+
+Declare an ordered mapping of environment names to plain-text questions in
+frontmatter:
+
+```yaml
+inputs:
+  KUBECONFIG: Path to the kubeconfig for the disposable cluster
+  STORAGE_CONFIG: Name of an existing storage configuration
+```
+
+- Names must match `[A-Za-z_][A-Za-z0-9_]*`, and questions must be nonempty
+  strings. Structured defaults and implicit detection of arbitrary shell
+  variables are not supported.
+- Nonempty caller environment values are reused without prompting. Missing or
+  empty values prompt only with `--step`; unattended runs list all missing
+  names and fail before cloning, fixtures, or setup commands.
+- Requirements in recursive Markdown setup are collected first as well. A
+  name declared more than once prompts only once, using the root declaration
+  first. Windows environment names are case-insensitive.
+- Pressing Enter on an empty answer asks again. `q` then Enter, EOF, or Ctrl+C
+  cancels before setup. Values are passed as literal environment data, never
+  evaluated as shell commands, and do not leak into subsequent files or the
+  calling terminal.
+- Inputs are ordinary environment variables, not additional direct-mode
+  substitution placeholders. Use `shell: bash` for `$NAME` expansion in
+  commands. The existing fixture placeholders keep their original behavior.
+- `--list` does not prompt or require values. Runner-managed environment names
+  such as `REPO_ROOT`, `PROJECT_NAME`, `XDG_CONFIG_HOME`, `GH_CONFIG_DIR`, and the
+  configured application home are rejected rather than silently overridden.
+- These are visible, plain-text prompts: do not use them for secrets.
+
+See the [real-terminal input tests](../tests/cli/inputs.md).
+
 ## Interactive terminals
 
 ````markdown
