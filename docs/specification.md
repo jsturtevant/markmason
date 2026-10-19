@@ -247,19 +247,21 @@ mm tests/cli --step --file-pattern '^greet\.md$'
 mm tests/cli/greet.md --step
 ```
 
-The walkthrough shows a Markdown-style section with its heading, complete code
-block, expected output, and a collecting actual-output area. A `>` marker moves
-through the source as each logical command runs, with `[running]`, `[done]`, or
-`[failed]` beside its lines. Bash loops, functions, pipelines, and heredocs still
+The walkthrough shows a Markdown-style section with its heading, descriptive
+prose, complete code block, expected output, and a collecting actual-output area.
+At each pause, `> [next]` points to the next command to run. Completed commands
+retain a green `[done]` prefix; running and failed commands are also marked at
+the front. Bash loops, functions, pipelines, and heredocs still
 execute as complete logical commands, not isolated physical lines.
 
 Supported terminals redraw the current block in an alternate screen, restoring
-the original screen on finish, quit, or cancellation. Long panes show a focused
-window around the current command or latest output, with hidden-line counts.
-Long display lines are clipped to the terminal width and tabs are visually
-expanded in the reusable view; assertions always use complete, unmodified
-output. Terminals too small to fit the view fall back to full,
-append-only snapshots on the normal screen. Redirected output and `TERM=dumb` also produce full,
+the original screen on finish, quit, or cancellation. The section is one
+scrollable document: no collapsed panes, hidden-line summaries, or truncated
+output. Long lines wrap without dropping text. Use **Up/Down**, **PgUp/PgDn**,
+**Home/End**, or the **mouse wheel** while paused; scrolling does not execute
+commands or require Enter. Keep tutorial sections short so they normally fit.
+Tabs are visually expanded; assertions always use complete, unmodified output.
+Very small terminals, redirected output, and `TERM=dumb` produce full,
 append-only snapshots. Colors are automatic; `NO_COLOR=1` disables color without
 disabling the reusable view.
 

@@ -30,7 +30,7 @@ send: {enter}
 lesson.md | Block 1 of 2
 ## Build output one command at a time
 COMMAND 1 OF 2
-> mm-test-cli echo first  [running]
+> [running] mm-test-cli echo first
 EXPECTED OUTPUT (whole block; exact, exit 0)
 | first
 | second
@@ -38,7 +38,7 @@ ACTUAL OUTPUT SO FAR
 | first
 IN PROGRESS Assertion checked after the block finishes.
 COMMAND 2 OF 2
-> mm-test-cli echo second  [running]
+> [running] mm-test-cli echo second
 ACTUAL OUTPUT
 | first
 | second
@@ -111,14 +111,14 @@ send: f{enter}
 
 ```expected-contains
 navigation.md | Block 1 of 3
-> mm-test-cli echo first  [running]
-> mm-test-cli echo second  [running]
+> [running] mm-test-cli echo first
+> [running] mm-test-cli echo second
 ACTUAL OUTPUT
 | first
 | second
 PASS Block matched expectations.
 navigation.md | Block 2 of 3
-> mm-test-cli echo third  [next]
+> [next] mm-test-cli echo third
 ACTUAL OUTPUT SO FAR
 | (empty)
 Ready. No commands in this block have run.
@@ -126,6 +126,44 @@ navigation.md | Block 3 of 3
 | last
 Walkthrough finished
 Passed blocks: 3
+Failed blocks: 0
+```
+
+## Scroll complete output without executing commands
+
+End scrolls to the collected output; Home returns to the heading and description.
+Neither key needs Enter or executes the next command.
+
+```markmason
+mm tests/fixtures/walkthrough/scrolling.md --step
+```
+
+```pty
+match: Enter: Next command
+send: {enter}
+match: COMMAND 3 OF 3
+send: {escape}[F
+match: | output-30
+send: {escape}[H
+match: Keep the command context visible
+send: {enter}
+match: Enter: Finish walkthrough
+send: {escape}[F
+match: | finished
+send: {enter}
+```
+
+```expected-contains
+## A complete scrollable section
+Keep the command context visible, and scroll to inspect every output line.
+[done] mm-test-cli echo started
+> [next] mm-test-cli echo finished
+| output-30
+## A complete scrollable section
+| finished
+PASS Block matched expectations.
+Walkthrough finished
+Passed blocks: 1
 Failed blocks: 0
 ```
 

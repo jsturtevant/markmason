@@ -1,9 +1,16 @@
 use crate::{cancellation, matching, spec};
 use anstream::{AutoStream, ColorChoice};
 use anyhow::{Context, Result, bail};
+use crossterm::{
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+        MouseEventKind,
+    },
+    terminal,
+};
 use dialoguer::{
     FuzzySelect,
-    console::{Term, truncate_str},
+    console::{Term, measure_text_width},
     theme::ColorfulTheme,
 };
 use std::{
@@ -13,6 +20,7 @@ use std::{
     thread,
     time::Duration,
 };
+use unicode_segmentation::UnicodeSegmentation;
 
 const RESET: &str = "\x1b[0m";
 const BOLD: &str = "\x1b[1m";
@@ -71,9 +79,19 @@ enum Phase {
     ExecutionError,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CommandState {
+    Pending,
+    Running,
+    Done,
+    Failed,
+}
+
 struct Frame {
     source: String,
+    description: String,
     ranges: Vec<Range<usize>>,
+    states: Vec<CommandState>,
     position: usize,
     expected: Option<String>,
     expected_exit: i32,
@@ -82,6 +100,7 @@ struct Frame {
     exit: Option<i32>,
     phase: Phase,
     error: Option<String>,
+    stop_file: bool,
 }
 
 impl Frame {
@@ -91,7 +110,9 @@ impl Frame {
         }
         Ok(Self {
             source: case.source.clone(),
+            description: case.description.clone(),
             ranges: case.command_ranges.clone(),
+            states: vec![CommandState::Pending; commands.len()],
             position: 0,
             expected: expected.map(str::to_owned),
             expected_exit: case.exit_code,
@@ -100,54 +121,63 @@ impl Frame {
             exit: None,
             phase: Phase::Ready,
             error: None,
+            stop_file: false,
         })
     }
 
-    fn code(&self) -> (Vec<String>, usize) {
-        let active = &self.ranges[self.position];
+    fn next(&self) -> Option<usize> {
+        match self.phase {
+            Phase::Ready | Phase::Progress => self
+                .states
+                .iter()
+                .position(|state| *state == CommandState::Pending),
+            Phase::Running => Some(self.position),
+            _ => None,
+        }
+    }
+
+    fn code(&self) -> Vec<String> {
+        let next = self.next();
         let mut offset = 0;
-        let mut focus = 0;
         let mut lines = Vec::new();
-        for (index, raw) in self.source.split_inclusive('\n').enumerate() {
+        for raw in self.source.split_inclusive('\n') {
             let line = raw.trim_end_matches(['\r', '\n']);
             let end = offset + line.len();
-            let selected = active.start <= end && active.end > offset;
-            let marker = if selected {
-                if active.start >= offset {
-                    focus = index;
-                }
+            let command = self
+                .ranges
+                .iter()
+                .position(|range| range.start <= end && range.end > offset);
+            let marker = if command.is_some() && command == next {
                 ">"
             } else {
                 " "
             };
-            let state = if selected {
-                match self.phase {
-                    Phase::Ready => "next",
-                    Phase::Running => "running",
-                    Phase::Failed | Phase::ExecutionError => "failed",
-                    _ => "done",
-                }
+            let state = match command.map(|index| self.states[index]) {
+                Some(CommandState::Done) => "[done]",
+                Some(CommandState::Running) => "[running]",
+                Some(CommandState::Failed) => "[failed]",
+                Some(CommandState::Pending) if command == next => "[next]",
+                _ => "",
+            };
+            let label = format!("{state:<9}");
+            let label = if state == "[done]" {
+                format!("{GREEN}{label}{RESET}")
             } else {
-                ""
+                label
             };
             lines.push(format!(
-                " {marker} {}{}",
+                " {marker} {label} {}",
                 plain(line).replace('\t', "    "),
-                if state.is_empty() {
-                    String::new()
-                } else {
-                    format!("  [{state}]")
-                }
             ));
             offset += raw.len();
         }
-        (lines, focus)
+        lines
     }
 }
 
 pub struct Session {
     output: AutoStream<io::Stdout>,
-    input: Receiver<io::Result<Option<String>>>,
+    input: Option<Receiver<io::Result<Option<String>>>>,
     blocks: usize,
     block: usize,
     file: String,
@@ -157,29 +187,42 @@ pub struct Session {
     pause_before_block: bool,
     screen: bool,
     screen_active: bool,
+    scroll: usize,
+    page_rows: usize,
+    document_rows: usize,
+    input_text: String,
+    hint: Option<String>,
     stopped: bool,
 }
 
 impl Session {
     pub fn new(blocks: usize) -> Result<Self> {
-        let (send, input) = mpsc::sync_channel(1);
-        thread::Builder::new()
-            .name("walkthrough-input".into())
-            .spawn(move || {
-                let stdin = io::stdin();
-                let mut stdin = stdin.lock();
-                loop {
-                    let mut line = String::new();
-                    let result = stdin
-                        .read_line(&mut line)
-                        .map(|count| if count == 0 { None } else { Some(line) });
-                    let finished = !matches!(&result, Ok(Some(_)));
-                    if send.send(result).is_err() || finished {
-                        break;
+        let screen = io::stdin().is_terminal()
+            && io::stdout().is_terminal()
+            && std::env::var_os("TERM").is_none_or(|term| term != "dumb");
+        let input = if screen {
+            None
+        } else {
+            let (send, input) = mpsc::sync_channel(1);
+            thread::Builder::new()
+                .name("walkthrough-input".into())
+                .spawn(move || {
+                    let stdin = io::stdin();
+                    let mut stdin = stdin.lock();
+                    loop {
+                        let mut line = String::new();
+                        let result = stdin
+                            .read_line(&mut line)
+                            .map(|count| if count == 0 { None } else { Some(line) });
+                        let finished = !matches!(&result, Ok(Some(_)));
+                        if send.send(result).is_err() || finished {
+                            break;
+                        }
                     }
-                }
-            })
-            .context("Failed to start walkthrough input reader")?;
+                })
+                .context("Failed to start walkthrough input reader")?;
+            Some(input)
+        };
         let mut session = Self {
             output: AutoStream::new(io::stdout(), ColorChoice::Auto),
             input,
@@ -190,9 +233,13 @@ impl Session {
             frame: None,
             mode: Mode::Command,
             pause_before_block: false,
-            screen: io::stdout().is_terminal()
-                && std::env::var_os("TERM").is_none_or(|term| term != "dumb"),
+            screen,
             screen_active: false,
+            scroll: 0,
+            page_rows: 1,
+            document_rows: 0,
+            input_text: String::new(),
+            hint: None,
             stopped: false,
         };
         writeln!(
@@ -204,14 +251,136 @@ impl Session {
     }
 
     fn read_line(&mut self) -> Result<Option<String>> {
+        if self.input.is_none() {
+            return self.read_keys();
+        }
         loop {
             cancellation::check()?;
-            match self.input.recv_timeout(Duration::from_millis(50)) {
+            match self
+                .input
+                .as_ref()
+                .context("Missing walkthrough input reader")?
+                .recv_timeout(Duration::from_millis(50))
+            {
                 Ok(line) => return line.context("Failed reading walkthrough input"),
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(error) => return Err(error).context("Walkthrough input reader stopped"),
             }
         }
+    }
+
+    fn read_keys(&mut self) -> Result<Option<String>> {
+        let in_view = self.screen_active;
+        let _raw = RawInput::new()?;
+        self.input_text.clear();
+        loop {
+            cancellation::check()?;
+            if !event::poll(Duration::from_millis(50))? {
+                continue;
+            }
+            let movement = match event::read().context("Failed reading walkthrough key")? {
+                Event::Key(key) if key.kind != KeyEventKind::Release => match key.code {
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        cancellation::interrupt();
+                        bail!("Interrupted by keyboard");
+                    }
+                    KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        if !self.screen_active {
+                            write!(self.output, "\r\n")?;
+                            self.output.flush()?;
+                        }
+                        return Ok(if self.input_text.is_empty() {
+                            None
+                        } else {
+                            Some(std::mem::take(&mut self.input_text))
+                        });
+                    }
+                    KeyCode::Enter => {
+                        if !self.screen_active {
+                            write!(self.output, "\r\n")?;
+                            self.output.flush()?;
+                        }
+                        return Ok(Some(std::mem::take(&mut self.input_text)));
+                    }
+                    KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        self.input_text.clear();
+                        self.echo_input()?;
+                        None
+                    }
+                    KeyCode::Char(ch)
+                        if !key
+                            .modifiers
+                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
+                        self.input_text.push(ch);
+                        self.echo_input()?;
+                        None
+                    }
+                    KeyCode::Backspace => {
+                        if let Some((start, _)) = self.input_text.grapheme_indices(true).next_back()
+                        {
+                            self.input_text.truncate(start);
+                        }
+                        self.echo_input()?;
+                        None
+                    }
+                    KeyCode::Tab => {
+                        self.input_text.push('\t');
+                        self.echo_input()?;
+                        None
+                    }
+                    KeyCode::Up => Some(Scroll::Up(1)),
+                    KeyCode::Down => Some(Scroll::Down(1)),
+                    KeyCode::PageUp => Some(Scroll::Up(self.page_rows)),
+                    KeyCode::PageDown => Some(Scroll::Down(self.page_rows)),
+                    KeyCode::Home => Some(Scroll::Home),
+                    KeyCode::End => Some(Scroll::End),
+                    _ => None,
+                },
+                Event::Mouse(mouse) => match mouse.kind {
+                    MouseEventKind::ScrollUp => Some(Scroll::Up(3)),
+                    MouseEventKind::ScrollDown => Some(Scroll::Down(3)),
+                    _ => None,
+                },
+                Event::Resize(_, _) if in_view => {
+                    self.render()?;
+                    None
+                }
+                _ => None,
+            };
+            if let Some(movement) = movement.filter(|_| self.screen_active) {
+                self.scroll = match movement {
+                    Scroll::Up(rows) => self.scroll.saturating_sub(rows),
+                    Scroll::Down(rows) => self.scroll.saturating_add(rows),
+                    Scroll::Home => 0,
+                    Scroll::End => self.document_rows,
+                };
+                self.render()?;
+            }
+        }
+    }
+
+    fn echo_input(&mut self) -> Result<()> {
+        let columns = usize::from(Term::stdout().size().1)
+            .saturating_sub(3)
+            .max(1);
+        let text = plain(&self.input_text).replace('\t', "    ");
+        let mut tail = String::new();
+        for part in text.graphemes(true).rev() {
+            if measure_text_width(part) + measure_text_width(&tail) > columns {
+                break;
+            }
+            tail.insert_str(0, part);
+        }
+        self.output.flush()?;
+        io::stdout().write_all(b"\r\x1b[2K")?;
+        write!(
+            self.output,
+            "{}{tail}",
+            if self.screen_active { "> " } else { "" }
+        )?;
+        self.output.flush()?;
+        Ok(())
     }
 
     pub fn begin_block(&mut self, file: &str, title: Option<&str>, block: usize) -> Result<()> {
@@ -224,6 +393,8 @@ impl Session {
         self.title = title.map(str::to_owned);
         self.block = block;
         self.frame = None;
+        self.scroll = 0;
+        self.hint = None;
         Ok(())
     }
 
@@ -237,7 +408,7 @@ impl Session {
             self.frame = Some(Frame::new(case, commands, expected)?);
             if self.pause_before_block {
                 self.render()?;
-                self.pause(false, false)?;
+                self.pause()?;
             }
             Ok(())
         })();
@@ -248,7 +419,13 @@ impl Session {
         let result = (|| {
             let frame = self.frame.as_mut().context("Missing walkthrough block")?;
             frame.position = position - 1;
+            *frame
+                .states
+                .get_mut(frame.position)
+                .context("Invalid walkthrough command position")? = CommandState::Running;
             frame.phase = Phase::Running;
+            self.scroll = 0;
+            self.hint = None;
             self.render()
         })();
         self.stop_on_error(result)
@@ -262,11 +439,18 @@ impl Session {
         stop_file: bool,
     ) -> Result<()> {
         let result = (|| {
-            let complete = !matches!(status, Status::Progress);
             let frame = self.frame.as_mut().context("Missing walkthrough block")?;
             frame.actual = actual.to_owned();
             frame.exit = exit;
             frame.error = None;
+            frame.stop_file = stop_file;
+            frame.states[frame.position] = if matches!(status, Status::ExecutionError(_))
+                || (exit.is_some_and(|code| code != 0) && !matches!(status, Status::Passed))
+            {
+                CommandState::Failed
+            } else {
+                CommandState::Done
+            };
             frame.phase = match status {
                 Status::Progress => Phase::Progress,
                 Status::Passed => Phase::Passed,
@@ -281,20 +465,15 @@ impl Session {
                 }
             };
             self.render()?;
-            self.pause(complete, stop_file)
+            self.pause()
         })();
         self.stop_on_error(result)
     }
 
     fn render(&mut self) -> Result<()> {
         self.output.flush()?;
-        let mut size = if self.screen {
-            Some(Term::stdout().size())
-        } else {
-            None
-        };
         let frame = self.frame.as_ref().context("Missing walkthrough block")?;
-        let (code, focus) = frame.code();
+        let code = frame.code();
         let expected = panel(
             frame
                 .expected
@@ -311,31 +490,6 @@ impl Session {
         } else {
             Vec::new()
         };
-        // Reserve space for controls, a retry hint, echoed input, and the cursor.
-        let fixed_rows = 10
-            + usize::from(self.title.as_ref().is_some_and(|title| !title.is_empty()))
-            + usize::from(frame.exit.is_some() && frame.phase != Phase::Running)
-            + if size.is_some() {
-                details.len().min(5)
-            } else {
-                details.len()
-            }
-            + usize::from(self.mode != Mode::Command)
-            + if self.mode == Mode::Command && frame.phase != Phase::Running {
-                4
-            } else {
-                0
-            };
-        if size.is_some_and(|(rows, columns)| usize::from(rows) < fixed_rows + 3 || columns < 60) {
-            size = None;
-        }
-        let details = window(&details, if size.is_some() { 5 } else { usize::MAX }, 0);
-        let body = size.map_or(usize::MAX, |(rows, _)| {
-            usize::from(rows).saturating_sub(fixed_rows).max(3)
-        });
-        let code_budget = code.len().min((body / 2).max(1));
-        let expected_budget = expected.len().min(((body - code_budget) / 2).max(1));
-        let actual_budget = body.saturating_sub(code_budget + expected_budget).max(1);
         let scope = if frame.ranges.len() > 1 {
             "whole block; "
         } else {
@@ -363,9 +517,14 @@ impl Session {
         if let Some(title) = self.title.as_deref().filter(|title| !title.is_empty()) {
             lines.push(format!("{BOLD}## {}{RESET}", plain(title)));
         }
+        if !frame.description.is_empty() {
+            lines.push(String::new());
+            lines.extend(plain(&frame.description).lines().map(str::to_owned));
+            lines.push(String::new());
+        }
         lines.push(format!(
             "{BOLD}COMMAND {} OF {}{RESET}",
-            frame.position + 1,
+            frame.next().unwrap_or(frame.position) + 1,
             frame.ranges.len()
         ));
         lines.push(format!(
@@ -376,19 +535,15 @@ impl Session {
                 format!(" (exit {})", frame.expected_exit)
             }
         ));
-        lines.extend(window(&code, code_budget, focus));
+        lines.extend(code);
         lines.push(format!("{CYAN}```{RESET}"));
         lines.push(format!(
             "{BOLD}EXPECTED OUTPUT{RESET} ({scope}{mode}, exit {})",
             frame.expected_exit
         ));
-        lines.extend(window(&expected, expected_budget, 0));
+        lines.extend(expected);
         lines.push(format!("{BOLD}{actual_label}{RESET}"));
-        lines.extend(window(
-            &actual,
-            actual_budget,
-            actual.len().saturating_sub(1),
-        ));
+        lines.extend(actual);
         lines.push(String::new());
         if let Some(exit) = frame.exit.filter(|_| frame.phase != Phase::Running) {
             lines.push(format!("  Command exited {exit}"));
@@ -417,42 +572,89 @@ impl Session {
                 }
             ));
         }
-        if size.is_some() {
-            if !self.screen_active {
-                io::stdout().write_all(b"\x1b[?1049h")?;
-                self.screen_active = true;
-            }
-            io::stdout().write_all(b"\x1b[H\x1b[2J")?;
-        } else {
+        let (rows, columns) = Term::stdout().size();
+        if !self.screen || rows < 8 || columns < 30 {
             self.restore_screen()?;
-        }
-        for line in lines {
-            if let Some((_, columns)) = size {
-                let line = line.replace('\t', "    ");
-                writeln!(
-                    self.output,
-                    "{}",
-                    truncate_str(&line, usize::from(columns).saturating_sub(1).max(1), "...")
-                )?;
-            } else {
-                writeln!(self.output, "{line}")?;
+            let raw = terminal::is_raw_mode_enabled()?;
+            for line in lines {
+                if raw {
+                    write!(self.output, "{line}\r\n")?;
+                } else {
+                    writeln!(self.output, "{line}")?;
+                }
             }
+            self.output.flush()?;
+            return Ok(());
         }
+        let _raw = RawInput::new()?;
+        if !self.screen_active {
+            self.screen_active = true;
+            io::stdout().write_all(b"\x1b[?1049h")?;
+            crossterm::execute!(io::stdout(), EnableMouseCapture)?;
+        }
+        self.page_rows = usize::from(rows) - 4;
+        let lines = wrap(&lines, usize::from(columns) - 1);
+        self.document_rows = lines.len();
+        self.scroll = self.scroll.min(lines.len().saturating_sub(self.page_rows));
+        io::stdout().write_all(b"\x1b[H\x1b[2J")?;
+        for index in self.scroll..self.scroll + self.page_rows {
+            write!(
+                self.output,
+                "{}\r\n",
+                lines.get(index).map(String::as_str).unwrap_or("")
+            )?;
+        }
+        let waiting = self.mode == Mode::Command && frame.phase != Phase::Running;
+        let action = self.action();
+        let controls = if waiting {
+            if columns >= 60 {
+                format!(
+                    "Enter: {action}  |  [q + Enter] Quit\n[b + Enter] Next block  |  [f + Enter] Finish"
+                )
+            } else {
+                format!("Enter: {action}\nb: Block  f: Finish  q: Quit")
+            }
+        } else {
+            "Running; Ctrl+C cancels.\n".to_owned()
+        };
+        for line in controls.lines().chain(std::iter::repeat("")).take(2) {
+            write!(self.output, "{line}\r\n")?;
+        }
+        let position = format!(
+            "Rows {}-{}/{}",
+            self.scroll + 1,
+            (self.scroll + self.page_rows).min(self.document_rows),
+            self.document_rows
+        );
+        let help = self
+            .hint
+            .as_deref()
+            .unwrap_or("Scroll: arrows, PgUp/PgDn, Home/End");
+        let joined = format!("{help}  |  {position}");
+        let status = if measure_text_width(&joined) < usize::from(columns) {
+            joined
+        } else if self.hint.is_some() {
+            "Use Enter/b/f/q.".to_owned()
+        } else {
+            position
+        };
+        write!(self.output, "{status}\r\n> ")?;
+        self.echo_input()?;
         self.output.flush()?;
         Ok(())
     }
 
-    fn pause(&mut self, complete: bool, stop_file: bool) -> Result<()> {
-        if self.mode != Mode::Command {
-            return Ok(());
-        }
-        let action = if stop_file {
+    fn action(&self) -> &str {
+        let frame = self.frame.as_ref();
+        let complete = frame.is_some_and(|frame| {
+            matches!(
+                frame.phase,
+                Phase::Passed | Phase::Failed | Phase::ExecutionError
+            )
+        });
+        if frame.is_some_and(|frame| frame.stop_file) {
             "Stop this file"
-        } else if self
-            .frame
-            .as_ref()
-            .is_some_and(|frame| frame.phase == Phase::Ready)
-        {
+        } else if frame.is_some_and(|frame| frame.phase == Phase::Ready) {
             "Run first command"
         } else if complete && self.block == self.blocks {
             "Finish walkthrough"
@@ -460,17 +662,26 @@ impl Session {
             "Next block"
         } else {
             "Next command"
-        };
+        }
+    }
+
+    fn pause(&mut self) -> Result<()> {
+        if self.mode != Mode::Command {
+            return Ok(());
+        }
         loop {
-            writeln!(
-                self.output,
-                "{CYAN}Enter{RESET}: {action}  |  {CYAN}[q + Enter]{RESET} Quit"
-            )?;
-            writeln!(
-                self.output,
-                "{CYAN}[b + Enter]{RESET} Next block  |  {CYAN}[f + Enter]{RESET} Finish"
-            )?;
-            self.output.flush()?;
+            if !self.screen_active {
+                let action = self.action().to_owned();
+                writeln!(
+                    self.output,
+                    "{CYAN}Enter{RESET}: {action}  |  {CYAN}[q + Enter]{RESET} Quit"
+                )?;
+                writeln!(
+                    self.output,
+                    "{CYAN}[b + Enter]{RESET} Next block  |  {CYAN}[f + Enter]{RESET} Finish"
+                )?;
+                self.output.flush()?;
+            }
             match self.read_line()?.as_deref().map(str::trim) {
                 Some("") => return Ok(()),
                 Some("b" | "B") => {
@@ -491,11 +702,15 @@ impl Session {
                     return Ok(());
                 }
                 _ => {
+                    self.hint =
+                        Some("Use Enter, b then Enter, f then Enter, or q then Enter.".to_owned());
                     self.render()?;
-                    writeln!(
-                        self.output,
-                        "Use Enter, b then Enter, f then Enter, or q then Enter."
-                    )?;
+                    if !self.screen_active {
+                        writeln!(
+                            self.output,
+                            "Use Enter, b then Enter, f then Enter, or q then Enter."
+                        )?;
+                    }
                 }
             }
         }
@@ -504,6 +719,7 @@ impl Session {
     fn restore_screen(&mut self) -> Result<()> {
         if self.screen_active {
             self.output.flush()?;
+            crossterm::execute!(io::stdout(), DisableMouseCapture)?;
             io::stdout().write_all(b"\x1b[?1049l")?;
             io::stdout().flush()?;
             self.screen_active = false;
@@ -555,29 +771,63 @@ impl Drop for Session {
     }
 }
 
-fn window(lines: &[String], budget: usize, focus: usize) -> Vec<String> {
-    if lines.len() <= budget {
-        return lines.to_vec();
-    }
-    if budget <= 2 {
-        let mut shown = vec![lines[focus.min(lines.len() - 1)].clone()];
-        if budget == 2 {
-            shown.push(format!("  ... {} other lines", lines.len() - 1));
+enum Scroll {
+    Up(usize),
+    Down(usize),
+    Home,
+    End,
+}
+
+struct RawInput {
+    restore: bool,
+}
+
+impl RawInput {
+    fn new() -> Result<Self> {
+        let restore = !terminal::is_raw_mode_enabled()?;
+        if restore {
+            terminal::enable_raw_mode().context("Failed to enable walkthrough keyboard input")?;
         }
-        return shown;
+        Ok(Self { restore })
     }
-    let count = budget.saturating_sub(2).max(1);
-    let start = focus.saturating_sub(count / 2).min(lines.len() - count);
-    let end = start + count;
-    let mut shown = Vec::new();
-    if start > 0 {
-        shown.push(format!("  ... {start} lines above"));
+}
+
+impl Drop for RawInput {
+    fn drop(&mut self) {
+        if self.restore
+            && let Err(error) = terminal::disable_raw_mode()
+        {
+            eprintln!("Failed to restore walkthrough keyboard input: {error}");
+        }
     }
-    shown.extend_from_slice(&lines[start..end]);
-    if end < lines.len() {
-        shown.push(format!("  ... {} lines below", lines.len() - end));
+}
+
+fn wrap(lines: &[String], columns: usize) -> Vec<String> {
+    let mut wrapped = Vec::new();
+    for line in lines {
+        let color = [GREEN, RED, YELLOW, CYAN, BOLD]
+            .into_iter()
+            .find(|color| line.contains(color));
+        let text = matching::strip_ansi(line).replace('\t', "    ");
+        let mut chunk = String::new();
+        let mut width = 0;
+        for grapheme in text.graphemes(true) {
+            let cells = measure_text_width(grapheme);
+            if !chunk.is_empty() && width + cells > columns {
+                wrapped.push(colorize(&chunk, color));
+                chunk.clear();
+                width = 0;
+            }
+            chunk.push_str(grapheme);
+            width += cells;
+        }
+        wrapped.push(colorize(&chunk, color));
     }
-    shown
+    wrapped
+}
+
+fn colorize(text: &str, color: Option<&str>) -> String {
+    color.map_or_else(|| text.to_owned(), |color| format!("{color}{text}{RESET}"))
 }
 
 fn panel(text: &str) -> Vec<String> {
@@ -604,7 +854,7 @@ fn plain(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Frame, Phase, plain, window};
+    use super::{CommandState, Frame, GREEN, Phase, plain, wrap};
 
     #[test]
     fn marker_tracks_multiline_commands_without_losing_comments_or_indentation() {
@@ -616,17 +866,36 @@ mod tests {
         let mut frame = Frame::new(case, &commands, None).unwrap();
         frame.position = 1;
         frame.phase = Phase::Running;
-        let (code, focus) = frame.code();
-        assert_eq!(focus, 3);
-        assert_eq!(code[0], "   # Preview: VALUE=one");
-        assert_eq!(code[3], " > for value in one two; do  [running]");
-        assert_eq!(code[4], " >   printf '%s\\n' \"$value\"  [running]");
-        assert_eq!(code[5], " > done  [running]");
+        frame.states = vec![CommandState::Done, CommandState::Running];
+        let code = frame
+            .code()
+            .iter()
+            .map(|line| plain(line))
+            .collect::<Vec<_>>();
+        assert_eq!(code[0].trim(), "# Preview: VALUE=one");
+        assert!(code[1].trim().starts_with("[done]"));
+        assert!(code[3].trim().starts_with("> [running]"));
+        assert!(code[4].contains("  printf '%s\\n' \"$value\""));
+        assert!(code[5].trim().starts_with("> [running]"));
         frame.position = 0;
-        let (code, focus) = frame.code();
-        assert_eq!(focus, 1);
-        assert_eq!(code[0], "   # Preview: VALUE=one");
-        assert_eq!(code[1], " > VALUE=one  [running]");
+        frame.phase = Phase::Progress;
+        frame.states = vec![CommandState::Done, CommandState::Pending];
+        let code = frame.code();
+        assert!(code[1].contains(GREEN));
+        assert!(!code[1].contains('>'));
+        assert!(plain(&code[3]).trim().starts_with("> [next]"));
+        frame.position = 1;
+        frame.states[1] = CommandState::Done;
+        frame.phase = Phase::Passed;
+        assert_eq!(
+            frame
+                .code()
+                .iter()
+                .filter(|line| plain(line).contains("[done]"))
+                .count(),
+            4
+        );
+        assert!(!frame.code().iter().any(|line| line.contains('>')));
     }
 
     #[test]
@@ -639,19 +908,26 @@ mod tests {
     }
 
     #[test]
-    fn clipped_panes_keep_the_active_line_and_report_hidden_lines() {
-        let lines: Vec<_> = (0..100).map(|i| format!("line {i}")).collect();
-        let shown = window(&lines, 8, 50);
-        assert!(shown.contains(&"line 50".into()));
-        assert!(shown.len() <= 8);
-        assert!(shown[0].contains("lines above"));
-        assert!(shown.last().unwrap().contains("lines below"));
-        for budget in 1..=8 {
-            for focus in [0, 50, 99] {
-                let shown = window(&lines, budget, focus);
-                assert!(shown.len() <= budget);
-                assert!(shown.contains(&format!("line {focus}")));
-            }
-        }
+    fn wrapped_document_keeps_every_character_and_unicode_grapheme() {
+        let text = format!(
+            "  {} \u{1f469}\u{200d}\u{1f4bb} caf\u{e9}  ",
+            "x".repeat(120)
+        );
+        let shown = wrap(std::slice::from_ref(&text), 20);
+        assert_eq!(shown.concat(), text);
+        assert!(
+            shown
+                .iter()
+                .all(|line| dialoguer::console::measure_text_width(line) <= 20)
+        );
+        assert!(
+            shown
+                .iter()
+                .any(|line| line.contains("\u{1f469}\u{200d}\u{1f4bb}"))
+        );
+        let lines = (0..100)
+            .map(|index| format!("line {index}"))
+            .collect::<Vec<_>>();
+        assert_eq!(wrap(&lines, 80), lines);
     }
 }

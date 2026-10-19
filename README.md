@@ -55,9 +55,13 @@ With `--step`, choose a file using the arrow keys or type to search, then press
 **Enter**. **Esc** cancels without running anything. An explicit `--file-pattern`
 (or its environment variable) or a direct Markdown file path skips the picker.
 
-During the walkthrough, a reusable Markdown-style view shows the section heading,
-the code block with a moving execution marker, and expected/actual output.
-Actual output accumulates within the block and resets at the next block.
+During the walkthrough, a fullscreen Markdown-style view shows the section heading,
+description, full code block, and expected/actual output. The arrow points to the
+next command; completed commands retain green `[done]` prefixes.
+Nothing is collapsed or truncated: long lines wrap, and **Up/Down**,
+**PgUp/PgDn**, **Home/End**, or the **mouse wheel** scroll without running commands.
+Keep sections short so they normally fit. Actual output accumulates within the
+block and resets at the next block.
 Press **Enter** for the next command, **b then Enter** to run to the next block,
 **f then Enter** to finish the file, or **q then Enter** to quit. These shortcuts
 run commands rather than skipping them; failures always pause for inspection.

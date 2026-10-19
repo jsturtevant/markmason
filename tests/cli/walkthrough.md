@@ -17,9 +17,12 @@ mm --step --file-pattern '^walkthrough\.md$' --home-env TEST_HOME
 In the picker, type `walkthrough` or use the arrow keys to select this file,
 then press Enter. Esc cancels without running any commands.
 
-The current Markdown section stays in view: heading, full code block, moving
-execution marker, expected output, and collecting actual output. The output
-area resets for each new block.
+The current Markdown section stays in view: heading, description, full code
+block, expected output, and collecting actual output. Completed commands keep
+green `[done]` prefixes; the arrow points to the next command.
+Nothing is collapsed or truncated. If a section does not fit, scroll with
+Up/Down, PgUp/PgDn, Home/End, or the mouse wheel; scrolling does not run commands.
+Keep sections short so they normally fit. The output area resets for each block.
 
 Press Enter after each result to continue, b then Enter to run the rest of the
 block and stop before the next block, f then Enter to finish the file, or q then

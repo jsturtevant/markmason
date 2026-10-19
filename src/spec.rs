@@ -22,6 +22,7 @@ pub enum Shell {
 #[derive(Debug)]
 pub struct Case {
     pub title: Option<String>,
+    pub description: String,
     pub source: String,
     pub command_ranges: Vec<std::ops::Range<usize>>,
     pub command: String,
@@ -187,10 +188,14 @@ pub fn parse_with_shell(content: &str, shell: Option<Shell>) -> Result<Spec> {
     let command_info = Regex::new(r"^markmason(?:\s+\(exit\s+(\d+)\))?$").unwrap();
     let mut current = None;
     let mut title = None;
+    let mut description = String::new();
+    let mut description_start = 0;
     let mut events = Parser::new(body).into_offset_iter();
     while let Some((event, range)) = events.next() {
         if matches!(event, Event::Start(Tag::Heading { .. })) {
             current = None;
+            description.clear();
+            description_start = range.end;
             let mut text = String::new();
             for (event, _) in events.by_ref() {
                 match event {
@@ -211,6 +216,14 @@ pub fn parse_with_shell(content: &str, shell: Option<Shell>) -> Result<Spec> {
             kind,
             "markmason" | "expected" | "expected-contains" | "stdin" | "pty"
         );
+        let prose = body[description_start..range.start].trim();
+        if !prose.is_empty() {
+            if !description.is_empty() {
+                description.push_str("\n\n");
+            }
+            description.push_str(prose);
+        }
+        description_start = range.end;
         let mut block = String::new();
         let mut content_end = body[range.clone()]
             .find('\n')
@@ -262,6 +275,7 @@ pub fn parse_with_shell(content: &str, shell: Option<Shell>) -> Result<Spec> {
                 };
                 spec.cases.push(Case {
                     title: title.clone(),
+                    description: description.clone(),
                     source: block.to_owned(),
                     command: if spec.shell.is_some() {
                         block.to_owned()

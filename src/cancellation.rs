@@ -1,4 +1,11 @@
 use anyhow::Result;
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+
+static KEYBOARD_INTERRUPT: AtomicBool = AtomicBool::new(false);
+
+pub fn interrupt() {
+    KEYBOARD_INTERRUPT.store(true, AtomicOrdering::Relaxed);
+}
 
 #[cfg(unix)]
 use std::sync::{
@@ -21,6 +28,9 @@ pub fn install() -> Result<()> {
 }
 
 pub fn signal() -> Option<i32> {
+    if KEYBOARD_INTERRUPT.load(AtomicOrdering::Relaxed) {
+        return Some(2);
+    }
     #[cfg(unix)]
     if let Some(flag) = SIGNAL.get() {
         let signal = flag.load(Ordering::Relaxed);
