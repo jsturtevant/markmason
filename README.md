@@ -66,6 +66,13 @@ Press **Enter** for the next command, **b then Enter** to run to the next block,
 **f then Enter** to finish the file, or **q then Enter** to quit. These shortcuts
 run commands rather than skipping them; failures always pause for inspection.
 
+Use language-first fences such as `bash markmason`,
+`python markmason`, or `csharp markmason` for syntax
+highlighting in Markdown renderers and the walkthrough. Existing
+`markmason` fences remain valid. Language tags affect styling only:
+they do not select an interpreter or enable Bash execution. `NO_COLOR=1`
+disables syntax colors too. See the [language-tagged examples](tests/cli/languages.md).
+
 To prepare a walkthrough from another Markdown document, add
 `setup: mm gettingstarted.md` in its frontmatter. The prerequisite runs
 automatically in the walkthrough's shared environment, so the state it creates

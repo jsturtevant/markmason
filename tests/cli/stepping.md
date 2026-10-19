@@ -167,6 +167,36 @@ Passed blocks: 1
 Failed blocks: 0
 ```
 
+## Style language-tagged command blocks
+
+```markmason
+mm tests/fixtures/walkthrough/styled.md --step
+```
+
+```pty
+match: Enter: Next command
+send: {enter}
+match: Enter: Next block
+send: {enter}
+match: Enter: Next block
+send: {enter}
+match: Enter: Finish walkthrough
+send: {enter}
+```
+
+```expected-contains
+```bash markmason
+[done] mm-test-cli echo "first"
+> [next] mm-test-cli echo "second"
+```python markmason
+| python
+```csharp markmason
+| csharp
+Walkthrough finished
+Passed blocks: 3
+Failed blocks: 0
+```
+
 ## Cancel while running to the next block
 
 Ctrl+C during command execution must unwind normally, restoring the terminal and

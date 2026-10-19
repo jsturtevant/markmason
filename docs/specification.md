@@ -24,6 +24,23 @@ expected block. The first nonzero exit stops the block and becomes its exit
 code; if all commands succeed, the block exits 0.
 Without an expected block, only the exit code is checked.
 
+Command fences may put a language before the marker: `bash markmason`,
+`python markmason`, or `csharp markmason`, optionally followed by `(exit N)`.
+Language identifiers contain ASCII letters, digits, `_`, `-`, `.`, `+`, or `#`.
+The marker remains lowercase `markmason`. Ordinary language fences without that
+marker are still documentation and do not execute.
+
+The language is styling metadata only. It enables normal Markdown syntax
+highlighting and colors source in `--step`; it never changes the executable,
+command splitting, shell selection, output, or assertions. For example, a
+`bash markmason` fence still needs `shell: bash` for persistent Bash semantics.
+Use explicit interpreter/runtime commands for Python or C# code, as with untagged fences.
+The walkthrough recognizes common language names/extensions, including
+`bash`/`sh`/`shell`, `python`/`py`, and `csharp`/`c#`/`cs`. Unknown languages
+remain plain text. Syntax colors honor `NO_COLOR` and survive line wrapping;
+completed-command markers remain independently green. Untagged `markmason`
+fences keep their existing presentation.
+
 Without `shell: bash`, each command starts in the file's working directory and environment, sharing
 file state but not shell variables or `cd` changes. Use an explicit interpreter
 for shell scripts. A `stdin` block supplies input to the first command only;
