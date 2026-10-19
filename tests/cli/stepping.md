@@ -167,6 +167,35 @@ Passed blocks: 1
 Failed blocks: 0
 ```
 
+## Cancel while running to the next block
+
+Ctrl+C during command execution must unwind normally, restoring the terminal and
+returning exit 130 on every supported platform.
+
+```markmason (exit 130)
+mm tests/fixtures/walkthrough/interrupt.md --step
+```
+
+```pty
+match: Enter: Next command
+send: b{enter}
+match: > [running] mm-test-cli sleep
+send: {ctrl-c}
+```
+
+## Cancel while finishing the file
+
+```markmason (exit 130)
+mm tests/fixtures/walkthrough/interrupt.md --step
+```
+
+```pty
+match: Enter: Next command
+send: f{enter}
+match: > [running] mm-test-cli sleep
+send: {ctrl-c}
+```
+
 ## Quit before the next command runs
 
 ```markmason

@@ -16,12 +16,35 @@ use std::sync::{
 #[cfg(unix)]
 static SIGNAL: OnceLock<Arc<AtomicUsize>> = OnceLock::new();
 
+#[cfg(windows)]
+unsafe extern "system" fn console_control(event: u32) -> windows_sys::core::BOOL {
+    use windows_sys::Win32::System::Console::{CTRL_BREAK_EVENT, CTRL_C_EVENT};
+    if matches!(event, CTRL_C_EVENT | CTRL_BREAK_EVENT) {
+        interrupt();
+        1
+    } else {
+        0
+    }
+}
+
 pub fn install() -> Result<()> {
     #[cfg(unix)]
     {
         let flag = SIGNAL.get_or_init(|| Arc::new(AtomicUsize::new(0)));
         for signal in [libc::SIGINT, libc::SIGTERM] {
             signal_hook::flag::register_usize(signal, Arc::clone(flag), signal as usize)?;
+        }
+    }
+    #[cfg(windows)]
+    {
+        use anyhow::Context;
+        use windows_sys::Win32::System::Console::{GetConsoleCP, SetConsoleCtrlHandler};
+        // Console-less processes cannot receive console control events.
+        if unsafe { GetConsoleCP() } != 0
+            && unsafe { SetConsoleCtrlHandler(Some(console_control), 1) } == 0
+        {
+            return Err(std::io::Error::last_os_error())
+                .context("Failed to install console cancellation handler");
         }
     }
     Ok(())

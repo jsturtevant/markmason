@@ -326,7 +326,7 @@ Created demo
 
 | Kind | Placeholders |
 |------|--------------|
-| Input | `{enter}`, `{up}`, `{down}`, `{space}`, `{backspace}`, `{escape}` |
+| Input | `{enter}`, `{up}`, `{down}`, `{space}`, `{backspace}`, `{escape}`, `{ctrl-c}` |
 | Raw output | `{hide-cursor}`, `{show-cursor}`, `{clear-screen}`, `{alt-screen}`, `\xNN` |
 
 Raw and ANSI-stripped matches advance separate cursors.

@@ -414,7 +414,6 @@ impl Session {
         let result = (|| {
             self.frame = Some(Frame::new(case, commands, expected)?);
             if self.pause_before_block {
-                self.render()?;
                 self.pause()?;
             }
             Ok(())
@@ -471,7 +470,6 @@ impl Session {
                     }
                 }
             };
-            self.render()?;
             self.pause()
         })();
         self.stop_on_error(result)
@@ -673,19 +671,22 @@ impl Session {
     }
 
     fn pause(&mut self) -> Result<()> {
+        let _raw = self.screen.then(RawInput::new).transpose()?;
+        self.render()?;
         if self.mode != Mode::Command {
             return Ok(());
         }
+        let newline = if self.screen { "\r\n" } else { "\n" };
         loop {
             if !self.screen_active {
                 let action = self.action().to_owned();
-                writeln!(
+                write!(
                     self.output,
-                    "{CYAN}Enter{RESET}: {action}  |  {CYAN}[q + Enter]{RESET} Quit"
+                    "{CYAN}Enter{RESET}: {action}  |  {CYAN}[q + Enter]{RESET} Quit{newline}"
                 )?;
-                writeln!(
+                write!(
                     self.output,
-                    "{CYAN}[b + Enter]{RESET} Next block  |  {CYAN}[f + Enter]{RESET} Finish"
+                    "{CYAN}[b + Enter]{RESET} Next block  |  {CYAN}[f + Enter]{RESET} Finish{newline}"
                 )?;
                 self.output.flush()?;
             }
@@ -705,7 +706,7 @@ impl Session {
                 }
                 None => {
                     self.stopped = true;
-                    writeln!(self.output, "Input closed. Stopping walkthrough.")?;
+                    write!(self.output, "Input closed. Stopping walkthrough.{newline}")?;
                     return Ok(());
                 }
                 _ => {
@@ -713,9 +714,9 @@ impl Session {
                         Some("Use Enter, b then Enter, f then Enter, or q then Enter.".to_owned());
                     self.render()?;
                     if !self.screen_active {
-                        writeln!(
+                        write!(
                             self.output,
-                            "Use Enter, b then Enter, f then Enter, or q then Enter."
+                            "Use Enter, b then Enter, f then Enter, or q then Enter.{newline}"
                         )?;
                     }
                 }

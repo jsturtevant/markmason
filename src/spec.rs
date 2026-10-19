@@ -77,6 +77,7 @@ pub fn input_keys(text: &str) -> String {
             ("{space}", " "),
             ("{backspace}", "\x7f"),
             ("{escape}", "\x1b"),
+            ("{ctrl-c}", "\x03"),
         ],
     )
 }
