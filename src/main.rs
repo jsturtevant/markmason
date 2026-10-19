@@ -857,6 +857,7 @@ fn run(options: Options) -> Result<bool> {
             else {
                 return Ok(None);
             };
+            cancellation::check()?;
             Fixture::new(
                 &options,
                 &spec,

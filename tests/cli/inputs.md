@@ -72,6 +72,29 @@ mm-test-cli with-env MARKMASON_TUTORIAL_NAME "" MARKMASON_TUTORIAL_REGION "" -- 
 FAIL setup: Missing required inputs: MARKMASON_TUTORIAL_NAME, MARKMASON_TUTORIAL_REGION. Set these environment variables or use --step to be prompted.
 ```
 
+## Cancel immediately after the final input
+
+Ctrl+C buffered with the final answer must stop before setup. The setup would
+write a marker into the outer fixture, so it remains observable after the inner
+walkthrough exits.
+
+```markmason (exit 130)
+mm-test-cli with-env MARKMASON_CANCEL_INPUT "" MARKMASON_CANCEL_HOME "$TEST_HOME" -- mm tests/fixtures/inputs/cancel.md --step
+```
+
+```pty
+match: Input MARKMASON_CANCEL_INPUT
+send: value{enter}{ctrl-c}
+```
+
+```markmason
+mm-test-cli state-exists
+```
+
+```expected
+false
+```
+
 ## Quit while supplying inputs
 
 `q` then Enter or EOF cancels before any setup or application command.

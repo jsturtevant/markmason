@@ -278,7 +278,7 @@ impl Session {
 
     pub fn prompt_input(&mut self, file: &str, input: &spec::Input) -> Result<Option<String>> {
         self.restore_screen()?;
-        let _raw = self.screen.then(RawInput::new).transpose()?;
+        let raw = self.screen.then(RawInput::new).transpose()?;
         let newline = if self.screen { "\r\n" } else { "\n" };
         write!(
             self.output,
@@ -308,7 +308,13 @@ impl Session {
                         "Enter a nonempty value without NUL characters.{newline}"
                     )?;
                 }
-                Some(value) => return Ok(Some(value.to_owned())),
+                Some(value) => {
+                    // Catch buffered interrupts before and after restoring native signals.
+                    self.collect_keys()?;
+                    drop(raw);
+                    self.collect_keys()?;
+                    return Ok(Some(value.to_owned()));
+                }
             }
         }
     }
