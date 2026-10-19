@@ -981,6 +981,36 @@ fn step_mode_filters_files_and_checks_combined_output_after_the_block() {
     assert!(!result.contains('\x1b'), "{result}");
 }
 
+#[cfg(windows)]
+#[test]
+fn redirected_step_mode_does_not_require_a_windows_console() {
+    use std::os::windows::process::CommandExt;
+    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+
+    let dir = tempfile::tempdir().unwrap();
+    let lesson = dir.path().join("lesson.md");
+    let marker = dir.path().join("must-not-run");
+    fs::write(
+        &lesson,
+        format!(
+            "```markmason\napp echo ready\napp mark \"{}\"\n```\n",
+            marker.display()
+        ),
+    )
+    .unwrap();
+    let mut cmd = command(&lesson);
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let (child, mut input, receive) = step_command(cmd, &[]);
+    input.write_all(b"q\n").unwrap();
+    drop(input);
+    let output = child.wait_with_output().unwrap();
+    let transcript = receive.into_iter().map(Result::unwrap).collect::<String>();
+    assert!(output.status.success(), "{transcript}\n{}", text(&output));
+    assert!(transcript.contains("Walkthrough stopped"), "{transcript}");
+    assert!(!transcript.contains('\x1b'), "{transcript}");
+    assert!(!marker.exists(), "{transcript}");
+}
+
 #[cfg(unix)]
 #[test]
 fn step_terminal_scrolls_complete_sections_and_keeps_done_and_next_markers() {

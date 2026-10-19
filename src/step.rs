@@ -14,6 +14,7 @@ use dialoguer::{
     theme::ColorfulTheme,
 };
 use std::{
+    collections::VecDeque,
     io::{self, BufRead, IsTerminal, Write},
     ops::Range,
     sync::mpsc::{self, Receiver},
@@ -182,6 +183,7 @@ impl Frame {
 pub struct Session {
     output: AutoStream<io::Stdout>,
     input: Option<Receiver<io::Result<Option<String>>>>,
+    pending_keys: VecDeque<Event>,
     blocks: usize,
     block: usize,
     file: String,
@@ -230,6 +232,7 @@ impl Session {
         let mut session = Self {
             output: AutoStream::new(io::stdout(), ColorChoice::Auto),
             input,
+            pending_keys: VecDeque::new(),
             blocks,
             block: 0,
             file: String::new(),
@@ -279,15 +282,17 @@ impl Session {
         self.input_text.clear();
         loop {
             cancellation::check()?;
-            if !event::poll(Duration::from_millis(50))? {
-                continue;
-            }
-            let movement = match event::read().context("Failed reading walkthrough key")? {
+            let event = if let Some(event) = self.pending_keys.pop_front() {
+                event
+            } else {
+                if !event::poll(Duration::from_millis(50))? {
+                    continue;
+                }
+                event::read().context("Failed reading walkthrough key")?
+            };
+            check_key_interrupt(&event)?;
+            let movement = match event {
                 Event::Key(key) if key.kind != KeyEventKind::Release => match key.code {
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        cancellation::interrupt();
-                        bail!("Interrupted by keyboard");
-                    }
                     KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         if !self.screen_active {
                             write!(self.output, "\r\n")?;
@@ -367,6 +372,19 @@ impl Session {
         }
     }
 
+    fn collect_keys(&mut self) -> Result<()> {
+        // Ctrl+C can be buffered with the key that leaves a raw-mode pause.
+        cancellation::check()?;
+        if self.screen {
+            while event::poll(Duration::ZERO)? {
+                let event = event::read().context("Failed reading queued walkthrough key")?;
+                check_key_interrupt(&event)?;
+                self.pending_keys.push_back(event);
+            }
+        }
+        Ok(())
+    }
+
     fn echo_input(&mut self) -> Result<()> {
         let columns = usize::from(Term::stdout().size().1)
             .saturating_sub(3)
@@ -423,6 +441,7 @@ impl Session {
 
     pub fn preview(&mut self, position: usize) -> Result<()> {
         let result = (|| {
+            self.collect_keys()?;
             let frame = self.frame.as_mut().context("Missing walkthrough block")?;
             frame.position = position - 1;
             *frame
@@ -578,20 +597,19 @@ impl Session {
             ));
         }
         let (rows, columns) = Term::stdout().size();
+        let newline = if self.screen && terminal::is_raw_mode_enabled()? {
+            "\r\n"
+        } else {
+            "\n"
+        };
         if !self.screen || rows < 8 || columns < 30 {
             self.restore_screen()?;
-            let raw = terminal::is_raw_mode_enabled()?;
             for line in lines {
-                if raw {
-                    write!(self.output, "{line}\r\n")?;
-                } else {
-                    writeln!(self.output, "{line}")?;
-                }
+                write!(self.output, "{line}{newline}")?;
             }
             self.output.flush()?;
             return Ok(());
         }
-        let _raw = RawInput::new()?;
         if !self.screen_active {
             self.screen_active = true;
             io::stdout().write_all(b"\x1b[?1049h")?;
@@ -605,7 +623,7 @@ impl Session {
         for index in self.scroll..self.scroll + self.page_rows {
             write!(
                 self.output,
-                "{}\r\n",
+                "{}{newline}",
                 lines.get(index).map(String::as_str).unwrap_or("")
             )?;
         }
@@ -623,7 +641,7 @@ impl Session {
             "Running; Ctrl+C cancels.\n".to_owned()
         };
         for line in controls.lines().chain(std::iter::repeat("")).take(2) {
-            write!(self.output, "{line}\r\n")?;
+            write!(self.output, "{line}{newline}")?;
         }
         let position = format!(
             "Rows {}-{}/{}",
@@ -643,7 +661,7 @@ impl Session {
         } else {
             position
         };
-        write!(self.output, "{status}\r\n> ")?;
+        write!(self.output, "{status}{newline}> ")?;
         self.echo_input()?;
         self.output.flush()?;
         Ok(())
@@ -671,7 +689,9 @@ impl Session {
     }
 
     fn pause(&mut self) -> Result<()> {
-        let _raw = self.screen.then(RawInput::new).transpose()?;
+        let _raw = (self.screen && self.mode == Mode::Command)
+            .then(RawInput::new)
+            .transpose()?;
         self.render()?;
         if self.mode != Mode::Command {
             return Ok(());
@@ -784,6 +804,18 @@ enum Scroll {
     Down(usize),
     Home,
     End,
+}
+
+fn check_key_interrupt(event: &Event) -> Result<()> {
+    if let Event::Key(key) = event
+        && key.kind != KeyEventKind::Release
+        && key.code == KeyCode::Char('c')
+        && key.modifiers.contains(KeyModifiers::CONTROL)
+    {
+        cancellation::interrupt();
+        bail!("Interrupted by keyboard");
+    }
+    Ok(())
 }
 
 struct RawInput {

@@ -196,6 +196,17 @@ match: > [running] mm-test-cli sleep
 send: {ctrl-c}
 ```
 
+## Honor cancellation queued with a run-ahead key
+
+```markmason (exit 130)
+mm tests/fixtures/walkthrough/interrupt.md --step
+```
+
+```pty
+match: Enter: Next command
+send: f{enter}{ctrl-c}
+```
+
 ## Quit before the next command runs
 
 ```markmason

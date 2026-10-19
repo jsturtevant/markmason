@@ -40,8 +40,10 @@ pub fn install() -> Result<()> {
         use anyhow::Context;
         use windows_sys::Win32::System::Console::{GetConsoleCP, SetConsoleCtrlHandler};
         // Console-less processes cannot receive console control events.
+        // Clear inherited Ctrl+C suppression only after installing our handler.
         if unsafe { GetConsoleCP() } != 0
-            && unsafe { SetConsoleCtrlHandler(Some(console_control), 1) } == 0
+            && (unsafe { SetConsoleCtrlHandler(Some(console_control), 1) } == 0
+                || unsafe { SetConsoleCtrlHandler(None, 0) } == 0)
         {
             return Err(std::io::Error::last_os_error())
                 .context("Failed to install console cancellation handler");
