@@ -295,7 +295,10 @@ impl Session {
                             Some(std::mem::take(&mut self.input_text))
                         });
                     }
-                    KeyCode::Enter => {
+                    KeyCode::Enter | KeyCode::Char('j' | 'm')
+                        if key.code == KeyCode::Enter
+                            || key.modifiers.contains(KeyModifiers::CONTROL) =>
+                    {
                         if !self.screen_active {
                             write!(self.output, "\r\n")?;
                             self.output.flush()?;

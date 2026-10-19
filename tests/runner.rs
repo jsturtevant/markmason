@@ -1128,7 +1128,7 @@ send: ignored{enter}
                             );
                             assert!(frame.contains("> [next]"), "{frame}");
                         }
-                        Some(b"\r")
+                        Some(b"\n")
                     }
                     5 if frame.contains("Enter: Next block") => {
                         if rows == 24 && cols == 80 {
@@ -1146,7 +1146,7 @@ send: ignored{enter}
                     {
                         Some(b"b\r")
                     }
-                    7 if frame.contains("Enter: Run first command") => Some(b"f\r"),
+                    7 if frame.contains("Enter: Run first command") => Some(b"f\n"),
                     _ => None,
                 }
             };
