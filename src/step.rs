@@ -143,10 +143,14 @@ impl Frame {
         for raw in self.source.split_inclusive('\n') {
             let line = raw.trim_end_matches(['\r', '\n']);
             let end = offset + line.len();
+            let overlaps = |range: &Range<usize>| range.start <= end && range.end > offset;
+            let preferred = next.unwrap_or(self.position);
             let command = self
                 .ranges
-                .iter()
-                .position(|range| range.start <= end && range.end > offset);
+                .get(preferred)
+                .filter(|range| overlaps(range))
+                .map(|_| preferred)
+                .or_else(|| self.ranges.iter().position(overlaps));
             let marker = if command.is_some() && command == next {
                 ">"
             } else {
@@ -899,6 +903,34 @@ mod tests {
             4
         );
         assert!(!frame.code().iter().any(|line| line.contains('>')));
+    }
+
+    #[test]
+    fn same_line_marker_prioritizes_next_running_and_failed_commands() {
+        let parsed = crate::spec::parse(
+            "---\nshell: bash\n---\n```markmason\nprintf 'one'; printf 'two'\n```\n",
+        )
+        .unwrap();
+        let case = &parsed.cases[0];
+        let commands = crate::shell::commands(&case.command).unwrap();
+        let mut frame = Frame::new(case, &commands, None).unwrap();
+        for (phase, position, state, prefix) in [
+            (Phase::Progress, 0, CommandState::Pending, "> [next]"),
+            (Phase::Running, 1, CommandState::Running, "> [running]"),
+            (Phase::Failed, 1, CommandState::Failed, "[failed]"),
+            (Phase::ExecutionError, 1, CommandState::Failed, "[failed]"),
+            (Phase::Passed, 1, CommandState::Done, "[done]"),
+        ] {
+            frame.phase = phase;
+            frame.position = position;
+            frame.states = vec![CommandState::Done, state];
+            let code = frame.code();
+            assert_eq!(code.len(), 1);
+            let line = plain(&code[0]);
+            assert!(line.trim().starts_with(prefix), "{line}");
+            assert!(line.ends_with("printf 'one'; printf 'two'"), "{line}");
+            assert_eq!(line.contains('>'), prefix.starts_with('>'), "{line}");
+        }
     }
 
     #[test]
