@@ -125,8 +125,8 @@ impl<'a> Block<'a> {
     }
 }
 
-fn before_boundary<'a>(text: &'a str, boundary: &str) -> Option<&'a str> {
-    boundary_frame(text.as_bytes(), boundary).map(|(position, _)| {
+fn before_boundary<'a>(text: &'a str, boundary: &str, allow_eof: bool) -> Option<&'a str> {
+    boundary_frame(text.as_bytes(), boundary, allow_eof).map(|(position, _)| {
         let text = &text[..position];
         text.strip_suffix("\r\r\n")
             .or_else(|| text.strip_suffix("\r\n"))
@@ -135,11 +135,17 @@ fn before_boundary<'a>(text: &'a str, boundary: &str) -> Option<&'a str> {
     })
 }
 
+#[cfg(test)]
 pub(super) fn boundary_end(bytes: &[u8], boundary: &str) -> Option<usize> {
-    boundary_frame(bytes, boundary).map(|(_, end)| end)
+    boundary_frame(bytes, boundary, false).map(|(_, end)| end)
 }
 
-fn boundary_frame(bytes: &[u8], boundary: &str) -> Option<(usize, usize)> {
+#[cfg(test)]
+pub(super) fn boundary_end_at_eof(bytes: &[u8], boundary: &str) -> Option<usize> {
+    boundary_frame(bytes, boundary, true).map(|(_, end)| end)
+}
+
+fn boundary_frame(bytes: &[u8], boundary: &str, allow_eof: bool) -> Option<(usize, usize)> {
     static FRAME_END: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"^(?:\r|\x1b\[[?]?[0-9;]*[a-zA-Z])*?(?:\n|\x1b\[[0-9]+;1[Hf])").unwrap()
     });
@@ -153,6 +159,9 @@ fn boundary_frame(bytes: &[u8], boundary: &str) -> Option<(usize, usize)> {
             continue;
         }
         let start = position + boundary.len();
+        if allow_eof && start == bytes.len() {
+            return Some((position, start));
+        }
         if let Some(end) = FRAME_END.find(&bytes[start..]) {
             return Some((position, start + end.end()));
         }
@@ -311,6 +320,7 @@ impl Session {
         self.ready = false;
         self.sequence += 1;
         let start = Instant::now();
+        let mut recovering = false;
         let mut interrupted = None;
         let mut recovery_deadline = None;
         let mut cleanup = None;
@@ -321,12 +331,6 @@ impl Session {
                 Err(mpsc::RecvTimeoutError::Disconnected) => {}
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
-            let raw = String::from_utf8_lossy(&bytes);
-            let clean = pty_text(&raw);
-            let finished = before_boundary(&clean, &boundary);
-            let clean = finished.unwrap_or(&clean);
-            let command_raw = before_boundary(&raw, &boundary).unwrap_or(&raw);
-            let frame_end = boundary_end(&bytes, &boundary);
             let status = match fs::read_to_string(directory.join("status")) {
                 Ok(text) if text.ends_with('\n') => Some(
                     text.trim()
@@ -337,9 +341,17 @@ impl Session {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
                 Err(error) => return Err(error).context("Failed reading Bash command status"),
             };
-            if interrupted.is_none()
-                && let Some(block) = block.as_deref_mut()
-            {
+            let allow_eof = recovering
+                && status.is_some()
+                && recovery_deadline.is_some_and(|deadline| Instant::now() >= deadline);
+            let raw = String::from_utf8_lossy(&bytes);
+            let clean = pty_text(&raw);
+            let finished = before_boundary(&clean, &boundary, allow_eof);
+            let clean = finished.unwrap_or(&clean);
+            let command_raw = before_boundary(&raw, &boundary, allow_eof).unwrap_or(&raw);
+            let frame_end =
+                boundary_frame(&bytes, &boundary, allow_eof).map(|(_, frame_end)| frame_end);
+            if !recovering && let Some(block) = block.as_deref_mut() {
                 block.interaction.advance(
                     &format!("{}{command_raw}", block.raw),
                     &format!("{}{clean}", block.clean),
@@ -363,9 +375,11 @@ impl Session {
                     u64::try_from(stderr.len())?,
                 ))
             };
-            if interrupted.is_none() {
-                let interruption = cancellation::check().err().or_else(|| {
-                    (start.elapsed() >= timeout).then(|| {
+            if !recovering {
+                let cancellation = cancellation::check().err();
+                let timed_out = start.elapsed() >= timeout;
+                let interruption = cancellation.or_else(|| {
+                    timed_out.then(|| {
                         anyhow::anyhow!(
                             "Bash command timed out after {}ms: {command}",
                             timeout.as_millis()
@@ -377,16 +391,19 @@ impl Session {
                     if !self.cleanup_enabled {
                         return Err(error);
                     }
-                    interrupted = Some(error);
+                    recovering = true;
                     cleanup = Some(cancellation::Cleanup::new());
                     recovery_deadline = Some(Instant::now() + Duration::from_secs(2));
                     if recovery_needs_interrupt(status, frame_end) {
+                        interrupted = Some(error);
                         recovery_write = Some(terminal.input.write(vec![3])?);
+                    } else if cancellation::signal().is_some() {
+                        interrupted = Some(error);
                     }
                 }
             }
             if let Some(code) = status
-                && (interrupted.is_some()
+                && (recovering
                     || block
                         .as_ref()
                         .is_none_or(|block| !block.interaction.sending()))
@@ -396,7 +413,7 @@ impl Session {
                 self.pending = bytes[frame_end..].to_vec();
                 self.stdout_position += stdout;
                 self.stderr_position += stderr;
-                if let Some(error) = interrupted {
+                if recovering {
                     let deadline = recovery_deadline.context("Missing Bash recovery deadline")?;
                     if let Some(block) = block.as_deref_mut() {
                         block
@@ -412,9 +429,12 @@ impl Session {
                     }
                     self.ready = true;
                     drop(cleanup);
-                    return Err(error);
+                    if let Some(error) = interrupted {
+                        return Err(error);
+                    }
+                } else {
+                    self.ready = true;
                 }
-                self.ready = true;
                 if let Some(block) = block {
                     block.raw.push_str(command_raw);
                     block.clean.push_str(&output.text);
@@ -432,7 +452,11 @@ impl Session {
             }
             if recovery_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 return Err(interrupted
-                    .context("Missing Bash interruption")?
+                    .unwrap_or_else(|| {
+                        anyhow::anyhow!(
+                            "Bash command completed without a full terminal boundary: {command}"
+                        )
+                    })
                     .context("Bash session could not resume for deferred blocks"));
             }
         }

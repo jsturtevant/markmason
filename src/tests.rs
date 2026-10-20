@@ -41,6 +41,10 @@ fn bash_terminal_boundaries_preserve_following_output_and_wait_for_complete_fram
         assert_eq!(&raw[end..], after);
     }
     assert!(shell::boundary_end(b"output\r\nTOKEN", "TOKEN").is_none());
+    assert_eq!(
+        shell::boundary_end_at_eof(b"output\r\nTOKEN", "TOKEN"),
+        Some(b"output\r\nTOKEN".len())
+    );
     assert!(shell::boundary_end(b"output\r\nTOKEN\x1b[3;", "TOKEN").is_none());
     assert!(shell::boundary_end(b"trace TOKEN\r\n", "TOKEN").is_none());
     assert!(shell::boundary_end(b"TOKEN'\r\n", "TOKEN").is_none());
