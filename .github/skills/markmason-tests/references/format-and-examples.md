@@ -77,6 +77,43 @@ error: unknown option --not-an-option
 - Use `{enter}`, `{up}`, `{down}`, `{space}`, and `{backspace}` for PTY input.
   Sends do not append a newline automatically.
 
+## Partial output assertions
+
+Use these forms only with an `mm` build that supports `expected-substring` and
+`expected-regex`. Older builds may ignore these fences and check only exit codes.
+Keep `expected` and `expected-contains` for full output or selected whole lines.
+
+For an error such as `Error from server: user "demo-482" is not authorized to xyz`,
+keep the command's full output and assert its stable phrase:
+
+````markdown
+```expected-substring
+is not authorized to xyz
+```
+````
+
+For output such as `Created pod demo-482 in 1.25s`, match the variable parts:
+
+````markdown
+```expected-regex
+Created pod demo-\d+ in \d+\.\d+s
+```
+````
+
+- Treat each block as one substring or pattern, including internal newlines.
+  The fence's final newline is not part of the assertion.
+- Allow unmatched output before and after; preserve whitespace and paths,
+  normalizing only CRLF to LF. Matching is case-sensitive by default.
+- Use Rust regex syntax: `(?m)` enables line anchors; `(?s)` lets `.` span newlines.
+  Write `\d+` directly, `\.` for a literal dot, and `\\` for a literal backslash.
+  Do not add a JSON or shell escaping layer inside the assertion fence.
+- Keep `(exit N)` for expected command failures. A text match does not replace
+  the exit-code assertion.
+- Use a nonempty, meaningful phrase or pattern. Empty assertions match any output.
+- Keep missing-match and malformed-pattern examples in a separate error guide.
+  A mismatch reports the requested substring or pattern and actual output;
+  an invalid regex fails parsing before commands run.
+
 ## Frontmatter and state
 
 ```yaml

@@ -29,6 +29,13 @@ description: >-
   feature relevant to the project.
 - Put one short, useful explanation beside each command. Say what it does or
   why its output matters.
+- Treat walkthroughs as lessons for humans, not scripts hidden in Markdown.
+  Prefer familiar CLI commands and short, named steps over dense query languages,
+  nested pipelines, or general-purpose selection algorithms.
+- Put reusable prerequisite checks in a clearly named `setup.md`: inspect the
+  connected system and verify named resources exist, even when inputs came from
+  the environment. Keep setup readable as its own guide; do not duplicate shared
+  checks in each scenario just to make them visible in step mode.
 - Keep the prose brief and natural. Avoid filler, marketing language, and
   repeated "this test verifies" introductions.
 - Use descriptive headings and put commands in `markmason` fenced blocks.
@@ -55,6 +62,15 @@ description: >-
 - Prefer exact `expected` output for short, stable results.
 - Use `expected-contains` for selected whole lines, in order. It is not substring
   or regex matching, and unmatched trailing lines still fail.
+- Use `expected-substring` for a stable literal phrase inside dynamic output.
+  Prefer it over piping through `grep` or rewriting output just for an assertion.
+- Use `expected-regex` only when the match needs a pattern, such as a generated
+  ID or duration. Write Rust regex escapes directly in the fence.
+- Treat each substring or regex block as one assertion over the full output,
+  not a list of independent lines. Preserve whitespace and path separators;
+  only CRLF line endings normalize. Extra output before and after is allowed.
+- Confirm the installed `mm` supports these fences before using them; older
+  versions may ignore unrecognized assertion blocks and check only the exit code.
 - Assert actual version output, not just a successful exit or help text saying
   "Print version". Hardcode the current version and document updating the
   assertion alongside the package version.
