@@ -67,6 +67,342 @@ fn text(output: &Output) -> String {
 }
 
 #[test]
+fn always_blocks_run_once_after_ordinary_blocks_in_document_order() {
+    for shell in ["", "shell: bash\n"] {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("lesson.md"),
+            format!(
+                "---\n{shell}timeout: 2\n---\n\
+                 ```bash markmason always\napp state\n```\n```expected\nordinary\n```\n\
+                 ```markmason\napp write-state TEST_HOME ordinary\n```\n\
+                 ```markmason always\napp write-state TEST_HOME finished\n```\n\
+                 ```markmason always\napp state\n```\n```expected\nfinished\n```\n"
+            ),
+        )
+        .unwrap();
+        let output = command(dir.path()).output().unwrap();
+        assert!(output.status.success(), "{}", text(&output));
+        assert!(
+            text(&output).contains("pass 4\nfail 0"),
+            "{}",
+            text(&output)
+        );
+        assert_eq!(text(&output).matches("RUN always").count(), 3);
+    }
+}
+
+#[test]
+fn always_blocks_run_after_assertion_command_spawn_and_timeout_failures() {
+    for shell in ["", "shell: bash\n"] {
+        for (command_text, assertion, message) in [
+            ("app echo actual", "```expected\nmissing\n```\n", "mismatch"),
+            ("app fail", "", "expected exit 0"),
+            (
+                "markmason-always-missing-command",
+                "",
+                "markmason-always-missing-command",
+            ),
+            ("app sleep", "", "timed out"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let marker = dir.path().join("cleaned");
+            fs::write(
+                dir.path().join("lesson.md"),
+                format!(
+                    "---\n{shell}timeout: 0.5\n---\n\
+                     ```markmason\n{command_text}\n```\n{assertion}\
+                     ```markmason always\napp mark '{}'\n```\n",
+                    shell_path(&marker)
+                ),
+            )
+            .unwrap();
+            let output = command(dir.path()).output().unwrap();
+            let transcript = text(&output);
+            assert_eq!(output.status.code(), Some(1), "{transcript}");
+            assert!(transcript.contains(message), "{message}: {transcript}");
+            assert!(marker.exists(), "{shell}{command_text}: {transcript}");
+            assert_eq!(transcript.matches("RUN always").count(), 1, "{transcript}");
+        }
+    }
+}
+
+#[test]
+fn later_always_blocks_run_even_after_cleanup_failures() {
+    for shell in ["", "shell: bash\n"] {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("last-cleanup");
+        fs::write(
+            dir.path().join("lesson.md"),
+            format!(
+                "---\n{shell}timeout: 0.5\n---\n\
+                 ```markmason\napp echo ready\n```\n\
+                 ```markmason always\napp echo actual\n```\n```expected\nmissing\n```\n\
+                 ```markmason always\napp sleep\n```\n\
+                 ```markmason always (exit 2)\napp fail\n```\n\
+                 ```markmason always\napp mark '{}'\n```\n",
+                shell_path(&marker)
+            ),
+        )
+        .unwrap();
+        let output = command(dir.path()).output().unwrap();
+        let transcript = text(&output);
+        assert_eq!(output.status.code(), Some(1), "{transcript}");
+        assert_eq!(transcript.matches("FAIL always").count(), 2, "{transcript}");
+        assert!(transcript.contains("pass 3\nfail 2"), "{transcript}");
+        assert!(marker.exists(), "{transcript}");
+    }
+}
+
+#[test]
+fn always_blocks_preserve_custom_and_ignored_sigint_traps() {
+    for (handler, expected) in [
+        ("release_resource", "trap -- 'release_resource' SIGINT"),
+        ("''", "trap -- '' SIGINT"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("setup.md"),
+            format!("```markmason\nrelease_resource() {{ :; }}\ntrap {handler} INT\n```\n"),
+        )
+        .unwrap();
+        let lesson = dir.path().join("lesson.md");
+        fs::write(
+            &lesson,
+            format!(
+                "---\nshell: bash\nsetup: mm setup.md\ntimeout: 2\n---\n\
+                 ```markmason\ntrap -p INT\n```\n```expected\n{expected}\n```\n\
+                 ```markmason always\ntrap -p INT\n```\n```expected\n{expected}\n```\n"
+            ),
+        )
+        .unwrap();
+        let output = command(&lesson).output().unwrap();
+        assert!(output.status.success(), "{}", text(&output));
+        assert!(
+            text(&output).contains("pass 2\nfail 0"),
+            "{}",
+            text(&output)
+        );
+    }
+}
+
+#[test]
+fn always_timeout_runs_user_sigint_handler_before_cleanup() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("handler-ran");
+    let lesson = dir.path().join("lesson.md");
+    fs::write(
+        &lesson,
+        "---\nshell: bash\ntimeout: 2\n---\n\
+         ```markmason\nrelease_resource() { printf 'released\\n' > \"$MARKMASON_TRAP_MARKER\"; }\n\
+         trap release_resource INT\n```\n\
+         ```markmason\napp sleep\n```\n\
+         ```markmason always\ntrap -p INT\n```\n\
+         ```expected\ntrap -- 'release_resource' SIGINT\n```\n",
+    )
+    .unwrap();
+    let output = command(&lesson)
+        .env("MARKMASON_TRAP_MARKER", shell_path(&marker))
+        .output()
+        .unwrap();
+    let transcript = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{transcript}");
+    assert!(transcript.contains("timed out"), "{transcript}");
+    assert!(transcript.contains("pass 2\nfail 1"), "{transcript}");
+    assert_eq!(fs::read_to_string(&marker).unwrap(), "released\n");
+}
+
+#[test]
+fn pty_cleanup_steps_run_after_bash_timeout_recovery() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("lesson.md"),
+        format!(
+            "---\nshell: bash\ntimeout: {}\n---\n\
+         ```markmason\napp sleep\n```\n\
+         ```markmason always\napp interactive\n```\n\
+         ```pty\nmatch: Ready?\nsend: cleanup{{enter}}\nmatch: Ready?\nsend: finished{{enter}}\n```\n\
+         ```expected-regex\n(?s)accepted cleanup.*done finished\n```\n",
+            if cfg!(windows) { 5 } else { 2 }
+        ),
+    )
+    .unwrap();
+    let output = command(dir.path()).output().unwrap();
+    let transcript = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{transcript}");
+    assert!(
+        transcript.contains("PASS always: app interactive"),
+        "{transcript}"
+    );
+    assert!(transcript.contains("pass 1\nfail 1"), "{transcript}");
+}
+
+#[test]
+fn always_blocks_report_a_terminated_bash_session_without_restarting() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("must-not-run");
+    fs::write(
+        dir.path().join("lesson.md"),
+        format!(
+            "---\nshell: bash\ntimeout: 1\n---\n```markmason\nexit 0\n```\n\
+             ```markmason always\napp mark '{}'\n```\n\
+             ```markmason always\napp echo last\n```\n",
+            shell_path(&marker)
+        ),
+    )
+    .unwrap();
+    let output = command(dir.path()).output().unwrap();
+    let transcript = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{transcript}");
+    assert_eq!(transcript.matches("FAIL always").count(), 2, "{transcript}");
+    assert!(
+        transcript.contains("Bash session is closed"),
+        "{transcript}"
+    );
+    assert!(!marker.exists());
+}
+
+#[test]
+fn always_blocks_share_bash_and_markdown_setup_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let lesson = dir.path().join("lesson.md");
+    let work = dir.path().join("working");
+    fs::create_dir(&work).unwrap();
+    fs::write(
+        dir.path().join("setup.md"),
+        "---\nshell: bash\n---\n\
+         ```markmason\nLABEL=shared\nWORKING=\"$MARKMASON_TEST_WORKING\"\ncd \"$WORKING\"\n\
+         finish() { printf '%s %s\\n' \"$LABEL\" \"$1\"; }\n```\n\
+         ```markmason always\nfinish prerequisite\n```\n```expected\nshared prerequisite\n```\n",
+    )
+    .unwrap();
+    fs::write(
+        &lesson,
+        "---\nshell: bash\nsetup: mm setup.md\ntimeout: 0.5\n---\n\
+         ```markmason\nfinish ordinary\n```\n```expected\nshared ordinary\n```\n\
+         ```markmason\napp sleep\n```\n\
+         ```bash markmason always\ntest \"$PWD\" -ef \"$WORKING\"\nfinish cleanup\n```\n\
+         ```expected\nshared cleanup\n```\n",
+    )
+    .unwrap();
+    let output = command(&lesson)
+        .env("MARKMASON_TEST_WORKING", shell_path(&work))
+        .output()
+        .unwrap();
+    let transcript = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{transcript}");
+    assert!(transcript.contains("pass 3\nfail 1"), "{transcript}");
+    assert!(!transcript.contains("FAIL always"), "{transcript}");
+}
+
+#[test]
+fn always_blocks_are_listed_but_cannot_select_a_file_on_their_own() {
+    let dir = tempfile::tempdir().unwrap();
+    let lesson = dir.path().join("lesson.md");
+    let marker = dir.path().join("cleaned");
+    fs::write(
+        &lesson,
+        format!(
+            "---\ninputs:\n  MARKMASON_ALWAYS_MISSING: Value\nsetup: missing-setup-command\n---\n\
+             ```markmason\napp echo ordinary\n```\n\
+             ```markmason always\napp mark '{}'\n```\n",
+            shell_path(&marker)
+        ),
+    )
+    .unwrap();
+    let output = command(&lesson)
+        .env_remove("MARKMASON_ALWAYS_MISSING")
+        .args(["--list", "--test-name-pattern", "ordinary"])
+        .output()
+        .unwrap();
+    let transcript = text(&output);
+    assert!(output.status.success(), "{transcript}");
+    assert!(transcript.contains("[always] app mark"), "{transcript}");
+    assert!(!marker.exists());
+    let output = command(&lesson)
+        .args(["--test-name-pattern", "^app mark"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "{}", text(&output));
+    assert!(text(&output).contains("No markdown test specs matched"));
+    assert!(!marker.exists());
+
+    fs::write(
+        &lesson,
+        format!(
+            "```markmason\napp echo ordinary\n```\n\
+             ```markmason always\napp mark '{}'\n```\n",
+            shell_path(&marker)
+        ),
+    )
+    .unwrap();
+    let output = command(&lesson)
+        .args(["--test-name-pattern", "ordinary"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(marker.exists());
+}
+
+#[test]
+fn always_blocks_are_skipped_when_inputs_fixture_or_setup_fail() {
+    for (frontmatter, invalid_cwd) in [
+        ("inputs:\n  MARKMASON_ALWAYS_MISSING: Value\n", false),
+        ("setup: app fail\n", false),
+        ("", true),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("must-not-run");
+        fs::write(
+            dir.path().join("lesson.md"),
+            format!(
+                "---\n{frontmatter}timeout: 2\n---\n```markmason\napp echo ordinary\n```\n\
+                 ```markmason always\napp mark '{}'\n```\n",
+                shell_path(&marker)
+            ),
+        )
+        .unwrap();
+        let mut runner = command(dir.path());
+        runner.env_remove("MARKMASON_ALWAYS_MISSING");
+        if invalid_cwd {
+            runner.arg("--cwd").arg(dir.path().join("missing"));
+        }
+        let output = runner.output().unwrap();
+        assert!(!output.status.success(), "{}", text(&output));
+        assert!(!marker.exists(), "{}", text(&output));
+        assert!(!text(&output).contains("RUN always"), "{}", text(&output));
+    }
+}
+
+#[test]
+fn always_blocks_do_not_prompt_after_walkthrough_quit_or_eof() {
+    for shell in ["", "shell: bash\n"] {
+        for input in ["q\n", ""] {
+            let dir = tempfile::tempdir().unwrap();
+            let marker = dir.path().join("cleaned");
+            let later = dir.path().join("must-not-run");
+            fs::write(
+                dir.path().join("lesson.md"),
+                format!(
+                    "---\n{shell}timeout: 2\n---\n\
+                     ```markmason\napp echo started\napp mark '{}'\n```\n\
+                     ```markmason always\napp mark '{}'\n```\n",
+                    shell_path(&later),
+                    shell_path(&marker)
+                ),
+            )
+            .unwrap();
+            let output = step_output(dir.path(), &[], input);
+            let transcript = text(&output);
+            assert!(output.status.success(), "{transcript}");
+            assert!(transcript.contains("RUN always"), "{transcript}");
+            assert!(marker.exists(), "{transcript}");
+            assert!(!later.exists(), "{transcript}");
+        }
+    }
+}
+
+#[test]
 fn partial_output_assertions_keep_their_mode_in_walkthroughs() {
     for (fence, expected, label) in [
         ("expected-substring", "id: 42", "literal substring"),
@@ -1337,6 +1673,16 @@ send: ignored{enter}
 ```
 "#).unwrap();
         }
+        let terminal_state = dir.path().join("cleanup-terminal-state");
+        fs::write(
+            &lesson,
+            format!(
+                "{}\n```markmason always\nbash -c 'stty -a < /dev/tty > \"{}\"'\n```\n",
+                fs::read_to_string(&lesson).unwrap(),
+                shell_path(&terminal_state)
+            ),
+        )
+        .unwrap();
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows,
@@ -1413,7 +1759,7 @@ send: ignored{enter}
                 None
             } else if long_diagnostic {
                 match controls {
-                    0 if frame.contains("Enter: Finish walkthrough") => Some(b"\x1b[F"),
+                    0 if frame.contains("Enter: Next block") => Some(b"\x1b[F"),
                     1 if frame.contains("detail-8") => Some(b"\x1b[5~"),
                     2 if frame.contains("Output so far:") => Some(b"q\r"),
                     _ => None,
@@ -1485,6 +1831,18 @@ send: ignored{enter}
         drop(pair.master);
         bytes.extend(receive.into_iter().flatten());
         let raw = String::from_utf8_lossy(&bytes);
+        let terminal_state = fs::read_to_string(&terminal_state).unwrap();
+        let flags: Vec<_> = terminal_state
+            .split_whitespace()
+            .map(|flag| flag.trim_end_matches(';'))
+            .collect();
+        assert!(flags.contains(&"icanon"), "{terminal_state}");
+        assert!(flags.contains(&"echo"), "{terminal_state}");
+        assert!(!flags.contains(&"-icanon"), "{terminal_state}");
+        assert!(!flags.contains(&"-echo"), "{terminal_state}");
+        let cleanup_position = raw.find("RUN always").expect("cleanup should be visible");
+        assert!(raw[..cleanup_position].contains("\x1b[?1049l"), "{raw}");
+        assert!(!raw[cleanup_position..].contains("\x1b[?1049h"), "{raw}");
         if long_diagnostic {
             assert!(raw.contains("Output so far:"), "{raw}");
             assert!(raw.contains("  | detail-8\r\n"), "{raw}");
@@ -1543,7 +1901,7 @@ send: ignored{enter}
             }),
             "{raw}"
         );
-        assert!(raw.contains("Passed blocks: 2"), "{raw}");
+        assert!(raw.contains("Passed blocks: 3"), "{raw}");
     }
 }
 
@@ -2946,12 +3304,72 @@ fn bash_job_control_process_groups_are_cleaned_on_every_exit_path() {
 
 #[cfg(unix)]
 #[test]
+fn repeated_interrupts_stop_current_work_but_not_later_always_blocks() {
+    for shell in ["", "shell: bash\n"] {
+        let dir = tempfile::tempdir().unwrap();
+        let ordinary = dir.path().join("ordinary-started");
+        let cleanup = dir.path().join("cleanup-started");
+        let last = dir.path().join("last-cleanup");
+        fs::write(
+            dir.path().join("lesson.md"),
+            format!(
+                "---\n{shell}timeout: 10\n---\n\
+                 ```markmason\napp tree '{}'\n```\n\
+                 ```markmason always\napp tree '{}'\n```\n\
+                 ```markmason always\napp mark '{}'\n```\n",
+                shell_path(&ordinary),
+                shell_path(&cleanup),
+                shell_path(&last)
+            ),
+        )
+        .unwrap();
+        let mut runner = command(dir.path())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        for started in [&ordinary, &cleanup] {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !started.exists() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if !started.exists() {
+                runner.kill().unwrap();
+                panic!(
+                    "Command did not start: {}",
+                    text(&runner.wait_with_output().unwrap())
+                );
+            }
+            assert_eq!(unsafe { libc::kill(runner.id() as i32, libc::SIGINT) }, 0);
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while runner.try_wait().unwrap().is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if runner.try_wait().unwrap().is_none() {
+            runner.kill().unwrap();
+            panic!(
+                "Runner did not finish cleanup: {}",
+                text(&runner.wait_with_output().unwrap())
+            );
+        }
+        let output = runner.wait_with_output().unwrap();
+        let transcript = text(&output);
+        assert_eq!(output.status.code(), Some(130), "{transcript}");
+        assert!(last.exists(), "{transcript}");
+        assert_eq!(transcript.matches("FAIL always").count(), 1, "{transcript}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn interrupts_reap_commands_stop_descendants_and_clean_up_fixtures() {
     for signal in [libc::SIGINT, libc::SIGTERM] {
         for mode in ["command", "setup", "pty", "drain", "writer", "shell"] {
             let dir = tempfile::tempdir().unwrap();
             let started = dir.path().join("started");
             let later = dir.path().join("later");
+            let cleaned = dir.path().join("cleaned");
             let tree = format!(
                 "app {} \"{}\"",
                 if ["drain", "writer"].contains(&mode) {
@@ -2984,7 +3402,14 @@ fn interrupts_reap_commands_stop_descendants_and_clean_up_fixtures() {
                     later.display()
                 ),
             };
-            fs::write(dir.path().join("a.md"), markdown).unwrap();
+            fs::write(
+                dir.path().join("a.md"),
+                format!(
+                    "{markdown}```markmason always\napp mark '{}'\n```\n",
+                    shell_path(&cleaned)
+                ),
+            )
+            .unwrap();
             fs::write(
                 dir.path().join("b.md"),
                 format!("```markmason\napp mark \"{}\"\n```\n", later.display()),
@@ -3061,6 +3486,12 @@ fn interrupts_reap_commands_stop_descendants_and_clean_up_fixtures() {
             assert!(
                 !later.exists(),
                 "{mode}: execution continued after cancellation"
+            );
+            assert_eq!(
+                cleaned.exists(),
+                mode != "setup",
+                "{mode}: {}",
+                text(&output)
             );
         }
     }

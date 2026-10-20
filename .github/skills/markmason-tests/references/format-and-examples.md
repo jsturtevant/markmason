@@ -52,6 +52,7 @@ error: unknown option --not-an-option
 |--------|---------|
 | `markmason` fence | Run commands in order as one test; require exit 0 by default |
 | `markmason (exit N)` opening fence | Require exit N, without treating execution errors as success |
+| `[LANGUAGE] markmason always (exit N)` opening fence | Defer cleanup until the file ends; language and expected exit are optional |
 | `expected` fence | Match output after path, whitespace, blank-line, and wrapping normalization |
 | `expected-contains` fence | Match whole lines in order; no unmatched trailing lines |
 | `expected-substring` fence | Find one literal substring, preserving whitespace, paths, and internal newlines |
@@ -113,6 +114,27 @@ Created pod demo-\d+ in \d+\.\d+s
 - Keep missing-match and malformed-pattern examples in a separate error guide.
   A mismatch reports the requested substring or pattern and actual output;
   an invalid regex fails parsing before commands run.
+
+## Deferred cleanup
+
+Use `markmason always` to run cleanup once after selected ordinary blocks finish,
+even after a mismatch, timeout, expected or unexpected command failure, or
+walkthrough cancellation. Use `bash markmason always` for Markdown language
+styling, not interpreter selection; opt into `shell: bash` for shared Bash state.
+Keep an expected exit after `always`, for example `markmason always (exit 2)`.
+
+- Keep cleanup safe when earlier work stopped partway through.
+- Share the file's fixture and setup state. Skip cleanup if fixture/setup
+  creation did not finish.
+- Put cleanup blocks in the order they should run. Later cleanup is attempted
+  even if an earlier block fails; failures keep the run failed.
+- Expect cleanup to run without another walkthrough confirmation. Script any
+  PTY input rather than requiring a person to answer a cleanup prompt.
+- Select ordinary commands with filters; cleanup-only command matches do not
+  select a file. `--list` labels deferred blocks with `[always]`.
+- Do not assume a terminated Bash session can retain its state. A timed-out or
+  interrupted command gets a bounded chance to yield the same session; otherwise
+  deferred commands fail explicitly.
 
 ## Frontmatter and state
 

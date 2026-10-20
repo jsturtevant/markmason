@@ -41,6 +41,10 @@ fn bash_terminal_boundaries_preserve_following_output_and_wait_for_complete_fram
         assert_eq!(&raw[end..], after);
     }
     assert!(shell::boundary_end(b"output\r\nTOKEN", "TOKEN").is_none());
+    assert_eq!(
+        shell::boundary_end_at_eof(b"output\r\nTOKEN", "TOKEN"),
+        Some(b"output\r\nTOKEN".len())
+    );
     assert!(shell::boundary_end(b"output\r\nTOKEN\x1b[3;", "TOKEN").is_none());
     assert!(shell::boundary_end(b"trace TOKEN\r\n", "TOKEN").is_none());
     assert!(shell::boundary_end(b"TOKEN'\r\n", "TOKEN").is_none());
@@ -687,6 +691,53 @@ fn exact_and_contains_failures() {
                 .contains(message)
         );
     }
+}
+
+#[test]
+fn always_fences_compose_with_languages_exits_and_assertions() -> Result<()> {
+    for opening in [
+        "markmason always (exit 2)",
+        "bash markmason always (exit 2)",
+        "csharp markmason always (exit 2)",
+    ] {
+        let parsed = spec::parse(&format!(
+            "```{opening}\napp fail\n```\n```expected-substring\nstderr\n```\n"
+        ))?;
+        let case = &parsed.cases[0];
+        assert!(case.always);
+        assert_eq!(case.exit_code, 2);
+        assert_eq!(case.matching, matching::Mode::Substring);
+        assert_eq!(case.expected.as_deref(), Some("stderr"));
+    }
+    let parsed = spec::parse(
+        "```bash markmason\napp echo ordinary\n```\n```markmason always\napp echo deferred\n```\n",
+    )?;
+    assert!(!parsed.cases[0].always);
+    assert!(parsed.cases[1].always);
+    for opening in [
+        "markmason (exit 2) always",
+        "markmason always always",
+        "markmason always (exit -1)",
+        "markmason sometimes",
+        "bash! markmason always",
+    ] {
+        assert!(spec::parse(&format!("```{opening}\napp fail\n```\n")).is_err());
+    }
+    assert!(
+        spec::parse("```markmason always\napp echo deferred")
+            .unwrap_err()
+            .to_string()
+            .contains("Unterminated markmason")
+    );
+    Ok(())
+}
+
+#[test]
+fn bash_recovery_interrupts_only_before_completion_markers_arrive() {
+    assert!(shell::recovery_needs_interrupt(None, None));
+    assert!(!shell::recovery_needs_interrupt(Some(0), None));
+    assert!(!shell::recovery_needs_interrupt(None, Some(1)));
+    assert!(!shell::recovery_needs_interrupt(Some(0), Some(1)));
 }
 
 #[test]

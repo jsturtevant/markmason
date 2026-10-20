@@ -105,6 +105,56 @@ rather than an exact-output diff. Empty substrings and patterns match any
 output. See the [runnable matching examples](../tests/cli/matching.md) and
 [deliberate failures](../tests/cli/matching-errors.md).
 
+## Deferred cleanup
+
+Add `always` immediately after `markmason` to defer a block until the file's
+ordinary execution ends:
+
+````markdown
+```bash markmason always
+kubectl delete namespace "$NS" --ignore-not-found
+```
+````
+
+The language tag is optional Markdown styling metadata; it does not select an
+interpreter. Use `shell: bash` for Bash expansion and shared variables/functions.
+The one supported modifier order is `[LANGUAGE] markmason always (exit N)`,
+with the language and expected exit both optional. Output, stdin, and PTY
+assertions work as for ordinary blocks.
+
+- Selected ordinary blocks run first. All of that file's `always` blocks then
+  run once in document order, even if they appeared earlier in the document.
+- Cleanup shares the fixture, environment, working directory, cloned checkout,
+  and Bash session, including Markdown setup state. Cleanup from successful
+  Markdown prerequisites is deferred too, in setup-completion order before
+  the caller's cleanup.
+- Cleanup runs after success, assertion/command failures, spawn errors, timeouts,
+  walkthrough `q` or EOF, and catchable Ctrl+C/SIGTERM. It is skipped if inputs,
+  fixture creation, or setup did not complete. Uncatchable termination cannot
+  run cleanup.
+- Every deferred block is attempted even when an earlier one fails. Failures
+  remain failures; cleanup cannot turn a failed run into success. Successful
+  cleanup blocks contribute to the pass count, and failures to the fail count.
+- During cleanup, the original cancellation remains the final exit status.
+  Another interrupt can stop the current cleanup command; later deferred blocks
+  are still attempted. Normal per-command timeouts apply.
+- A Bash timeout or interrupt gets a bounded two-second opportunity to return
+  to the same session. Existing SIGINT handlers and explicitly ignored signals
+  are preserved; a recovery fallback is installed only when no handler is set.
+  If Bash has exited, been replaced with `exec`, or cannot
+  resume safely, deferred commands report the closed session rather than
+  starting a new shell with missing state.
+- `--list` marks deferred commands with `[always]` and requires no inputs or
+  fixture. Name filters select ordinary blocks only; once one is selected,
+  all cleanup blocks in that file run. Matching only cleanup commands selects
+  nothing. A file containing only `always` blocks has no runnable ordinary test.
+- Walkthrough cleanup runs automatically outside the fullscreen view, with
+  visible `RUN always` / `PASS always` / `FAIL always` messages. It never asks
+  for another walkthrough confirmation. PTY steps must still be fully scripted.
+
+Keep cleanup safe when ordinary work stopped halfway through. See the
+[runnable guide](../tests/cli/cleanup.md).
+
 ## Frontmatter and setup
 
 ```yaml
