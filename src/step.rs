@@ -96,7 +96,7 @@ struct Frame {
     position: usize,
     expected: Option<String>,
     expected_exit: i32,
-    contains: bool,
+    matching: matching::Mode,
     actual: String,
     exit: Option<i32>,
     phase: Phase,
@@ -117,7 +117,7 @@ impl Frame {
             position: 0,
             expected: expected.map(str::to_owned),
             expected_exit: case.exit_code,
-            contains: case.contains || case.pty.is_some(),
+            matching: case.output_mode(),
             actual: String::new(),
             exit: None,
             phase: Phase::Ready,
@@ -564,10 +564,11 @@ impl Session {
         } else {
             ""
         };
-        let mode = if frame.contains {
-            "ordered lines"
-        } else {
-            "exact"
+        let mode = match frame.matching {
+            matching::Mode::Exact => "exact",
+            matching::Mode::Contains => "ordered lines",
+            matching::Mode::Substring => "literal substring",
+            matching::Mode::Regex => "regex",
         };
         let actual_label = match frame.phase {
             Phase::Ready | Phase::Running | Phase::Progress => "ACTUAL OUTPUT SO FAR",

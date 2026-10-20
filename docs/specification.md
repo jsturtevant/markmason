@@ -51,6 +51,8 @@ also removed from their contents.
 |-------|----------|
 | `expected` | Exact output, normalizing paths, whitespace, blank lines, and terminal wrapping |
 | `expected-contains` | Whole lines in order; extra lines between matches are allowed, trailing unmatched lines fail |
+| `expected-substring` | One literal substring anywhere in output, including internal newlines |
+| `expected-regex` | One Rust regex searched anywhere in output |
 | `stdin` | Send the block plus a final newline |
 | `pty` | Script an interactive terminal |
 
@@ -59,6 +61,49 @@ also removed from their contents.
 - Unless `shell: bash` is set, commands do not run through a shell. Quotes group arguments; backslashes stay literal.
 - Executables resolve through `PATH`, relative to the working directory.
 - `node ./helper.js` resolves the script beside the Markdown file.
+
+### Partial output assertions
+
+Use `expected-substring` for a stable phrase inside a longer line, without
+filtering away the command's real output:
+
+````markdown
+```markmason (exit 1)
+mycli create demo
+```
+
+```expected-substring
+is not authorized to xyz
+```
+````
+
+Use `expected-regex` when the assertion itself needs a variable part:
+
+````markdown
+```expected-regex
+Created pod demo-\d+ in \d+\.\d+s
+```
+````
+
+Both search the whole captured output and allow unmatched text before and after
+the match. The block is one substring or pattern, not a list of independent
+assertions. Matching is case-sensitive by default. Unlike `expected` and
+`expected-contains`, these forms preserve whitespace, blank lines, path
+separators, and wrapping; only CRLF line endings become LF. The closing fence's
+preceding newline is not part of the assertion.
+
+Regexes use [Rust regex syntax](https://docs.rs/regex/latest/regex/#syntax):
+`(?m)` enables line anchors, `(?s)` lets `.` match newlines, and `\A` / `\z`
+anchor the entire output. Write escapes directly, for example `\d+` or
+`report\[1\]\.txt`; a literal backslash is `\\`. Lookaround and backreferences
+are not supported. Invalid patterns fail spec parsing before commands run.
+Runner variable substitution still applies; substituted values are not
+automatically regex-escaped and must leave a valid pattern.
+
+Mismatches report the missing substring or pattern and the actual output,
+rather than an exact-output diff. Empty substrings and patterns match any
+output. See the [runnable matching examples](../tests/cli/matching.md) and
+[deliberate failures](../tests/cli/matching-errors.md).
 
 ## Frontmatter and setup
 
@@ -357,7 +402,8 @@ Created demo
 - `match:` ignores ANSI codes; `match-raw:` preserves them.
 - Every match needs a following `send:`. All steps must complete.
 - Sends append no newline; use `{enter}` when needed.
-- Expected PTY output always uses contains matching.
+- PTY `expected` and `expected-contains` blocks use ordered whole-line matching.
+  Explicit `expected-substring` and `expected-regex` blocks keep their chosen mode.
 - Captured output is ANSI-stripped with terminal line boundaries preserved,
   including timeout and incomplete-script diagnostics.
 - Missing prompts, startup failures, and timeouts fail even with an expected nonzero exit.

@@ -314,6 +314,12 @@ fn execute(
         case.command.lines().map(str::to_owned).collect()
     };
     let expected = case.expected.as_ref().map(|text| fixture.substitute(text));
+    if case.matching == matching::Mode::Regex
+        && let Some(expected) = &expected
+    {
+        Regex::new(expected)
+            .context("Invalid expected-regex pattern after variable substitution")?;
+    }
     if let Some(session) = stepping.as_deref_mut() {
         session.prepare(case, &commands, expected.as_deref())?;
         if session.stopped() {
@@ -451,13 +457,18 @@ fn check_output(
         println!("ACTUAL:\n{}", output.text);
     }
     if let Some(expected) = expected {
-        let result = matching::check(&output.text, expected, case.contains || case.pty.is_some());
+        let mode = case.output_mode();
+        let result = matching::check(&output.text, expected, mode);
         if verbose || (diagnostics && result.is_err()) {
-            println!(
-                "ACTUAL:\n{}\nDIFF (expected vs actual):\n{}",
-                output.text,
-                matching::diff(&output.text, expected)
-            );
+            if matches!(mode, matching::Mode::Substring | matching::Mode::Regex) {
+                println!("ACTUAL:\n{}\nEXPECTED ({mode:?}):\n{expected}", output.text);
+            } else {
+                println!(
+                    "ACTUAL:\n{}\nDIFF (expected vs actual):\n{}",
+                    output.text,
+                    matching::diff(&output.text, expected)
+                );
+            }
         }
         result?;
     }

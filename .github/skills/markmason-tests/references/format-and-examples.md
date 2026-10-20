@@ -54,6 +54,8 @@ error: unknown option --not-an-option
 | `markmason (exit N)` opening fence | Require exit N, without treating execution errors as success |
 | `expected` fence | Match output after path, whitespace, blank-line, and wrapping normalization |
 | `expected-contains` fence | Match whole lines in order; no unmatched trailing lines |
+| `expected-substring` fence | Find one literal substring, preserving whitespace, paths, and internal newlines |
+| `expected-regex` fence | Search with one Rust regex; use `(?m)` for line anchors or `(?s)` for multiline `.` |
 | `stdin` fence | Send its contents plus a final newline |
 | `pty` fence | Use paired `match:` / `send:` or `match-raw:` / `send:` steps |
 
@@ -68,7 +70,8 @@ error: unknown option --not-an-option
 - Without an expected block, only the exit code is checked.
 - Use descriptive headings. Keep input and output blocks before the next heading.
 - Wrap literal Markdown examples in a longer fence so their commands do not run.
-- PTY output uses contains matching. Every scripted step must finish.
+- PTY `expected` uses contains matching; explicit substring or regex modes are preserved.
+  Every scripted step must finish.
 - Send `stdin` to the first command only. Advance PTY match/send steps across
   commands in order. Apply timeouts per command or pipeline stage.
 - Use `{enter}`, `{up}`, `{down}`, `{space}`, and `{backspace}` for PTY input.

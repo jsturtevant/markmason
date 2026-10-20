@@ -220,7 +220,7 @@ fn parses_all_blocks_and_smoke_tests() -> Result<()> {
     assert_eq!(first.expected.as_deref(), Some("error"));
     assert_eq!(first.stdin.as_deref(), Some("y\n"));
     assert_eq!(first.exit_code, 1);
-    assert!(first.contains);
+    assert_eq!(first.matching, matching::Mode::Contains);
     let second = &spec.cases[1];
     let steps = second.pty.as_ref().unwrap();
     assert!(!steps[0].raw);
@@ -228,7 +228,7 @@ fn parses_all_blocks_and_smoke_tests() -> Result<()> {
     assert!(steps[1].raw);
     assert_eq!(steps[1].text, "\x1b[?25l");
     assert_eq!(second.expected.as_deref(), Some("done"));
-    assert!(!second.contains);
+    assert_eq!(second.matching, matching::Mode::Exact);
     assert!(spec.cases[2].expected.is_none());
     for block in ["send: y", "match: prompt", "match-raw: \\x1b[2J"] {
         assert!(spec::parse(&format!("```markmason\ncmd\n```\n```pty\n{block}\n```")).is_err());
@@ -305,7 +305,7 @@ fn fenced_cases_bind_blocks_until_the_next_command_or_heading() -> Result<()> {
     assert_eq!(spec.cases[0].expected.as_deref(), Some("one"));
     assert_eq!(spec.cases[1].exit_code, 2);
     assert_eq!(spec.cases[1].expected.as_deref(), Some("two"));
-    assert!(spec.cases[1].contains);
+    assert_eq!(spec.cases[1].matching, matching::Mode::Contains);
     assert_eq!(spec.cases[2].command, "third");
     assert!(spec.cases[2].expected.is_none());
     Ok(())
@@ -325,7 +325,7 @@ fn fenced_cases_stop_at_setext_headings() -> Result<()> {
         assert_eq!(spec.cases.len(), 2, "{underline:?}");
         let first = &spec.cases[0];
         assert_eq!(first.expected.as_deref(), Some("original"), "{underline:?}");
-        assert!(!first.contains, "{underline:?}");
+        assert_eq!(first.matching, matching::Mode::Exact, "{underline:?}");
         assert!(first.stdin.is_none(), "{underline:?}");
         assert!(first.pty.is_none(), "{underline:?}");
         assert_eq!(spec.cases[1].expected.as_deref(), Some("second result"));
@@ -653,7 +653,7 @@ fn normalization_and_wrapping() {
         ("a\nb\nc", "a b c"),
         ("hello\nworld", "hello\nworld"),
     ] {
-        matching::check(actual, expected, false).unwrap();
+        matching::check(actual, expected, matching::Mode::Exact).unwrap();
     }
 }
 
@@ -665,14 +665,14 @@ fn exact_and_contains_failures() {
         ("a", "a\nb", "Missing expected line"),
     ] {
         assert!(
-            matching::check(actual, expected, false)
+            matching::check(actual, expected, matching::Mode::Exact)
                 .unwrap_err()
                 .to_string()
                 .contains(message)
         );
     }
-    matching::check("noise\na\nnoise\nb", "a\nb", true).unwrap();
-    matching::check("", "", true).unwrap();
+    matching::check("noise\na\nnoise\nb", "a\nb", matching::Mode::Contains).unwrap();
+    matching::check("", "", matching::Mode::Contains).unwrap();
     for (actual, expected, message) in [
         ("a\nc", "a\nb", "Expected line 2 not found"),
         ("noise\na\ntrailing", "a", "unmatched trailing line"),
@@ -681,12 +681,103 @@ fn exact_and_contains_failures() {
         ("prefix a", "a", "Expected line 1 not found"),
     ] {
         assert!(
-            matching::check(actual, expected, true)
+            matching::check(actual, expected, matching::Mode::Contains)
                 .unwrap_err()
                 .to_string()
                 .contains(message)
         );
     }
+}
+
+#[test]
+fn parses_substring_and_regex_assertions() -> Result<()> {
+    for (fence, mode, expected) in [
+        ("expected-substring", matching::Mode::Substring, r"a[1]\b"),
+        ("expected-regex", matching::Mode::Regex, r"(?m)^id: \d+$"),
+    ] {
+        let markdown = format!("```markmason\ncmd\n```\n```{fence}\n{expected}\n```\n");
+        let parsed = spec::parse(&markdown)?;
+        assert_eq!(parsed.cases[0].expected.as_deref(), Some(expected));
+        assert_eq!(parsed.cases[0].output_mode(), mode);
+
+        let with_pty = spec::parse(&format!(
+            "{markdown}```pty\nmatch: ready\nsend: y{{enter}}\n```\n"
+        ))?;
+        assert_eq!(with_pty.cases[0].output_mode(), mode);
+        assert!(
+            spec::parse(&format!("```markmason\ncmd\n```\n```{fence}\n{expected}"))
+                .unwrap_err()
+                .to_string()
+                .contains(&format!("Unterminated {fence} block"))
+        );
+        assert!(
+            spec::parse(&format!(
+                "```markmason\ncmd\n```\n```{fence} extra\n{expected}\n```\n"
+            ))
+            .is_err()
+        );
+    }
+    let error = spec::parse("```markmason\ncmd\n```\n```expected-regex\n[\n```\n").unwrap_err();
+    assert!(format!("{error:#}").contains("Invalid expected-regex pattern"));
+    assert!(format!("{error:#}").contains("unclosed character class"));
+    Ok(())
+}
+
+#[test]
+fn substring_and_regex_match_literal_multiline_output() {
+    for (actual, expected, mode) in [
+        (
+            "prefix a[1]\\b trailing\nextra",
+            r"a[1]\b",
+            matching::Mode::Substring,
+        ),
+        (
+            "prefix first\r\nsecond trailing",
+            "first\nsecond",
+            matching::Mode::Substring,
+        ),
+        ("id: 42\nextra", r"(?m)^id: \d+$", matching::Mode::Regex),
+        (
+            "prefix first\nsecond trailing",
+            r"(?s)first.*second",
+            matching::Mode::Regex,
+        ),
+        (
+            "Saved C:\\work\\report[1].txt (ready)\n",
+            r"C:\\work\\report\[1\]\.txt",
+            matching::Mode::Regex,
+        ),
+        (
+            "first\r\nsecond\r\n",
+            "^first\nsecond\n$",
+            matching::Mode::Regex,
+        ),
+        ("", "", matching::Mode::Substring),
+        ("", "", matching::Mode::Regex),
+    ] {
+        matching::check(actual, expected, mode).unwrap();
+    }
+    for (actual, expected, mode) in [
+        ("prefix a1 trailing", "a[1]", matching::Mode::Substring),
+        ("one  two", "one two", matching::Mode::Substring),
+        ("path\\to", "path/to", matching::Mode::Substring),
+        ("First", "first", matching::Mode::Substring),
+        ("id: abc", r"id: \d+", matching::Mode::Regex),
+        ("first\nsecond", "first.*second", matching::Mode::Regex),
+        ("one  two", "one two", matching::Mode::Regex),
+    ] {
+        let error = matching::check(actual, expected, mode)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(&format!("{expected:?}")), "{error}");
+        assert!(error.contains(actual), "{error}");
+    }
+    assert!(
+        matching::check("output", "[", matching::Mode::Regex)
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid expected-regex pattern")
+    );
 }
 
 #[test]

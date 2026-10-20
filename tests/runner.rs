@@ -66,6 +66,51 @@ fn text(output: &Output) -> String {
     )
 }
 
+#[test]
+fn partial_output_assertions_keep_their_mode_in_walkthroughs() {
+    for (fence, expected, label) in [
+        ("expected-substring", "id: 42", "literal substring"),
+        ("expected-regex", r"(?m)^id: \d+$", "regex"),
+    ] {
+        let specs = tempfile::tempdir().unwrap();
+        fs::write(
+            specs.path().join("output.md"),
+            format!(
+                "```markmason\napp lines before 'id: 42' after\n```\n\
+                 ```{fence}\n{expected}\n```\n"
+            ),
+        )
+        .unwrap();
+        let output = step_output(specs.path(), &[], "f\n");
+        let transcript = text(&output);
+        assert!(output.status.success(), "{transcript}");
+        assert!(transcript.contains(label), "{transcript}");
+        assert!(transcript.contains("Passed blocks: 1"), "{transcript}");
+    }
+}
+
+#[test]
+fn invalid_regex_fails_before_running_commands() {
+    let specs = tempfile::tempdir().unwrap();
+    let marker = specs.path().join("must-not-exist");
+    fs::write(
+        specs.path().join("output.md"),
+        format!(
+            "```markmason\napp mark '{}'\n```\n```expected-regex\n[\n```\n",
+            marker.display()
+        ),
+    )
+    .unwrap();
+    let output = command(specs.path()).output().unwrap();
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(
+        text(&output).contains("Invalid expected-regex pattern"),
+        "{}",
+        text(&output)
+    );
+    assert!(!marker.exists());
+}
+
 fn step_process(
     specs: &Path,
     args: &[&str],

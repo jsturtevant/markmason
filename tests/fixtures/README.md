@@ -13,6 +13,9 @@ predictable output, prompts, and state.
 |---------|-----------------|----------------|
 | [passing](passing) | Exit 0 | Valid specs run and report the right totals |
 | [matching-order](matching-order/output.md) | Exit 1 | Output in the wrong order is rejected |
+| [substring-mismatch](substring-mismatch/output.md) | Exit 1 | Missing literal text reports the substring and actual output |
+| [regex-mismatch](regex-mismatch/output.md) | Exit 1 | A missing regex match reports the pattern and actual output |
+| [invalid-regex](invalid-regex/output.md) | Exit 1 | Malformed regexes fail before running commands |
 | [invalid](invalid/invalid.md) | Exit 1 | Invalid frontmatter is rejected |
 | [pty-timeout](pty-timeout/timeout.md) | Exit 1 | An unreached terminal prompt times out |
 | [walkthrough](walkthrough) | Mixed | Terminal-driven stepping, file selection, quitting, and assertion failures |
