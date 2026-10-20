@@ -193,6 +193,7 @@ pub struct Session {
     pause_before_block: bool,
     screen: bool,
     screen_active: bool,
+    mouse_capture_active: bool,
     scroll: usize,
     page_rows: usize,
     document_rows: usize,
@@ -242,6 +243,7 @@ impl Session {
             pause_before_block: false,
             screen,
             screen_active: false,
+            mouse_capture_active: false,
             scroll: 0,
             page_rows: 1,
             document_rows: 0,
@@ -596,6 +598,8 @@ impl Session {
                 }
             ));
         }
+        let waiting = self.mode == Mode::Command && frame.phase != Phase::Running;
+        let action = self.action().to_owned();
         let (rows, columns) = Term::stdout().size();
         let newline = if self.screen && terminal::is_raw_mode_enabled()? {
             "\r\n"
@@ -613,8 +617,8 @@ impl Session {
         if !self.screen_active {
             self.screen_active = true;
             io::stdout().write_all(b"\x1b[?1049h")?;
-            crossterm::execute!(io::stdout(), EnableMouseCapture)?;
         }
+        self.set_mouse_capture(waiting)?;
         self.page_rows = usize::from(rows) - 4;
         let lines = wrap(&lines, usize::from(columns) - 1);
         self.document_rows = lines.len();
@@ -627,8 +631,6 @@ impl Session {
                 lines.get(index).map(String::as_str).unwrap_or("")
             )?;
         }
-        let waiting = self.mode == Mode::Command && frame.phase != Phase::Running;
-        let action = self.action();
         let controls = if waiting {
             if columns >= 60 {
                 format!(
@@ -745,13 +747,31 @@ impl Session {
     }
 
     fn restore_screen(&mut self) -> Result<()> {
-        if self.screen_active {
+        let mouse_result = self.set_mouse_capture(false);
+        let screen_result = if self.screen_active {
             self.output.flush()?;
-            crossterm::execute!(io::stdout(), DisableMouseCapture)?;
             io::stdout().write_all(b"\x1b[?1049l")?;
             io::stdout().flush()?;
             self.screen_active = false;
+            Ok(())
+        } else {
+            Ok(())
+        };
+        mouse_result.and(screen_result)
+    }
+
+    fn set_mouse_capture(&mut self, active: bool) -> Result<()> {
+        if self.mouse_capture_active == active {
+            return Ok(());
         }
+        self.output.flush()?;
+        if active {
+            crossterm::execute!(io::stdout(), EnableMouseCapture)?;
+        } else {
+            crossterm::execute!(io::stdout(), DisableMouseCapture)?;
+        }
+        io::stdout().flush()?;
+        self.mouse_capture_active = active;
         Ok(())
     }
 

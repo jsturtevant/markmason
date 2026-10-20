@@ -1211,6 +1211,15 @@ send: ignored{enter}
         }
         assert!(raw.contains("\x1b[?1049h"), "{raw}");
         assert!(raw.contains("\x1b[?1049l"), "{raw}");
+        for (position, _) in raw.match_indices("Running; Ctrl+C cancels.") {
+            let before = &raw[..position];
+            let enabled = before.rfind("\x1b[?1003h");
+            let disabled = before.rfind("\x1b[?1003l");
+            assert!(
+                enabled.is_none() || disabled > enabled,
+                "mouse capture remained active while a command ran:\n{raw}"
+            );
+        }
         assert!(!raw.contains("lines below"), "{raw}");
         assert!(!raw.contains("lines above"), "{raw}");
         assert!(
