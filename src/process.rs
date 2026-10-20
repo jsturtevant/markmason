@@ -96,6 +96,8 @@ pub fn internal_exec() -> ! {
             .context("Missing internal startup status")?;
         crate::windows::wait_for_start(&event)?;
         crate::windows::protect_stdio()?;
+        // Keep the relay alive while its child handles console interrupts.
+        cancellation::install()?;
         let program = args.next().context("Missing internal executable")?;
         let mut child = Command::new(program).args(args).spawn()?;
         std::fs::write(status_path, "started").context("Failed to report command startup")?;

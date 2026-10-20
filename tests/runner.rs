@@ -155,6 +155,64 @@ fn later_always_blocks_run_even_after_cleanup_failures() {
 }
 
 #[test]
+fn always_blocks_preserve_custom_and_ignored_sigint_traps() {
+    for (handler, expected) in [
+        ("release_resource", "trap -- 'release_resource' SIGINT"),
+        ("''", "trap -- '' SIGINT"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("setup.md"),
+            format!("```markmason\nrelease_resource() {{ :; }}\ntrap {handler} INT\n```\n"),
+        )
+        .unwrap();
+        let lesson = dir.path().join("lesson.md");
+        fs::write(
+            &lesson,
+            format!(
+                "---\nshell: bash\nsetup: mm setup.md\ntimeout: 2\n---\n\
+                 ```markmason\ntrap -p INT\n```\n```expected\n{expected}\n```\n\
+                 ```markmason always\ntrap -p INT\n```\n```expected\n{expected}\n```\n"
+            ),
+        )
+        .unwrap();
+        let output = command(&lesson).output().unwrap();
+        assert!(output.status.success(), "{}", text(&output));
+        assert!(
+            text(&output).contains("pass 2\nfail 0"),
+            "{}",
+            text(&output)
+        );
+    }
+}
+
+#[test]
+fn always_timeout_runs_user_sigint_handler_before_cleanup() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("handler-ran");
+    let lesson = dir.path().join("lesson.md");
+    fs::write(
+        &lesson,
+        "---\nshell: bash\ntimeout: 2\n---\n\
+         ```markmason\nrelease_resource() { printf 'released\\n' > \"$MARKMASON_TRAP_MARKER\"; }\n\
+         trap release_resource INT\n```\n\
+         ```markmason\napp sleep\n```\n\
+         ```markmason always\ntrap -p INT\n```\n\
+         ```expected\ntrap -- 'release_resource' SIGINT\n```\n",
+    )
+    .unwrap();
+    let output = command(&lesson)
+        .env("MARKMASON_TRAP_MARKER", shell_path(&marker))
+        .output()
+        .unwrap();
+    let transcript = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{transcript}");
+    assert!(transcript.contains("timed out"), "{transcript}");
+    assert!(transcript.contains("pass 2\nfail 1"), "{transcript}");
+    assert_eq!(fs::read_to_string(&marker).unwrap(), "released\n");
+}
+
+#[test]
 fn always_blocks_report_a_terminated_bash_session_without_restarting() {
     let dir = tempfile::tempdir().unwrap();
     let marker = dir.path().join("must-not-run");

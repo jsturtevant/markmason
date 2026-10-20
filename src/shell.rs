@@ -39,7 +39,8 @@ while :; do
     while ! builtin test -f "$__markmason_request/ready"; do
         "$__markmason_sleep" 0.05 || exit
     done
-    if builtin test -f "$__markmason_root/cleanup"; then
+    if builtin test -f "$__markmason_root/cleanup" &&
+        builtin test -z "$(builtin trap -p INT)"; then
         builtin trap 'return 130' INT
     fi
     __markmason_captured=

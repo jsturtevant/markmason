@@ -139,7 +139,9 @@ assertions work as for ordinary blocks.
   Another interrupt can stop the current cleanup command; later deferred blocks
   are still attempted. Normal per-command timeouts apply.
 - A Bash timeout or interrupt gets a bounded two-second opportunity to return
-  to the same session. If Bash has exited, been replaced with `exec`, or cannot
+  to the same session. Existing SIGINT handlers and explicitly ignored signals
+  are preserved; a recovery fallback is installed only when no handler is set.
+  If Bash has exited, been replaced with `exec`, or cannot
   resume safely, deferred commands report the closed session rather than
   starting a new shell with missing state.
 - `--list` marks deferred commands with `[always]` and requires no inputs or
