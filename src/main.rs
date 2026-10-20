@@ -310,6 +310,12 @@ fn execute(
         case.command.lines().map(str::to_owned).collect()
     };
     let expected = case.expected.as_ref().map(|text| fixture.substitute(text));
+    if let Some(session) = stepping.as_deref_mut() {
+        session.prepare(case, &commands, expected.as_deref())?;
+        if session.stopped() {
+            return Ok(false);
+        }
+    }
     let mut output = process::Output {
         text: String::new(),
         code: 0,
@@ -324,13 +330,7 @@ fn execute(
             fixture.substitute(command)
         };
         if let Some(session) = stepping.as_deref_mut() {
-            session.preview(
-                case,
-                &command,
-                expected.as_deref(),
-                index + 1,
-                commands.len(),
-            )?;
+            session.preview(index + 1)?;
         }
         let result = (|| -> Result<process::Output> {
             if let Some(shell) = fixture.shell.borrow_mut().as_mut() {
@@ -778,6 +778,9 @@ fn run(options: Options) -> Result<bool> {
                     break;
                 }
             }
+        }
+        if let Some(session) = stepping.as_mut() {
+            session.suspend()?;
         }
         if let Err(error) = fixture.close() {
             eprintln!("  FAIL cleanup{location}: {error:#}");

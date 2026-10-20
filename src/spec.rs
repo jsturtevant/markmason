@@ -22,6 +22,9 @@ pub enum Shell {
 #[derive(Debug)]
 pub struct Case {
     pub title: Option<String>,
+    pub description: String,
+    pub source: String,
+    pub command_ranges: Vec<std::ops::Range<usize>>,
     pub command: String,
     pub expected: Option<String>,
     pub exit_code: i32,
@@ -74,6 +77,7 @@ pub fn input_keys(text: &str) -> String {
             ("{space}", " "),
             ("{backspace}", "\x7f"),
             ("{escape}", "\x1b"),
+            ("{ctrl-c}", "\x03"),
         ],
     )
 }
@@ -185,10 +189,14 @@ pub fn parse_with_shell(content: &str, shell: Option<Shell>) -> Result<Spec> {
     let command_info = Regex::new(r"^markmason(?:\s+\(exit\s+(\d+)\))?$").unwrap();
     let mut current = None;
     let mut title = None;
+    let mut description = String::new();
+    let mut description_start = 0;
     let mut events = Parser::new(body).into_offset_iter();
     while let Some((event, range)) = events.next() {
         if matches!(event, Event::Start(Tag::Heading { .. })) {
             current = None;
+            description.clear();
+            description_start = range.end;
             let mut text = String::new();
             for (event, _) in events.by_ref() {
                 match event {
@@ -209,6 +217,14 @@ pub fn parse_with_shell(content: &str, shell: Option<Shell>) -> Result<Spec> {
             kind,
             "markmason" | "expected" | "expected-contains" | "stdin" | "pty"
         );
+        let prose = body[description_start..range.start].trim();
+        if !prose.is_empty() {
+            if !description.is_empty() {
+                description.push_str("\n\n");
+            }
+            description.push_str(prose);
+        }
+        description_start = range.end;
         let mut block = String::new();
         let mut content_end = body[range.clone()]
             .find('\n')
@@ -234,29 +250,44 @@ pub fn parse_with_shell(content: &str, shell: Option<Shell>) -> Result<Spec> {
                 let caps = command_info
                     .captures(&info)
                     .context("Invalid markmason fence: expected markmason or markmason (exit N)")?;
-                let commands: Vec<_> = block
-                    .lines()
-                    .map(str::trim)
-                    .filter(|line| !line.is_empty())
-                    .collect();
-                if spec.shell.is_some() {
-                    crate::shell::commands(block)?;
-                } else if commands.is_empty()
-                    || commands.iter().any(|command| {
-                        split_command(command)
-                            .first()
-                            .is_none_or(|arg| arg.is_empty())
-                    })
-                {
-                    bail!("A markmason block must contain nonempty commands");
-                }
+                let command_ranges = if spec.shell.is_some() {
+                    crate::shell::command_ranges(block)?
+                } else {
+                    let mut offset = 0;
+                    let mut ranges = Vec::new();
+                    for line in block.split_inclusive('\n') {
+                        let text = line.trim();
+                        if !text.is_empty() {
+                            let start = offset + line.len() - line.trim_start().len();
+                            ranges.push(start..start + text.len());
+                        }
+                        offset += line.len();
+                    }
+                    if ranges.is_empty()
+                        || ranges.iter().any(|range| {
+                            split_command(&block[range.clone()])
+                                .first()
+                                .is_none_or(|arg| arg.is_empty())
+                        })
+                    {
+                        bail!("A markmason block must contain nonempty commands");
+                    }
+                    ranges
+                };
                 spec.cases.push(Case {
                     title: title.clone(),
+                    description: description.clone(),
+                    source: block.to_owned(),
                     command: if spec.shell.is_some() {
                         block.to_owned()
                     } else {
-                        commands.join("\n")
+                        command_ranges
+                            .iter()
+                            .map(|range| &block[range.clone()])
+                            .collect::<Vec<_>>()
+                            .join("\n")
                     },
+                    command_ranges,
                     exit_code: caps.get(1).map_or(Ok(0), |m| m.as_str().parse()).context(
                         "Invalid markmason exit code: expected a nonnegative 32-bit integer",
                     )?,

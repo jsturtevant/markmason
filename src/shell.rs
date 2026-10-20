@@ -60,6 +60,13 @@ done
 "#;
 
 pub fn commands(script: &str) -> Result<Vec<String>> {
+    Ok(command_ranges(script)?
+        .into_iter()
+        .map(|range| script[range].to_owned())
+        .collect())
+}
+
+pub fn command_ranges(script: &str) -> Result<Vec<std::ops::Range<usize>>> {
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&tree_sitter_bash::LANGUAGE.into())?;
     let tree = parser
@@ -78,7 +85,7 @@ pub fn commands(script: &str) -> Result<Vec<String>> {
                 .next_sibling()
                 .filter(|next| next.kind() == "&")
                 .map_or(node.end_byte(), |next| next.end_byte());
-            script[node.start_byte()..end].to_owned()
+            node.start_byte()..end
         })
         .collect();
     if commands.is_empty() {

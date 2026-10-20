@@ -28,9 +28,9 @@ send: {enter}
 
 ```expected-contains
 lesson.md | Block 1 of 2
-Build output one command at a time
+## Build output one command at a time
 COMMAND 1 OF 2
-$ mm-test-cli echo first
+> [running] mm-test-cli echo first
 EXPECTED OUTPUT (whole block; exact, exit 0)
 | first
 | second
@@ -38,13 +38,13 @@ ACTUAL OUTPUT SO FAR
 | first
 IN PROGRESS Assertion checked after the block finishes.
 COMMAND 2 OF 2
-$ mm-test-cli echo second
+> [running] mm-test-cli echo second
 ACTUAL OUTPUT
 | first
 | second
 PASS Block matched expectations.
 lesson.md | Block 2 of 2
-Send input to the application
+## Send input to the application
 | application input
 ACTUAL OUTPUT
 | application input
@@ -88,6 +88,123 @@ COMMAND 1 OF 1
 Walkthrough finished
 Passed blocks: 2
 Failed blocks: 0
+```
+
+## Run to the next block, then finish the file
+
+The terminal redraws the same Markdown block instead of appending a new command
+card. `b` runs the remaining commands and checks their assertion, then pauses
+before any command in the next block. `f` runs the rest of the file.
+
+```markmason
+mm tests/fixtures/walkthrough/navigation.md --step
+```
+
+```pty
+match-raw: {alt-screen}
+send:
+match: Enter: Next command
+send: b{enter}
+match: Enter: Run first command
+send: f{enter}
+```
+
+```expected-contains
+navigation.md | Block 1 of 3
+> [running] mm-test-cli echo first
+> [running] mm-test-cli echo second
+ACTUAL OUTPUT
+| first
+| second
+PASS Block matched expectations.
+navigation.md | Block 2 of 3
+> [next] mm-test-cli echo third
+ACTUAL OUTPUT SO FAR
+| (empty)
+Ready. No commands in this block have run.
+navigation.md | Block 3 of 3
+| last
+Walkthrough finished
+Passed blocks: 3
+Failed blocks: 0
+```
+
+## Scroll complete output without executing commands
+
+End scrolls to the collected output; Home returns to the heading and description.
+Neither key needs Enter or executes the next command.
+
+```markmason
+mm tests/fixtures/walkthrough/scrolling.md --step
+```
+
+```pty
+match: Enter: Next command
+send: {enter}
+match: COMMAND 3 OF 3
+send: {escape}[F
+match: | output-30
+send: {escape}[H
+match: Keep the command context visible
+send: {enter}
+match: Enter: Finish walkthrough
+send: {escape}[F
+match: | finished
+send: {enter}
+```
+
+```expected-contains
+## A complete scrollable section
+Keep the command context visible, and scroll to inspect every output line.
+[done] mm-test-cli echo started
+> [next] mm-test-cli echo finished
+| output-30
+## A complete scrollable section
+| finished
+PASS Block matched expectations.
+Walkthrough finished
+Passed blocks: 1
+Failed blocks: 0
+```
+
+## Cancel while running to the next block
+
+Ctrl+C during command execution must unwind normally, restoring the terminal and
+returning exit 130 on every supported platform.
+
+```markmason (exit 130)
+mm tests/fixtures/walkthrough/interrupt.md --step
+```
+
+```pty
+match: Enter: Next command
+send: b{enter}
+match: > [running] mm-test-cli sleep
+send: {ctrl-c}
+```
+
+## Cancel while finishing the file
+
+```markmason (exit 130)
+mm tests/fixtures/walkthrough/interrupt.md --step
+```
+
+```pty
+match: Enter: Next command
+send: f{enter}
+match: > [running] mm-test-cli sleep
+send: {ctrl-c}
+```
+
+## Honor cancellation queued with a run-ahead key
+
+```markmason (exit 130)
+mm tests/fixtures/walkthrough/interrupt.md --step
+```
+
+```pty
+match: Enter: Next command
+send: f{enter}{ctrl-c}
 ```
 
 ## Quit before the next command runs
@@ -215,12 +332,12 @@ send: {enter}
 
 ```expected-contains
 walkthrough.md | Block 1 of 2
-Inspect the prepared application state
+## Inspect the prepared application state
 ACTUAL OUTPUT
 | ready
 PASS Block matched expectations.
 walkthrough.md | Block 2 of 2
-Inspect the prepared configuration
+## Inspect the prepared configuration
 ACTUAL OUTPUT
 | true
 PASS Block matched expectations.

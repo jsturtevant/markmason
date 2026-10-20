@@ -247,14 +247,35 @@ mm tests/cli --step --file-pattern '^greet\.md$'
 mm tests/cli/greet.md --step
 ```
 
-Each command shows its section heading, block and command progress, resolved
-command text, expected output, actual output, exit code, and result.
-Colors are automatic in supported terminals; `NO_COLOR=1` disables them.
-Output redirected to a file or pipe remains readable without color.
+The walkthrough shows a Markdown-style section with its heading, descriptive
+prose, complete code block, expected output, and a collecting actual-output area.
+At each pause, `> [next]` points to the next command to run. Completed commands
+retain a green `[done]` prefix; running and failed commands are also marked at
+the front. Bash loops, functions, pipelines, and heredocs still
+execute as complete logical commands, not isolated physical lines.
+
+Supported terminals redraw the current block in an alternate screen, restoring
+the original screen on finish, quit, or cancellation. The section is one
+scrollable document: no collapsed panes, hidden-line summaries, or truncated
+output. Long lines wrap without dropping text. Use **Up/Down**, **PgUp/PgDn**,
+**Home/End**, or the **mouse wheel** while paused; scrolling does not execute
+commands or require Enter. Keep tutorial sections short so they normally fit.
+Tabs are visually expanded; assertions always use complete, unmodified output.
+Very small terminals, redirected output, and `TERM=dumb` produce full,
+append-only snapshots. Colors are automatic; `NO_COLOR=1` disables color without
+disabling the reusable view.
 
 - After file selection, setup and the first command run immediately. After each
   command, **Enter** advances to the next command or block. The final pause lets
   you inspect the last result before finishing.
+- **b then Enter** runs the remaining commands in the current block without
+  pauses and checks its assertion. It pauses at the next block **before** its
+  first command runs, with a fresh output area. From that ready state, Enter
+  starts single stepping, or b runs that entire block.
+- **f then Enter** runs the rest of the current file without pauses, retaining
+  every assertion. Automatic execution stops for failure inspection; a later
+  file starts paused rather than inheriting this mode. Ctrl+C still cancels
+  while commands are running.
 - **q then Enter** quits. Closed input also stops; neither runs the remaining
   commands. Temporary fixtures stay available while paused and are cleaned up
   when you finish, quit, or cancel.
@@ -305,7 +326,7 @@ Created demo
 
 | Kind | Placeholders |
 |------|--------------|
-| Input | `{enter}`, `{up}`, `{down}`, `{space}`, `{backspace}`, `{escape}` |
+| Input | `{enter}`, `{up}`, `{down}`, `{space}`, `{backspace}`, `{escape}`, `{ctrl-c}` |
 | Raw output | `{hide-cursor}`, `{show-cursor}`, `{clear-screen}`, `{alt-screen}`, `\xNN` |
 
 Raw and ANSI-stripped matches advance separate cursors.

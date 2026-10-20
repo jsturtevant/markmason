@@ -443,6 +443,29 @@ fn fenced_contents_remove_only_the_opening_indentation() -> Result<()> {
 }
 
 #[test]
+fn walkthrough_descriptions_preserve_section_prose_but_not_executable_fences() -> Result<()> {
+    let spec = spec::parse(
+        "## Prepare\nUse **existing** resources and `safe` values.\n\n- Keep this context.\n\
+         ```markmason\nfirst\n```\n```expected\none\n```\n\
+         Explain the next command.\n```markmason\nsecond\n```\n\
+         ## Finish\nClean only owned resources.\n```markmason\nthird\n```\n",
+    )?;
+    assert_eq!(
+        spec.cases[0].description,
+        "Use **existing** resources and `safe` values.\n\n- Keep this context."
+    );
+    assert!(
+        spec.cases[1]
+            .description
+            .ends_with("Explain the next command.")
+    );
+    assert!(!spec.cases[1].description.contains("```"));
+    assert!(!spec.cases[1].description.contains("\none\n"));
+    assert_eq!(spec.cases[2].description, "Clean only owned resources.");
+    Ok(())
+}
+
+#[test]
 fn case_titles_follow_markdown_headings_without_changing_commands() -> Result<()> {
     let spec = spec::parse(
         "```markmason\nno-title\n```\n\
@@ -549,8 +572,8 @@ fn key_placeholders_and_ansi() {
         "\x1b[?25l\x1b[?25h\x1b[2J\x1b[?1049h\x1b[2J"
     );
     assert_eq!(
-        spec::input_keys("a{ENTER}{up}{Down}{space}{backspace}{Escape}"),
-        "a\r\x1b[A\x1b[B \x7f\x1b"
+        spec::input_keys("a{ENTER}{up}{Down}{space}{backspace}{Escape}{CTRL-C}"),
+        "a\r\x1b[A\x1b[B \x7f\x1b\x03"
     );
     assert_eq!(
         matching::strip_ansi("\x1b[31mred\x1b[0m\x1b[?25l\x1b]0;title\x07"),

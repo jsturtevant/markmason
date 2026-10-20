@@ -964,7 +964,7 @@ fn step_mode_filters_files_and_checks_combined_output_after_the_block() {
         "lesson.md  |  Block 1 of 1",
         "Print two lines",
         "COMMAND 1 OF 2",
-        "$ app echo first",
+        " > [running] app echo first",
         "EXPECTED OUTPUT (whole block; exact, exit 0)\n  | first\n  | second",
         "ACTUAL OUTPUT SO FAR\n  | first\n\n",
         "IN PROGRESS",
@@ -979,6 +979,348 @@ fn step_mode_filters_files_and_checks_combined_output_after_the_block() {
     assert!(!result.contains("other.md"), "{result}");
     assert!(!result.contains("DIFF (expected vs actual)"), "{result}");
     assert!(!result.contains('\x1b'), "{result}");
+}
+
+#[cfg(windows)]
+#[test]
+fn redirected_step_mode_does_not_require_a_windows_console() {
+    use std::os::windows::process::CommandExt;
+    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+
+    let dir = tempfile::tempdir().unwrap();
+    let lesson = dir.path().join("lesson.md");
+    let marker = dir.path().join("must-not-run");
+    fs::write(
+        &lesson,
+        format!(
+            "```markmason\napp echo ready\napp mark \"{}\"\n```\n",
+            marker.display()
+        ),
+    )
+    .unwrap();
+    let mut cmd = command(&lesson);
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let (child, mut input, receive) = step_command(cmd, &[]);
+    input.write_all(b"q\n").unwrap();
+    drop(input);
+    let output = child.wait_with_output().unwrap();
+    let transcript = receive.into_iter().map(Result::unwrap).collect::<String>();
+    assert!(output.status.success(), "{transcript}\n{}", text(&output));
+    assert!(transcript.contains("Walkthrough stopped"), "{transcript}");
+    assert!(!transcript.contains('\x1b'), "{transcript}");
+    assert!(!marker.exists(), "{transcript}");
+}
+
+#[cfg(unix)]
+#[test]
+fn step_terminal_scrolls_complete_sections_and_keeps_done_and_next_markers() {
+    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+    use std::io::Read;
+
+    for (rows, cols, interrupt, long_diagnostic) in [
+        (10, 80, false, false),
+        (24, 40, false, false),
+        (24, 80, false, false),
+        (24, 80, true, false),
+        (10, 80, false, true),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let lesson = dir.path().join("lesson.md");
+        let tabbed = format!("\t{} LAST-OUTPUT-MARKER", "x".repeat(73));
+        fs::write(
+        &lesson,
+        format!("## First section\nKeep all context for this operation.\n```markmason\napp echo first\napp echo second\napp echo \"{tabbed}\"\n```\n```expected\nfirst\nsecond\n{tabbed}\n```\n\
+         ## Second section\n```markmason\napp echo third\n```\n```expected\nthird\n```\n"),
+    ).unwrap();
+        if long_diagnostic {
+            fs::write(&lesson, r#"---
+timeout: 0.5
+---
+## Long diagnostic
+```markmason
+bash -c 'echo detail-1; echo detail-2; echo detail-3; echo detail-4; echo detail-5; echo detail-6; echo detail-7; echo detail-8; sleep 5'
+```
+```pty
+match: never-arrives
+send: ignored{enter}
+```
+"#).unwrap();
+        }
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .unwrap();
+        let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_mm"));
+        command.arg(&lesson);
+        command.arg("--step");
+        let color = rows == 24 && cols == 80 && !interrupt;
+        if color {
+            command.env_remove("NO_COLOR");
+            command.env("FORCE_COLOR", "1");
+        } else {
+            command.env("NO_COLOR", "1");
+        }
+        command.env("TERM", "xterm-256color");
+        command.env(
+            "PATH",
+            std::env::join_paths(
+                std::iter::once(helper().parent().unwrap().to_owned())
+                    .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+            )
+            .unwrap(),
+        );
+        let mut child = pair.slave.spawn_command(command).unwrap();
+        drop(pair.slave);
+        let mut input = pair.master.take_writer().unwrap();
+        let mut reader = pair.master.try_clone_reader().unwrap();
+        let (send, receive) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut bytes = [0; 4096];
+            loop {
+                match reader.read(&mut bytes) {
+                    Ok(0) => break,
+                    Ok(count) => {
+                        if send.send(bytes[..count].to_vec()).is_err() {
+                            break;
+                        }
+                    }
+                    Err(error)
+                        if error.kind() == io::ErrorKind::BrokenPipe
+                            || error.raw_os_error() == Some(libc::EIO) =>
+                    {
+                        break;
+                    }
+                    Err(error) => panic!("Failed reading terminal walkthrough: {error}"),
+                }
+            }
+        });
+        let mut bytes = Vec::new();
+        let mut controls = 0;
+        let mut previous_frame = 0;
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            if Instant::now() > deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!(
+                    "Terminal walkthrough timed out: {}",
+                    String::from_utf8_lossy(&bytes)
+                );
+            }
+            if let Ok(chunk) = receive.recv_timeout(Duration::from_millis(20)) {
+                bytes.extend(chunk);
+            }
+            let raw = String::from_utf8_lossy(&bytes);
+            let frame_count = raw.matches("\x1b[H\x1b[2J").count();
+            let frame =
+                dialoguer::console::strip_ansi_codes(raw.rsplit("\x1b[H\x1b[2J").next().unwrap());
+            let action: Option<&[u8]> = if frame_count <= previous_frame {
+                None
+            } else if long_diagnostic {
+                match controls {
+                    0 if frame.contains("Enter: Finish walkthrough") => Some(b"\x1b[F"),
+                    1 if frame.contains("detail-8") => Some(b"\x1b[5~"),
+                    2 if frame.contains("Output so far:") => Some(b"q\r"),
+                    _ => None,
+                }
+            } else {
+                match controls {
+                    0 if frame.contains("Enter: Next command") && interrupt => Some(b"\x03"),
+                    0 if frame.contains("Enter: Next command") => Some(b"\x1b[F"),
+                    1 if frame.contains("IN PROGRESS") => Some(b"\x1b[H"),
+                    2 if frame.contains("## First section") && frame.contains("Rows 1-") => {
+                        if rows == 24 && cols == 80 {
+                            assert!(
+                                frame.lines().any(|line| line.contains("[done]")
+                                    && line.contains("app echo first")
+                                    && !line.contains('>')),
+                                "{frame}"
+                            );
+                            assert!(
+                                frame.lines().any(|line| line.contains("> [next]")
+                                    && line.contains("app echo second")),
+                                "{frame}"
+                            );
+                        }
+                        Some(b"invalid\r")
+                    }
+                    3 if frame.contains("Use Enter") => Some(b"\r"),
+                    4 if frame.contains("Enter: Next command") => {
+                        if rows == 24 && cols == 80 {
+                            assert_eq!(
+                                frame.lines().filter(|line| line.contains("[done]")).count(),
+                                2,
+                                "{frame}"
+                            );
+                            assert!(frame.contains("> [next]"), "{frame}");
+                        }
+                        Some(b"\n")
+                    }
+                    5 if frame.contains("Enter: Next block") => {
+                        if rows == 24 && cols == 80 {
+                            assert_eq!(
+                                frame.lines().filter(|line| line.contains("[done]")).count(),
+                                3,
+                                "{frame}"
+                            );
+                            assert!(!frame.contains("> [next]"), "{frame}");
+                        }
+                        Some(b"\x1b[F")
+                    }
+                    6 if frame.contains("Block matched expectations.")
+                        && frame.contains("LAST-OUTPUT-MARKER") =>
+                    {
+                        Some(b"b\r")
+                    }
+                    7 if frame.contains("Enter: Run first command") => Some(b"f\n"),
+                    _ => None,
+                }
+            };
+            if let Some(action) = action {
+                input.write_all(action).unwrap();
+                controls += 1;
+                previous_frame = frame_count;
+            }
+            if let Some(status) = child.try_wait().unwrap() {
+                assert_eq!(status.success(), !(interrupt || long_diagnostic), "{raw}");
+                break;
+            }
+        }
+        drop(input);
+        drop(pair.master);
+        bytes.extend(receive.into_iter().flatten());
+        let raw = String::from_utf8_lossy(&bytes);
+        if long_diagnostic {
+            assert!(raw.contains("Output so far:"), "{raw}");
+            assert!(raw.contains("  | detail-8\r\n"), "{raw}");
+            assert!(raw.contains("\x1b[?1049l"), "{raw}");
+            continue;
+        }
+        if interrupt {
+            let restored = raw.rfind("\x1b[?1049l").expect("screen should be restored");
+            let diagnostic = raw
+                .find("Walkthrough error:")
+                .expect("input error should be reported");
+            assert!(restored < diagnostic, "{raw}");
+            assert!(raw.contains("Interrupted"), "{raw}");
+            continue;
+        }
+        assert!(raw.contains("\x1b[?1049h"), "{raw}");
+        assert!(raw.contains("\x1b[?1049l"), "{raw}");
+        assert!(!raw.contains("lines below"), "{raw}");
+        assert!(!raw.contains("lines above"), "{raw}");
+        assert!(
+            raw.contains("Keep all context for this operation."),
+            "{raw}"
+        );
+        if color {
+            assert!(raw.contains("\x1b[1;32m"), "{raw}");
+        }
+        let frames: Vec<_> = raw.split("\x1b[H\x1b[2J").skip(1).collect();
+        assert!(frames.len() >= 6, "{raw}");
+        for frame in &frames {
+            let screen =
+                dialoguer::console::strip_ansi_codes(frame.split("\x1b[?1049l").next().unwrap());
+            assert!(screen.lines().count() <= usize::from(rows), "{screen}");
+            for line in screen.split(['\r', '\n']) {
+                assert!(!line.contains('\t'), "{screen}");
+                assert!(
+                    dialoguer::console::measure_text_width(line) < usize::from(cols),
+                    "{screen}"
+                );
+            }
+        }
+        assert!(
+            frames.iter().any(|frame| {
+                let frame = dialoguer::console::strip_ansi_codes(frame);
+                frame.contains("## Second section")
+                    && frame.contains("[next]")
+                    && !frame.contains("| first")
+            }),
+            "{raw}"
+        );
+        assert!(raw.contains("Passed blocks: 2"), "{raw}");
+    }
+}
+
+#[test]
+fn step_navigation_runs_remaining_commands_and_pauses_before_the_next_block() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("first");
+    let second = dir.path().join("second");
+    let third = dir.path().join("third");
+    let last = dir.path().join("last");
+    fs::write(
+        dir.path().join("lesson.md"),
+        format!(
+            "## One\n```markmason\napp mark \"{}\"\napp mark \"{}\"\napp echo first-block\n```\n```expected\nfirst-block\n```\n\
+             ## Two\n```markmason\napp mark \"{}\"\napp echo second-block\n```\n```expected\nsecond-block\n```\n\
+             ## Three\n```markmason\napp mark \"{}\"\n```\n",
+            first.display(), second.display(), third.display(), last.display()
+        ),
+    ).unwrap();
+    let (mut child, mut input, receive) = step_process(dir.path(), &[]);
+    let mut transcript = String::new();
+    next_step(&mut child, &receive, &mut transcript);
+    assert!(first.exists());
+    assert!(!second.exists());
+    input.write_all(b"b\n").unwrap();
+    next_step(&mut child, &receive, &mut transcript);
+    assert!(second.exists(), "{transcript}");
+    assert!(!third.exists(), "{transcript}");
+    let next = transcript.rsplit("Block 2 of 3").next().unwrap();
+    assert!(
+        next.contains("Ready. No commands in this block have run."),
+        "{next}"
+    );
+    assert!(next.contains("ACTUAL OUTPUT SO FAR\n  | (empty)"), "{next}");
+    input.write_all(b"f\n").unwrap();
+    drop(input);
+    let output = child.wait_with_output().unwrap();
+    transcript.extend(receive.into_iter().map(Result::unwrap));
+    assert!(output.status.success(), "{transcript}\n{}", text(&output));
+    assert!(third.exists() && last.exists(), "{transcript}");
+    assert_eq!(transcript.matches("Enter:").count(), 2, "{transcript}");
+    assert!(
+        transcript.contains("Passed blocks: 3\nFailed blocks: 0"),
+        "{transcript}"
+    );
+}
+
+#[test]
+fn step_finish_stops_for_failures_and_does_not_autorun_the_next_file() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("a.md"),
+        "```markmason\napp echo one\napp echo actual\n```\n```expected\none\ndifferent\n```\n",
+    )
+    .unwrap();
+    let output = step_output(dir.path(), &[], "f\nq\n");
+    let result = text(&output);
+    assert!(!output.status.success(), "{result}");
+    assert_eq!(result.matches("Enter:").count(), 2, "{result}");
+    assert!(result.contains("Line 2 mismatch"), "{result}");
+    fs::write(
+        dir.path().join("a.md"),
+        "```markmason\napp echo one\napp echo two\n```\n```expected\none\ntwo\n```\n",
+    )
+    .unwrap();
+    let later = dir.path().join("later");
+    fs::write(
+        dir.path().join("b.md"),
+        format!("```markmason\napp mark \"{}\"\n```\n", later.display()),
+    )
+    .unwrap();
+    let output = step_output(dir.path(), &[], "f\nq\n");
+    let result = text(&output);
+    assert!(output.status.success(), "{result}");
+    assert!(!later.exists(), "{result}");
+    assert!(result.contains("Enter: Run first command"), "{result}");
+    assert!(result.contains("Walkthrough stopped"), "{result}");
 }
 
 #[test]
@@ -1021,7 +1363,7 @@ fn step_mode_waits_after_every_command_and_quits_mid_block() {
         "{transcript}"
     );
     assert!(!transcript.contains("Input closed"), "{transcript}");
-    assert!(!transcript.contains("COMMAND 3 OF 3"), "{transcript}");
+    assert!(transcript.contains("COMMAND 3 OF 3"), "{transcript}");
 }
 
 #[test]
@@ -1048,7 +1390,7 @@ fn step_mode_quit_and_eof_skip_remaining_commands_and_clean_up_fixtures() {
         assert!(result.contains("Walkthrough stopped"), "{result}");
         assert!(!later.exists(), "{result}");
         assert!(!result.contains("b.md  |"), "{result}");
-        let actual = result.split("ACTUAL OUTPUT SO FAR\n").nth(1).unwrap();
+        let actual = result.rsplit("ACTUAL OUTPUT SO FAR\n").next().unwrap();
         let paths: Vec<_> = actual
             .lines()
             .filter_map(|line| line.strip_prefix("  | "))
@@ -1223,7 +1565,7 @@ fn step_mode_cancellation_while_paused_cleans_up_without_advancing() {
             text(&output)
         );
         assert!(!later.exists(), "{transcript}");
-        let actual = transcript.split("ACTUAL OUTPUT SO FAR\n").nth(1).unwrap();
+        let actual = transcript.rsplit("ACTUAL OUTPUT SO FAR\n").next().unwrap();
         for path in actual
             .lines()
             .filter_map(|line| line.strip_prefix("  | "))
