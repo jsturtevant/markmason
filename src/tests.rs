@@ -507,8 +507,56 @@ fn case_titles_follow_markdown_headings_without_changing_commands() -> Result<()
 }
 
 #[test]
+fn language_fences_preserve_execution_and_assertion_metadata() -> Result<()> {
+    for language in ["bash", "python", "csharp", "c#", "C++", "custom-language"] {
+        for marker in ["```", "~~~"] {
+            let parsed = spec::parse(&format!(
+                "## A styled section\nContext.\n{marker}{language} markmason (exit 2)\napp fail\n{marker}\n\
+                 ```expected\nstdout\nstderr\n```\n```stdin\ninput\n```\n"
+            ))?;
+            assert_eq!(parsed.shell, None);
+            assert_eq!(parsed.cases.len(), 1);
+            let case = &parsed.cases[0];
+            assert_eq!(case.language.as_deref(), Some(language));
+            assert_eq!(case.command, "app fail");
+            assert_eq!(case.source, "app fail");
+            assert_eq!(case.exit_code, 2);
+            assert_eq!(case.description, "Context.");
+            assert_eq!(case.expected.as_deref(), Some("stdout\nstderr"));
+            assert_eq!(case.stdin.as_deref(), Some("input\n"));
+        }
+    }
+    let parsed = spec::parse(
+        "---\nshell: bash\n---\n```python markmason\nVALUE=one\nprintf '%s\\n' \"$VALUE\"\n```\n",
+    )?;
+    assert_eq!(parsed.shell, Some(spec::Shell::Bash));
+    assert_eq!(parsed.cases[0].command_ranges.len(), 2);
+    assert_eq!(parsed.cases[0].language.as_deref(), Some("python"));
+    let parsed = spec::parse(
+        "```python\nnot executable\n```\n```csharp\nnot executable\n```\n```markmason\napp echo legacy\n```\n",
+    )?;
+    assert_eq!(parsed.cases.len(), 1);
+    assert_eq!(parsed.cases[0].language, None);
+    Ok(())
+}
+
+#[test]
 fn invalid_command_fences_report_errors() {
     for (markdown, expected) in [
+        ("```bash markmason\ncmd\n", "Unterminated markmason block"),
+        ("```bash markmason\n```\n", "must contain nonempty commands"),
+        (
+            "```python markmason extra\ncmd\n```\n",
+            "Invalid markmason fence",
+        ),
+        (
+            "```bash markmason (exit -1)\ncmd\n```\n",
+            "Invalid markmason fence",
+        ),
+        (
+            "```bad/language markmason\ncmd\n```\n",
+            "Invalid markmason language",
+        ),
         ("```markmason\n", "Unterminated markmason block"),
         ("```markmason\ncmd\n~~~\n", "Unterminated markmason block"),
         ("````markmason\ncmd\n```\n", "Unterminated markmason block"),

@@ -1275,7 +1275,7 @@ fn step_terminal_scrolls_complete_sections_and_keeps_done_and_next_markers() {
         let tabbed = format!("\t{} LAST-OUTPUT-MARKER", "x".repeat(73));
         fs::write(
         &lesson,
-        format!("## First section\nKeep all context for this operation.\n```markmason\napp echo first\napp echo second\napp echo \"{tabbed}\"\n```\n```expected\nfirst\nsecond\n{tabbed}\n```\n\
+        format!("## First section\nKeep all context for this operation.\n```bash markmason\napp echo first\napp echo second\napp echo \"{tabbed}\"\n```\n```expected\nfirst\nsecond\n{tabbed}\n```\n\
          ## Second section\n```markmason\napp echo third\n```\n```expected\nthird\n```\n"),
     ).unwrap();
         if long_diagnostic {
@@ -1465,6 +1465,9 @@ send: ignored{enter}
         );
         if color {
             assert!(raw.contains("\x1b[1;32m"), "{raw}");
+            assert!(raw.contains("\x1b[0;38;2;"), "{raw}");
+        } else {
+            assert!(!raw.contains("\x1b[0;38;2;"), "{raw}");
         }
         let frames: Vec<_> = raw.split("\x1b[H\x1b[2J").skip(1).collect();
         assert!(frames.len() >= 6, "{raw}");

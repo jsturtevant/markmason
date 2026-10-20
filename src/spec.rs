@@ -28,6 +28,7 @@ pub enum Shell {
 
 #[derive(Debug)]
 pub struct Case {
+    pub language: Option<String>,
     pub title: Option<String>,
     pub description: String,
     pub source: String,
@@ -214,6 +215,7 @@ pub fn parse_with_shell(content: &str, shell: Option<Shell>) -> Result<Spec> {
         content
     };
     let command_info = Regex::new(r"^markmason(?:\s+\(exit\s+(\d+)\))?$").unwrap();
+    let language_info = Regex::new(r"^[A-Za-z0-9_+#.-]+$").unwrap();
     let mut current = None;
     let mut title = None;
     let mut description = String::new();
@@ -239,7 +241,14 @@ pub fn parse_with_shell(content: &str, shell: Option<Shell>) -> Result<Spec> {
         let Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) = event else {
             continue;
         };
-        let kind = info.split_whitespace().next().unwrap_or("");
+        let mut parts = info.split_whitespace();
+        let first = parts.next().unwrap_or("");
+        let language = (first != "markmason" && parts.next() == Some("markmason")).then_some(first);
+        let kind = if language.is_some() {
+            "markmason"
+        } else {
+            first
+        };
         let recognized = matches!(
             kind,
             "markmason" | "expected" | "expected-contains" | "stdin" | "pty"
@@ -274,9 +283,17 @@ pub fn parse_with_shell(content: &str, shell: Option<Shell>) -> Result<Spec> {
             }
             let block = block.strip_suffix('\n').unwrap_or(&block);
             if kind == "markmason" {
+                let metadata = if let Some(language) = language {
+                    if !language_info.is_match(language) {
+                        bail!("Invalid markmason language: expected a language identifier");
+                    }
+                    info[language.len()..].trim_start()
+                } else {
+                    info.as_ref()
+                };
                 let caps = command_info
-                    .captures(&info)
-                    .context("Invalid markmason fence: expected markmason or markmason (exit N)")?;
+                    .captures(metadata)
+                    .context("Invalid markmason fence: expected markmason or LANGUAGE markmason, optionally followed by (exit N)")?;
                 let command_ranges = if spec.shell.is_some() {
                     crate::shell::command_ranges(block)?
                 } else {
@@ -302,6 +319,7 @@ pub fn parse_with_shell(content: &str, shell: Option<Shell>) -> Result<Spec> {
                     ranges
                 };
                 spec.cases.push(Case {
+                    language: language.map(str::to_owned),
                     title: title.clone(),
                     description: description.clone(),
                     source: block.to_owned(),

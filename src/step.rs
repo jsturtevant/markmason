@@ -1,4 +1,4 @@
-use crate::{cancellation, matching, spec};
+use crate::{cancellation, highlight, matching, spec};
 use anstream::{AutoStream, ColorChoice};
 use anyhow::{Context, Result, bail};
 use crossterm::{
@@ -10,7 +10,7 @@ use crossterm::{
 };
 use dialoguer::{
     FuzzySelect,
-    console::{Term, measure_text_width},
+    console::{AnsiCodeIterator, Term, measure_text_width},
     theme::ColorfulTheme,
 };
 use std::{
@@ -89,7 +89,9 @@ enum CommandState {
 }
 
 struct Frame {
+    language: Option<String>,
     source: String,
+    styled_source: Vec<String>,
     description: String,
     ranges: Vec<Range<usize>>,
     states: Vec<CommandState>,
@@ -109,8 +111,15 @@ impl Frame {
         if commands.len() != case.command_ranges.len() {
             bail!("Walkthrough command count does not match parsed source ranges");
         }
+        let source = case
+            .source
+            .split_inclusive('\n')
+            .map(|line| plain(line.trim_end_matches(['\r', '\n'])).replace('\t', "    "))
+            .collect();
         Ok(Self {
+            language: case.language.clone(),
             source: case.source.clone(),
+            styled_source: highlight::lines(source, case.language.as_deref())?,
             description: case.description.clone(),
             ranges: case.command_ranges.clone(),
             states: vec![CommandState::Pending; commands.len()],
@@ -141,7 +150,7 @@ impl Frame {
         let next = self.next();
         let mut offset = 0;
         let mut lines = Vec::new();
-        for raw in self.source.split_inclusive('\n') {
+        for (index, raw) in self.source.split_inclusive('\n').enumerate() {
             let line = raw.trim_end_matches(['\r', '\n']);
             let end = offset + line.len();
             let overlaps = |range: &Range<usize>| range.start <= end && range.end > offset;
@@ -170,10 +179,7 @@ impl Frame {
             } else {
                 label
             };
-            lines.push(format!(
-                " {marker} {label} {}",
-                plain(line).replace('\t', "    "),
-            ));
+            lines.push(format!(" {marker} {label} {}", self.styled_source[index]));
             offset += raw.len();
         }
         lines
@@ -595,7 +601,12 @@ impl Session {
             frame.ranges.len()
         ));
         lines.push(format!(
-            "{CYAN}```markmason{}{RESET}",
+            "{CYAN}```{}markmason{}{RESET}",
+            frame
+                .language
+                .as_ref()
+                .map(|language| format!("{language} "))
+                .unwrap_or_default(),
             if frame.expected_exit == 0 {
                 String::new()
             } else {
@@ -888,29 +899,52 @@ impl Drop for RawInput {
 fn wrap(lines: &[String], columns: usize) -> Vec<String> {
     let mut wrapped = Vec::new();
     for line in lines {
-        let color = [GREEN, RED, YELLOW, CYAN, BOLD]
-            .into_iter()
-            .find(|color| line.contains(color));
-        let text = matching::strip_ansi(line).replace('\t', "    ");
+        let mut text = String::new();
+        let mut codes = VecDeque::new();
+        for (part, ansi) in AnsiCodeIterator::new(line) {
+            if ansi {
+                if part.ends_with('m') {
+                    codes.push_back((text.len(), part));
+                }
+            } else {
+                text.push_str(&part.replace('\t', "    "));
+            }
+        }
         let mut chunk = String::new();
         let mut width = 0;
-        for grapheme in text.graphemes(true) {
+        let mut active = "";
+        for (start, grapheme) in text.grapheme_indices(true) {
             let cells = measure_text_width(grapheme);
-            if !chunk.is_empty() && width + cells > columns {
-                wrapped.push(colorize(&chunk, color));
-                chunk.clear();
+            if width != 0 && width + cells > columns {
+                if !active.is_empty() {
+                    chunk.push_str(RESET);
+                }
+                wrapped.push(std::mem::take(&mut chunk));
+                chunk.push_str(active);
                 width = 0;
             }
-            chunk.push_str(grapheme);
+            let end = start + grapheme.len();
+            let mut position = start;
+            while codes.front().is_some_and(|(offset, _)| *offset < end) {
+                let (offset, code) = codes.pop_front().unwrap();
+                chunk.push_str(&text[position..offset]);
+                chunk.push_str(code);
+                active = if code == RESET { "" } else { code };
+                position = offset;
+            }
+            chunk.push_str(&text[position..end]);
             width += cells;
         }
-        wrapped.push(colorize(&chunk, color));
+        for (_, code) in codes {
+            chunk.push_str(code);
+            active = if code == RESET { "" } else { code };
+        }
+        if !active.is_empty() {
+            chunk.push_str(RESET);
+        }
+        wrapped.push(chunk);
     }
     wrapped
-}
-
-fn colorize(text: &str, color: Option<&str>) -> String {
-    color.map_or_else(|| text.to_owned(), |color| format!("{color}{text}{RESET}"))
 }
 
 fn panel(text: &str) -> Vec<String> {
@@ -937,7 +971,7 @@ fn plain(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{CommandState, Frame, GREEN, Phase, plain, wrap};
+    use super::{CYAN, CommandState, Frame, GREEN, Phase, RESET, plain, wrap};
 
     #[test]
     fn marker_tracks_multiline_commands_without_losing_comments_or_indentation() {
@@ -1040,5 +1074,36 @@ mod tests {
             .map(|index| format!("line {index}"))
             .collect::<Vec<_>>();
         assert_eq!(wrap(&lines, 80), lines);
+    }
+
+    #[test]
+    fn wrapping_retains_syntax_styles_without_splitting_styled_graphemes() {
+        let line = format!("xxe{GREEN}\u{301}{RESET}\u{1f469}{CYAN}\u{200d}\u{1f4bb}{RESET}yy");
+        let shown = wrap(std::slice::from_ref(&line), 3);
+        let text = shown.iter().map(|line| plain(line)).collect::<Vec<_>>();
+        assert_eq!(text.concat(), plain(&line));
+        assert!(
+            text.iter()
+                .all(|line| dialoguer::console::measure_text_width(line) <= 3)
+        );
+        assert!(text.iter().any(|line| line.contains("e\u{301}")));
+        assert!(
+            text.iter()
+                .any(|line| line.contains("\u{1f469}\u{200d}\u{1f4bb}"))
+        );
+        assert!(shown.iter().any(|line| line.contains(GREEN)));
+        assert!(shown.iter().any(|line| line.contains(CYAN)));
+
+        let colored = "\x1b[0;38;2;12;34;56mabcdefgh\x1b[0m".to_owned();
+        let shown = wrap(&[colored], 4);
+        assert_eq!(shown.len(), 2);
+        for line in &shown {
+            assert!(line.starts_with("\x1b[0;38;2;12;34;56m"));
+            assert!(line.ends_with(RESET));
+        }
+        assert_eq!(
+            shown.iter().map(|line| plain(line)).collect::<String>(),
+            "abcdefgh"
+        );
     }
 }

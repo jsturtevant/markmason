@@ -52,12 +52,15 @@ error: unknown option --not-an-option
 |--------|---------|
 | `markmason` fence | Run commands in order as one test; require exit 0 by default |
 | `markmason (exit N)` opening fence | Require exit N, without treating execution errors as success |
+| `LANGUAGE markmason` opening fence | Run the same commands with syntax highlighting; optionally append `(exit N)` |
 | `expected` fence | Match output after path, whitespace, blank-line, and wrapping normalization |
 | `expected-contains` fence | Match whole lines in order; no unmatched trailing lines |
 | `stdin` fence | Send its contents plus a final newline |
 | `pty` fence | Use paired `match:` / `send:` or `match-raw:` / `send:` steps |
 
 - By default commands run without a shell. Quote arguments with spaces; backslashes are literal.
+- Language tags such as `bash`, `python`, or `csharp` affect styling only, not execution.
+  Ordinary language fences without the `markmason` marker do not run.
 - Put one command on each line; blank lines are ignored. Combine their output
   for the assertion, and stop at the first nonzero exit.
 - Share file state between commands, not shell variables or directory changes.

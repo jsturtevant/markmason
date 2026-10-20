@@ -1,4 +1,5 @@
 mod cancellation;
+mod highlight;
 mod matching;
 mod process;
 mod shell;
