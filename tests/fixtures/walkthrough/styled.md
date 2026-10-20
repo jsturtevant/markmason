@@ -1,3 +1,7 @@
+---
+shell: bash
+---
+
 ## Bash-colored commands
 
 Language tags affect styling, not execution.
@@ -15,19 +19,27 @@ second
 ## Python-colored commands
 
 ```python markmason
-mm-test-cli echo "python"
+mm-test-cli cat <<'PY'
+name = "Markmason"
+print(f"Hello, {name}!")
+PY
 ```
 
 ```expected
-python
+name = "Markmason"
+print(f"Hello, {name}!")
 ```
 
 ## C#-colored commands
 
 ```csharp markmason
-mm-test-cli echo "csharp"
+mm-test-cli cat <<'CS'
+var message = "Hello from C#";
+Console.WriteLine(message);
+CS
 ```
 
 ```expected
-csharp
+var message = "Hello from C#";
+Console.WriteLine(message);
 ```

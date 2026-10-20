@@ -71,7 +71,19 @@ Use language-first fences such as `bash markmason`,
 highlighting in Markdown renderers and the walkthrough. Existing
 `markmason` fences remain valid. Language tags affect styling only:
 they do not select an interpreter or enable Bash execution. `NO_COLOR=1`
-disables syntax colors too. See the [language-tagged examples](tests/cli/languages.md).
+disables syntax colors too. For example, a Bash-backed walkthrough can display
+real Python source without requiring Markmason to choose or provide Python:
+
+````markdown
+```python markmason
+mm-test-cli cat <<'PY'
+name = "Markmason"
+print(f"Hello, {name}!")
+PY
+```
+````
+
+The [language-tagged examples](tests/cli/languages.md) also show C# source.
 
 To prepare a walkthrough from another Markdown document, add
 `setup: mm gettingstarted.md` in its frontmatter. The prerequisite runs

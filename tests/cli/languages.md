@@ -1,9 +1,13 @@
+---
+shell: bash
+---
+
 # Language-tagged command blocks
 
 Put the language first and `markmason` second. Standard Markdown renderers can
 highlight the code, and `mm --step` colors its source without changing commands,
-assertions, or execution mode. No Python or C# runtime is needed by these examples:
-they all execute the test CLI, not source code in the named language.
+assertions, or execution mode. These examples pass recognizable source through
+the test CLI with Bash heredocs, so no Python or C# runtime is needed.
 
 ## Bash styling
 
@@ -18,11 +22,15 @@ bash
 ## Python styling
 
 ```python markmason
-mm-test-cli echo "python"
+mm-test-cli cat <<'PY'
+name = "Markmason"
+print(f"Hello, {name}!")
+PY
 ```
 
 ```expected
-python
+name = "Markmason"
+print(f"Hello, {name}!")
 ```
 
 ## C# styling
@@ -30,19 +38,25 @@ python
 Use `csharp`, `c#`, or `cs`.
 
 ```csharp markmason
-mm-test-cli echo "csharp"
+mm-test-cli cat <<'CS'
+var message = "Hello from C#";
+Console.WriteLine(message);
+CS
 ```
 
 ```expected
-csharp
+var message = "Hello from C#";
+Console.WriteLine(message);
 ```
 
 ```c# markmason
-mm-test-cli echo "c#"
+mm-test-cli cat <<'CS'
+Console.WriteLine("The c# alias uses C# highlighting.");
+CS
 ```
 
 ```expected
-c#
+Console.WriteLine("The c# alias uses C# highlighting.");
 ```
 
 ## Unknown languages remain readable

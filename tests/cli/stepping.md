@@ -189,9 +189,11 @@ send: {enter}
 [done] mm-test-cli echo "first"
 > [next] mm-test-cli echo "second"
 ```python markmason
-| python
+| name = "Markmason"
+| print(f"Hello, {name}!")
 ```csharp markmason
-| csharp
+| var message = "Hello from C#";
+| Console.WriteLine(message);
 Walkthrough finished
 Passed blocks: 3
 Failed blocks: 0
