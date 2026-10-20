@@ -43,7 +43,6 @@ while :; do
         builtin test -z "$(builtin trap -p INT)"; then
         builtin trap 'return 130' INT
     fi
-    IFS= builtin read -r __markmason_boundary < "$__markmason_request/boundary"
     __markmason_captured=
     if builtin test -f "$__markmason_request/pty"; then
         builtin . "$__markmason_request/script"
@@ -57,10 +56,7 @@ while :; do
         fi
         set +xv
     } 2>/dev/null
-    if ! builtin test -f "$__markmason_request/pty"; then
-        builtin printf '%s\n' "$__markmason_boundary" >> "$__markmason_root/stdout"
-        builtin printf '%s\n' "$__markmason_boundary" >> "$__markmason_root/stderr"
-    fi
+    IFS= builtin read -r __markmason_boundary < "$__markmason_request/boundary"
     builtin printf '\r\n%s\r\n' "$__markmason_boundary"
     builtin printf '%s\n' "$__markmason_status" >| "$__markmason_request/status"
     __markmason_sequence=$((__markmason_sequence + 1))
@@ -347,38 +343,21 @@ impl Session {
                     status.is_none(),
                 )?;
             }
-            let output = |code, complete| -> Result<Option<(process::Output, u64, u64)>> {
+            let output = |code| -> Result<(process::Output, u64, u64)> {
                 let stdout =
                     read_capture(&self.directory.path().join("stdout"), self.stdout_position)?;
                 let stderr =
                     read_capture(&self.directory.path().join("stderr"), self.stderr_position)?;
-                let marker = format!("{boundary}\n");
-                let strip_marker = |bytes: &[u8]| {
-                    bytes
-                        .strip_suffix(marker.as_bytes())
-                        .map(|content| content.to_owned())
-                };
-                let (stdout_text, stderr_text) = if complete && block.is_none() {
-                    let Some(stdout_text) = strip_marker(&stdout) else {
-                        return Ok(None);
-                    };
-                    let Some(stderr_text) = strip_marker(&stderr) else {
-                        return Ok(None);
-                    };
-                    (stdout_text, stderr_text)
-                } else {
-                    (stdout.clone(), stderr.clone())
-                };
                 let mut text = clean.to_owned();
-                text.push_str(&String::from_utf8_lossy(&stdout_text));
+                text.push_str(&String::from_utf8_lossy(&stdout));
                 if code != 0 {
-                    text.push_str(&String::from_utf8_lossy(&stderr_text));
+                    text.push_str(&String::from_utf8_lossy(&stderr));
                 }
-                Ok(Some((
+                Ok((
                     process::Output { text, code },
                     u64::try_from(stdout.len())?,
                     u64::try_from(stderr.len())?,
-                )))
+                ))
             };
             if interrupted.is_none() {
                 let interruption = cancellation::check().err().or_else(|| {
@@ -390,13 +369,7 @@ impl Session {
                     })
                 });
                 if let Some(error) = interruption {
-                    let error = error.context(format!(
-                        "Output so far:\n{}",
-                        output(1, false)?
-                            .context("Missing incomplete Bash output")?
-                            .0
-                            .text
-                    ));
+                    let error = error.context(format!("Output so far:\n{}", output(1)?.0.text));
                     if !self.cleanup_enabled {
                         return Err(error);
                     }
@@ -418,9 +391,7 @@ impl Session {
                         .is_none_or(|block| !block.interaction.sending()))
                 && let Some(frame_end) = frame_end
             {
-                let Some((output, stdout, stderr)) = output(code, true)? else {
-                    continue;
-                };
+                let (output, stdout, stderr) = output(code)?;
                 self.pending = bytes[frame_end..].to_vec();
                 self.stdout_position += stdout;
                 self.stderr_position += stderr;
@@ -441,10 +412,7 @@ impl Session {
             if terminal.child.try_wait()?.is_some() {
                 bail!(
                     "Bash session exited before reporting command status.\nOutput:\n{}",
-                    output(1, false)?
-                        .context("Missing incomplete Bash output")?
-                        .0
-                        .text
+                    output(1)?.0.text
                 );
             }
             if recovery_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
