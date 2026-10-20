@@ -690,6 +690,45 @@ fn exact_and_contains_failures() {
 }
 
 #[test]
+fn always_fences_compose_with_languages_exits_and_assertions() -> Result<()> {
+    for opening in [
+        "markmason always (exit 2)",
+        "bash markmason always (exit 2)",
+        "csharp markmason always (exit 2)",
+    ] {
+        let parsed = spec::parse(&format!(
+            "```{opening}\napp fail\n```\n```expected-substring\nstderr\n```\n"
+        ))?;
+        let case = &parsed.cases[0];
+        assert!(case.always);
+        assert_eq!(case.exit_code, 2);
+        assert_eq!(case.matching, matching::Mode::Substring);
+        assert_eq!(case.expected.as_deref(), Some("stderr"));
+    }
+    let parsed = spec::parse(
+        "```bash markmason\napp echo ordinary\n```\n```markmason always\napp echo deferred\n```\n",
+    )?;
+    assert!(!parsed.cases[0].always);
+    assert!(parsed.cases[1].always);
+    for opening in [
+        "markmason (exit 2) always",
+        "markmason always always",
+        "markmason always (exit -1)",
+        "markmason sometimes",
+        "bash! markmason always",
+    ] {
+        assert!(spec::parse(&format!("```{opening}\napp fail\n```\n")).is_err());
+    }
+    assert!(
+        spec::parse("```markmason always\napp echo deferred")
+            .unwrap_err()
+            .to_string()
+            .contains("Unterminated markmason")
+    );
+    Ok(())
+}
+
+#[test]
 fn parses_substring_and_regex_assertions() -> Result<()> {
     for (fence, mode, expected) in [
         ("expected-substring", matching::Mode::Substring, r"a[1]\b"),

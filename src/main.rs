@@ -252,12 +252,16 @@ impl Fixture {
                     shell::path(Path::new(value)),
                 );
             }
-            Some(shell::Session::new(
+            let mut shell = shell::Session::new(
                 &cwd,
                 &shell_env,
                 spec.timeout
                     .unwrap_or(Duration::from_secs_f64(options.timeout)),
-            )?)
+            )?;
+            if spec.cases.iter().any(|case| case.always) {
+                shell.enable_cleanup()?;
+            }
+            Some(shell)
         } else {
             None
         };
@@ -490,7 +494,7 @@ fn run_setup(
     setup_cwd: &Path,
     timeout: Duration,
     verbose: bool,
-    chain: &mut Vec<PathBuf>,
+    state: &mut Setup,
 ) -> Result<()> {
     let Some(setup) = &spec.setup else {
         return Ok(());
@@ -507,7 +511,7 @@ fn run_setup(
     if markdown {
         let path = dunce::canonicalize(dir.join(&args[1]))
             .with_context(|| format!("Cannot find Markdown setup {}", args[1]))?;
-        if chain.contains(&path) {
+        if state.chain.contains(&path) {
             bail!("Circular Markdown setup: {}", path.display());
         }
         let inherited_shell = fixture
@@ -526,14 +530,19 @@ fn run_setup(
                 path.display()
             );
         }
-        if setup_spec.cases.is_empty() {
+        if !setup_spec.cases.iter().any(|case| !case.always) {
             bail!("No test cases found in Markdown setup {}", path.display());
         }
         let dir = path
             .parent()
             .context("Markdown setup has no parent directory")?;
         let timeout = setup_spec.timeout.unwrap_or(timeout);
-        chain.push(path.clone());
+        if setup_spec.cases.iter().any(|case| case.always)
+            && let Some(shell) = fixture.shell.borrow_mut().as_mut()
+        {
+            shell.enable_cleanup()?;
+        }
+        state.chain.push(path.clone());
         run_setup(
             &setup_spec,
             dir,
@@ -541,16 +550,23 @@ fn run_setup(
             &fixture.cwd,
             timeout,
             verbose,
-            chain,
+            state,
         )
         .with_context(|| format!("Markdown setup {} failed", path.display()))?;
-        for case in &setup_spec.cases {
+        for case in setup_spec.cases.iter().filter(|case| !case.always) {
             cancellation::check()?;
             execute(case, fixture, dir, timeout, verbose, None).with_context(|| {
                 format!("Markdown setup {} failed: {}", path.display(), case.command)
             })?;
         }
-        chain.pop();
+        defer(
+            &setup_spec,
+            dir,
+            timeout,
+            &path.display().to_string(),
+            &mut state.deferred,
+        );
+        state.chain.pop();
     } else {
         let result = if let Some(shell) = fixture.shell.borrow_mut().as_mut() {
             let command = args
@@ -585,6 +601,70 @@ fn run_setup(
         }
     }
     Ok(())
+}
+
+struct Deferred {
+    case: spec::Case,
+    dir: PathBuf,
+    timeout: Duration,
+    file: String,
+}
+
+struct Setup {
+    chain: Vec<PathBuf>,
+    deferred: Vec<Deferred>,
+}
+
+fn defer(
+    spec: &spec::Spec,
+    dir: &Path,
+    timeout: Duration,
+    file: &str,
+    deferred: &mut Vec<Deferred>,
+) {
+    deferred.extend(
+        spec.cases
+            .iter()
+            .filter(|case| case.always)
+            .map(|case| Deferred {
+                case: case.clone(),
+                dir: dir.to_owned(),
+                timeout,
+                file: file.to_owned(),
+            }),
+    );
+}
+
+fn run_deferred(
+    deferred: &[Deferred],
+    fixture: &Fixture,
+    verbose: bool,
+    passed: &mut usize,
+    failed: &mut usize,
+) {
+    for block in deferred {
+        let _cleanup = cancellation::Cleanup::new();
+        let label = block.case.command.replace('\n', "\n       ");
+        println!("  RUN always ({}): {label}", block.file);
+        match execute(
+            &block.case,
+            fixture,
+            &block.dir,
+            block.timeout,
+            verbose,
+            None,
+        ) {
+            Ok(true) => {
+                *passed += 1;
+                println!("  PASS always: {label}");
+            }
+            Ok(false) => unreachable!("Deferred blocks never use walkthrough input"),
+            Err(error) => {
+                *failed += 1;
+                eprintln!("  FAIL always ({}): {label}: {error:#}", block.file);
+            }
+        }
+    }
 }
 
 fn collect_inputs(
@@ -791,11 +871,12 @@ fn run(options: Options) -> Result<bool> {
             .iter()
             .enumerate()
             .filter(|(_, case)| {
-                names.is_empty()
-                    || names.iter().any(|re| {
-                        re.is_match(&file)
-                            || case.command.lines().any(|command| re.is_match(command))
-                    })
+                !case.always
+                    && (names.is_empty()
+                        || names.iter().any(|re| {
+                            re.is_match(&file)
+                                || case.command.lines().any(|command| re.is_match(command))
+                        }))
             })
             .map(|(i, _)| i)
             .collect();
@@ -821,7 +902,12 @@ fn run(options: Options) -> Result<bool> {
         Some(gh_config_dir()?)
     };
     let (mut passed, mut failed) = (0, 0);
-    let blocks = specs.iter().map(|(_, _, indices)| indices.len()).sum();
+    let blocks = specs
+        .iter()
+        .map(|(_, spec, indices)| {
+            indices.len() + spec.cases.iter().filter(|case| case.always).count()
+        })
+        .sum();
     let mut stepping = options
         .step
         .then(|| step::Session::new(blocks))
@@ -830,7 +916,7 @@ fn run(options: Options) -> Result<bool> {
     for (file, spec, indices) in specs {
         cancellation::check()?;
         let first_block = block_number;
-        block_number += indices.len();
+        block_number += indices.len() + spec.cases.iter().filter(|case| case.always).count();
         let location = if options.step {
             format!(" ({file})")
         } else {
@@ -839,9 +925,9 @@ fn run(options: Options) -> Result<bool> {
         if stepping.is_none() {
             println!("{file}");
         }
-        if spec.cases.is_empty() {
+        if indices.is_empty() {
             eprintln!(
-                "  FAIL{location}: No test cases found. Expected a fenced markmason command block"
+                "  FAIL{location}: No test cases found. Expected a fenced markmason command block without always"
             );
             failed += 1;
             continue;
@@ -849,6 +935,9 @@ fn run(options: Options) -> Result<bool> {
         if options.list {
             for index in indices {
                 println!("  {}", spec.cases[index].command.replace('\n', "\n  "));
+            }
+            for case in spec.cases.iter().filter(|case| case.always) {
+                println!("  [always] {}", case.command.replace('\n', "\n  "));
             }
             continue;
         }
@@ -889,6 +978,10 @@ fn run(options: Options) -> Result<bool> {
                 continue;
             }
         };
+        let mut setup = Setup {
+            chain: vec![root.join(&file)],
+            deferred: Vec::new(),
+        };
         let setup_result = run_setup(
             &spec,
             &dir,
@@ -896,12 +989,13 @@ fn run(options: Options) -> Result<bool> {
             &options.cwd,
             timeout,
             verbose,
-            &mut vec![root.join(&file)],
+            &mut setup,
         );
-        if let Err(error) = setup_result {
+        if let Err(error) = &setup_result {
             eprintln!("  FAIL setup{location}: {error:#}");
             failed += 1;
         } else {
+            defer(&spec, &dir, timeout, &file, &mut setup.deferred);
             for (offset, index) in indices.into_iter().enumerate() {
                 if cancellation::signal().is_some() {
                     break;
@@ -936,8 +1030,14 @@ fn run(options: Options) -> Result<bool> {
                 }
             }
         }
-        if let Some(session) = stepping.as_mut() {
-            session.suspend()?;
+        if let Some(session) = stepping.as_mut()
+            && let Err(error) = session.suspend()
+        {
+            eprintln!("  FAIL terminal{location}: {error:#}");
+            failed += 1;
+        }
+        if setup_result.is_ok() {
+            run_deferred(&setup.deferred, &fixture, verbose, &mut passed, &mut failed);
         }
         if let Err(error) = fixture.close() {
             eprintln!("  FAIL cleanup{location}: {error:#}");

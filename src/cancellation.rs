@@ -1,20 +1,42 @@
 use anyhow::Result;
-use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
-
-static KEYBOARD_INTERRUPT: AtomicBool = AtomicBool::new(false);
-
-pub fn interrupt() {
-    KEYBOARD_INTERRUPT.store(true, AtomicOrdering::Relaxed);
-}
-
-#[cfg(unix)]
-use std::sync::{
-    Arc, OnceLock,
-    atomic::{AtomicUsize, Ordering},
+use std::{
+    cell::Cell,
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
-#[cfg(unix)]
-static SIGNAL: OnceLock<Arc<AtomicUsize>> = OnceLock::new();
+static SIGNAL: AtomicUsize = AtomicUsize::new(0);
+static GENERATION: AtomicUsize = AtomicUsize::new(0);
+
+pub fn interrupt() {
+    record(2);
+}
+
+fn record(signal: usize) {
+    let _ = SIGNAL.compare_exchange(0, signal, Ordering::SeqCst, Ordering::SeqCst);
+    GENERATION.fetch_add(1, Ordering::SeqCst);
+}
+
+thread_local! {
+    static IGNORED: Cell<usize> = const { Cell::new(0) };
+}
+
+pub struct Cleanup {
+    previous: usize,
+}
+
+impl Cleanup {
+    pub fn new() -> Self {
+        Self {
+            previous: IGNORED.replace(GENERATION.load(Ordering::SeqCst)),
+        }
+    }
+}
+
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        IGNORED.set(self.previous);
+    }
+}
 
 #[cfg(windows)]
 unsafe extern "system" fn console_control(event: u32) -> windows_sys::core::BOOL {
@@ -30,9 +52,11 @@ unsafe extern "system" fn console_control(event: u32) -> windows_sys::core::BOOL
 pub fn install() -> Result<()> {
     #[cfg(unix)]
     {
-        let flag = SIGNAL.get_or_init(|| Arc::new(AtomicUsize::new(0)));
         for signal in [libc::SIGINT, libc::SIGTERM] {
-            signal_hook::flag::register_usize(signal, Arc::clone(flag), signal as usize)?;
+            // The handler only updates lock-free atomics.
+            unsafe {
+                signal_hook::low_level::register(signal, move || record(signal as usize))?;
+            }
         }
     }
     #[cfg(windows)]
@@ -53,21 +77,14 @@ pub fn install() -> Result<()> {
 }
 
 pub fn signal() -> Option<i32> {
-    if KEYBOARD_INTERRUPT.load(AtomicOrdering::Relaxed) {
-        return Some(2);
-    }
-    #[cfg(unix)]
-    if let Some(flag) = SIGNAL.get() {
-        let signal = flag.load(Ordering::Relaxed);
-        if signal != 0 {
-            return Some(signal as i32);
-        }
-    }
-    None
+    let signal = SIGNAL.load(Ordering::SeqCst);
+    (signal != 0).then_some(signal as i32)
 }
 
 pub fn check() -> Result<()> {
-    if let Some(signal) = signal() {
+    if GENERATION.load(Ordering::SeqCst) > IGNORED.get()
+        && let Some(signal) = signal()
+    {
         anyhow::bail!("Interrupted by signal {signal}");
     }
     Ok(())

@@ -84,6 +84,10 @@ description: >-
 - Keep fixtures small and deterministic. Reuse existing helpers for stdin,
   interactive terminals, timeouts, and stateful behavior rather than adding a
   runtime dependency merely to generate test output.
+- Use `markmason always` for cleanup that must run after ordinary blocks,
+  including failure or walkthrough cancellation. Keep it safe for partial work.
+  Put an expected exit after the modifier: `markmason always (exit N)`.
+  Do not rely on cleanup when inputs, fixture creation, or setup failed.
 
 ## Explain filters accurately
 

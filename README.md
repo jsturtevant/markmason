@@ -122,6 +122,7 @@ Learn more with real examples from `mm`:
 - [Output matching](tests/cli/matching.md)
 - [Setup and state](tests/cli/state.md)
 - [Persistent Bash sessions](tests/cli/shell.md)
+- [Deferred cleanup](tests/cli/cleanup.md)
 - [Path variables](tests/cli/variables.md)
 - [Environment filters](tests/cli/environment.md)
 
@@ -146,6 +147,7 @@ that prints text, shows prompts, and writes test state. Both go on `PATH`.
 | Literal text anywhere in output | `expected-substring` block |
 | Regex search across output | `expected-regex` block; Rust regex syntax |
 | Expected failure | `markmason (exit 1)` on the opening fence |
+| Deferred cleanup | `markmason always`; run automatically after the file |
 | Piped input | `stdin` block |
 | Interactive terminal | `pty` block with `match:` / `send:` |
 | Per-file setup | `setup: python3 setup.py` in YAML frontmatter |

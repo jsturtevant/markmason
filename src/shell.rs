@@ -39,6 +39,9 @@ while :; do
     while ! builtin test -f "$__markmason_request/ready"; do
         "$__markmason_sleep" 0.05 || exit
     done
+    if builtin test -f "$__markmason_root/cleanup"; then
+        builtin trap 'return 130' INT
+    fi
     __markmason_captured=
     if builtin test -f "$__markmason_request/pty"; then
         builtin . "$__markmason_request/script"
@@ -171,6 +174,8 @@ pub struct Session {
     pending: Vec<u8>,
     stdout_position: u64,
     stderr_position: u64,
+    cleanup_enabled: bool,
+    ready: bool,
 }
 
 impl Session {
@@ -205,6 +210,8 @@ impl Session {
             pending: Vec::new(),
             stdout_position: 0,
             stderr_position: 0,
+            cleanup_enabled: false,
+            ready: true,
         };
         let deadline = Instant::now() + timeout.min(Duration::from_secs(10));
         let mut output = Vec::new();
@@ -230,6 +237,12 @@ impl Session {
         }
     }
 
+    pub fn enable_cleanup(&mut self) -> Result<()> {
+        fs::write(self.directory.path().join("cleanup"), "")?;
+        self.cleanup_enabled = true;
+        Ok(())
+    }
+
     pub fn run(
         &mut self,
         command: &str,
@@ -240,6 +253,7 @@ impl Session {
     ) -> Result<process::Output> {
         let result = self.execute(command, input, block, timeout, final_command);
         if result.is_err()
+            && !(self.cleanup_enabled && self.ready)
             && let Some(terminal) = self.terminal.take()
         {
             terminal
@@ -289,10 +303,13 @@ impl Session {
         fs::write(directory.join("boundary"), format!("{boundary}\n"))?;
         let mut bytes = std::mem::take(&mut self.pending);
         fs::write(directory.join("ready"), "")?;
+        self.ready = false;
         self.sequence += 1;
         let start = Instant::now();
+        let mut interrupted = None;
+        let mut recovery_deadline = None;
+        let mut cleanup = None;
         loop {
-            cancellation::check()?;
             match terminal.rx.recv_timeout(Duration::from_millis(10)) {
                 Ok(chunk) => bytes.extend(chunk.context("Failed reading Bash terminal")?),
                 Err(mpsc::RecvTimeoutError::Disconnected) => {}
@@ -314,7 +331,9 @@ impl Session {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
                 Err(error) => return Err(error).context("Failed reading Bash command status"),
             };
-            if let Some(block) = block.as_deref_mut() {
+            if interrupted.is_none()
+                && let Some(block) = block.as_deref_mut()
+            {
                 block.interaction.advance(
                     &format!("{}{command_raw}", block.raw),
                     &format!("{}{clean}", block.clean),
@@ -339,13 +358,47 @@ impl Session {
                     u64::try_from(stderr.len())?,
                 ))
             };
+            if interrupted.is_none() {
+                let interruption = cancellation::check().err().or_else(|| {
+                    (start.elapsed() >= timeout).then(|| {
+                        anyhow::anyhow!(
+                            "Bash command timed out after {}ms: {command}",
+                            timeout.as_millis()
+                        )
+                    })
+                });
+                if let Some(error) = interruption {
+                    let error = error.context(format!("Output so far:\n{}", output(1)?.0.text));
+                    if !self.cleanup_enabled {
+                        return Err(error);
+                    }
+                    interrupted = Some(error);
+                    if status.is_none() || frame_end.is_none() {
+                        cleanup = Some(cancellation::Cleanup::new());
+                        recovery_deadline = Some(Instant::now() + Duration::from_secs(2));
+                        terminal
+                            .send_tx
+                            .send(vec![3])
+                            .context("Failed to interrupt Bash for deferred blocks")?;
+                    }
+                }
+            }
             if let Some(code) = status
-                && block
-                    .as_ref()
-                    .is_none_or(|block| !block.interaction.sending())
+                && (interrupted.is_some()
+                    || block
+                        .as_ref()
+                        .is_none_or(|block| !block.interaction.sending()))
                 && let Some(frame_end) = frame_end
             {
                 let (output, stdout, stderr) = output(code)?;
+                self.pending = bytes[frame_end..].to_vec();
+                self.stdout_position += stdout;
+                self.stderr_position += stderr;
+                self.ready = true;
+                if let Some(error) = interrupted {
+                    drop(cleanup);
+                    return Err(error);
+                }
                 if let Some(block) = block {
                     block.raw.push_str(command_raw);
                     block.clean.push_str(&output.text);
@@ -353,9 +406,6 @@ impl Session {
                         .interaction
                         .check_complete(final_command, code, &block.clean)?;
                 }
-                self.pending = bytes[frame_end..].to_vec();
-                self.stdout_position += stdout;
-                self.stderr_position += stderr;
                 return Ok(output);
             }
             if terminal.child.try_wait()?.is_some() {
@@ -364,12 +414,10 @@ impl Session {
                     output(1)?.0.text
                 );
             }
-            if start.elapsed() >= timeout {
-                bail!(
-                    "Bash command timed out after {}ms: {command}\nOutput so far:\n{}",
-                    timeout.as_millis(),
-                    output(1)?.0.text
-                );
+            if recovery_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                return Err(interrupted
+                    .context("Missing Bash interruption")?
+                    .context("Bash session could not resume for deferred blocks"));
             }
         }
     }
