@@ -220,7 +220,7 @@ fn pty_cleanup_steps_run_after_bash_timeout_recovery() {
         "---\nshell: bash\ntimeout: 2\n---\n\
          ```markmason\napp sleep\n```\n\
          ```markmason always\napp interactive\n```\n\
-         ```pty\nmatch: Ready?\nsend: cleanup{enter}\nmatch: Ready?\nsend: finished{enter}\n```\n\
+         ```pty\nmatch: Ready?\nsend: cleanup{enter}finished{enter}\n```\n\
          ```expected-regex\n(?s)accepted cleanup.*done finished\n```\n",
     )
     .unwrap();
