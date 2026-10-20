@@ -76,7 +76,7 @@ fn redirected_progress_groups_documents_blocks_and_failures_without_color() {
     .unwrap();
     fs::write(
         dir.path().join("b.md"),
-        "```markmason\napp echo actual\n```\n```expected\nmissing\n```\n",
+        "```markmason\napp echo ready\napp fail\n```\n",
     )
     .unwrap();
     let output = command(dir.path()).env("NO_COLOR", "1").output().unwrap();
@@ -87,11 +87,13 @@ fn redirected_progress_groups_documents_blocks_and_failures_without_color() {
         "RUN  Block 1/1 — Create the project",
         "✓ PASS Block 1/1 — Create the project",
         "RUN  b.md",
-        "✗ FAIL  Block 1/1 — app echo actual",
+        "✗ FAIL  Block 1/1 — app echo ready",
+        "Command: app echo ready",
+        "             app fail",
         "Documents: 1 passed, 1 failed",
         "✓ a.md  1/1 blocks",
         "✗ b.md  0/1 blocks",
-        "└─ app echo actual",
+        "└─ app echo ready",
         "Blocks: 1 passed, 1 failed (includes deferred)",
         "Duration:",
     ] {
@@ -156,6 +158,7 @@ fn default_tty_progress_spins_truncates_and_restores_the_line() {
     assert!(raw.contains("\r\x1b[2K"), "{raw}");
     assert!(raw.contains("✓ PASS"), "{raw}");
     assert!(raw.contains("Summary"), "{raw}");
+    assert!(raw.contains("<1s"), "{raw}");
     assert!(!raw.contains("\x1b[1;"), "{raw}");
     for segment in raw.split(['\r', '\n']) {
         let line = dialoguer::console::strip_ansi_codes(segment);
@@ -167,7 +170,112 @@ fn default_tty_progress_spins_truncates_and_restores_the_line() {
 }
 
 #[cfg(unix)]
+#[test]
+fn tty_spinner_clears_before_verbose_diagnostics() {
+    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+    use std::io::Read;
+
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("lesson.md"),
+        "## Wait briefly\n```markmason\napp pause\n```\n",
+    )
+    .unwrap();
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 10,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_mm"));
+    command.arg(dir.path());
+    command.arg("--verbose");
+    command.env("TERM", "xterm-256color");
+    command.env("NO_COLOR", "1");
+    command.env(
+        "PATH",
+        std::env::join_paths(
+            std::iter::once(helper().parent().unwrap().to_owned())
+                .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+        )
+        .unwrap(),
+    );
+    let mut child = pair.slave.spawn_command(command).unwrap();
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().unwrap();
+    let mut bytes = Vec::new();
+    let mut chunk = [0; 4096];
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(count) => bytes.extend_from_slice(&chunk[..count]),
+            Err(error) if error.raw_os_error() == Some(libc::EIO) => break,
+            Err(error) => panic!("Failed reading verbose progress terminal: {error}"),
+        }
+    }
+    let status = child.wait().unwrap();
+    let raw = String::from_utf8_lossy(&bytes);
+    assert!(status.success(), "{raw}");
+    let actual = raw.find("ACTUAL:").expect("verbose output should be shown");
+    let cleared = raw[..actual]
+        .rfind("\r\x1b[2K")
+        .expect("spinner should clear before diagnostics");
+    assert!(cleared < actual, "{raw}");
+    assert!(!raw[actual..].contains('⠋'), "{raw}");
+}
+
+#[cfg(unix)]
 const SPINNER_CHARS: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+#[test]
+fn prerequisite_cleanup_keeps_caller_block_identities_stable() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("setup.md"),
+        "```markmason\napp echo setup\n```\n```expected\nsetup\n```\n\
+         ```markmason always\napp echo prerequisite cleanup\n```\n",
+    )
+    .unwrap();
+    let lesson = dir.path().join("lesson.md");
+    fs::write(
+        &lesson,
+        "---\nsetup: mm setup.md\n---\n\
+         ```markmason\napp echo ordinary\n```\n```expected\nordinary\n```\n\
+         ```markmason always\napp echo caller cleanup\n```\n",
+    )
+    .unwrap();
+
+    let listed = command(&lesson).arg("--list").output().unwrap();
+    let listed = text(&listed);
+    assert!(listed.contains("Block 1/2 — app echo ordinary"), "{listed}");
+    assert!(
+        listed.contains("Always 2/2 — app echo caller cleanup"),
+        "{listed}"
+    );
+    assert!(!listed.contains("prerequisite cleanup"), "{listed}");
+
+    let output = command(&lesson).output().unwrap();
+    let transcript = text(&output);
+    assert!(output.status.success(), "{transcript}");
+    assert!(
+        transcript.contains("RUN  Block 1/2 — app echo ordinary"),
+        "{transcript}"
+    );
+    assert!(
+        transcript.contains("RUN  Always 1/1 — app echo prerequisite cleanup"),
+        "{transcript}"
+    );
+    assert!(
+        transcript.contains("RUN  Always 2/2 — app echo caller cleanup"),
+        "{transcript}"
+    );
+    assert!(
+        transcript.contains("Blocks: 3 passed, 0 failed"),
+        "{transcript}"
+    );
+}
 
 #[test]
 fn always_blocks_run_once_after_ordinary_blocks_in_document_order() {
@@ -3425,6 +3533,35 @@ fn bash_job_control_process_groups_are_cleaned_on_every_exit_path() {
             assert!(!Path::new(path).exists(), "{mode}: fixture {path} survived");
         }
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn cancelled_bash_block_keeps_command_and_captured_output_diagnostics() {
+    let dir = tempfile::tempdir().unwrap();
+    let lesson = dir.path().join("lesson.md");
+    fs::write(
+        &lesson,
+        "---\nshell: bash\n---\n```markmason\napp sleep\n```\n",
+    )
+    .unwrap();
+    let child = command(&lesson)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGINT) }, 0);
+    let output = child.wait_with_output().unwrap();
+    let transcript = text(&output);
+    assert_eq!(output.status.code(), Some(130), "{transcript}");
+    assert!(
+        transcript.contains("■ CANCELLED  Block 1/1 — app sleep"),
+        "{transcript}"
+    );
+    assert!(transcript.contains("Command: app sleep"), "{transcript}");
+    assert!(transcript.contains("Output so far:"), "{transcript}");
+    assert!(transcript.contains("before timeout"), "{transcript}");
 }
 
 #[cfg(unix)]

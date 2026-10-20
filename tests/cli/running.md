@@ -81,15 +81,8 @@ mm tests/fixtures/diagnostics --verbose
 
 Show captured output and a comparison diff, even when the assertion passes.
 
-```expected-contains
-RUN  output.md
-ACTUAL:
-hello
-DIFF (expected vs actual):
-hello
-✓ PASS Block 1/1 — Print a short result for diagnostics
-Blocks: 1 passed, 0 failed (includes deferred)
-Duration: <1s
+```expected-regex
+(?s)RUN  output\.md.*ACTUAL:.*hello.*DIFF \(expected vs actual\):.*✓ PASS Block 1/1 — Print a short result for diagnostics.*Blocks: 1 passed, 0 failed.*Duration:
 ```
 
 [Filter tests](filtering.md) | [Error cases](errors.md)

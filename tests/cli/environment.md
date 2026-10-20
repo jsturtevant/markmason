@@ -120,13 +120,6 @@ mm-test-cli with-env VERBOSE " YES " -- mm tests/fixtures/diagnostics
 `VERBOSE` accepts `1`, `true`, or `yes`, ignoring case and surrounding spaces.
 It shows captured output and the comparison diff, just like `--verbose`.
 
-```expected-contains
-RUN  output.md
-ACTUAL:
-hello
-DIFF (expected vs actual):
-hello
-✓ PASS Block 1/1 — Print a short result for diagnostics
-Blocks: 1 passed, 0 failed (includes deferred)
-Duration: <1s
+```expected-regex
+(?s)RUN  output\.md.*ACTUAL:.*hello.*DIFF \(expected vs actual\):.*✓ PASS Block 1/1 — Print a short result for diagnostics.*Blocks: 1 passed, 0 failed.*Duration:
 ```

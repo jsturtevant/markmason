@@ -2,10 +2,7 @@ use anstream::{AutoStream, ColorChoice};
 use dialoguer::console::measure_text_width;
 use std::{
     io::{self, IsTerminal, Write},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
@@ -106,8 +103,14 @@ impl Presenter {
         }
     }
 
-    pub fn block_pass(&mut self, progress: Progress, block: &Block) -> io::Result<()> {
+    pub fn block_pass(
+        &mut self,
+        progress: Progress,
+        block: &Block,
+        diagnostics: &str,
+    ) -> io::Result<()> {
         progress.finish()?;
+        self.diagnostics(diagnostics)?;
         if !self.tty || block.deferred {
             let line = format!("  ✓ PASS {}", block.label());
             writeln!(
@@ -130,25 +133,68 @@ impl Presenter {
         file: &str,
         block: &Block,
         error: &anyhow::Error,
+        diagnostics: &str,
     ) -> io::Result<()> {
         progress.finish()?;
+        self.diagnostics(diagnostics)?;
         writeln!(self.output, "  {RED}✗ FAIL{RESET}  {}", block.label())?;
         writeln!(self.output, "    Document: {file}")?;
-        writeln!(self.output, "    Command: {}", block.command)?;
+        for (index, command) in block.command.lines().enumerate() {
+            writeln!(
+                self.output,
+                "{}{command}",
+                if index == 0 {
+                    "    Command: "
+                } else {
+                    "             "
+                }
+            )?;
+        }
         for line in format!("{error:#}").lines() {
             writeln!(self.output, "    {line}")?;
         }
         self.output.flush()
     }
 
-    pub fn block_cancel(&mut self, progress: Progress, block: &Block) -> io::Result<()> {
+    pub fn block_cancel(
+        &mut self,
+        progress: Progress,
+        file: &str,
+        block: &Block,
+        error: &anyhow::Error,
+        diagnostics: &str,
+    ) -> io::Result<()> {
         progress.finish()?;
+        self.diagnostics(diagnostics)?;
         writeln!(
             self.output,
             "  {YELLOW}■ CANCELLED{RESET}  {}",
             block.label()
         )?;
+        writeln!(self.output, "    Document: {file}")?;
+        for (index, command) in block.command.lines().enumerate() {
+            writeln!(
+                self.output,
+                "{}{command}",
+                if index == 0 {
+                    "    Command: "
+                } else {
+                    "             "
+                }
+            )?;
+        }
+        for line in format!("{error:#}").lines() {
+            writeln!(self.output, "    {line}")?;
+        }
         self.output.flush()
+    }
+
+    fn diagnostics(&mut self, diagnostics: &str) -> io::Result<()> {
+        if !diagnostics.is_empty() {
+            write!(self.output, "{diagnostics}")?;
+            self.output.flush()?;
+        }
+        Ok(())
     }
 
     pub fn document_finish(&mut self, document: &Document) -> io::Result<()> {
@@ -367,21 +413,20 @@ impl Presenter {
 }
 
 pub struct Progress {
-    stop: Arc<AtomicBool>,
+    stop: Option<mpsc::SyncSender<()>>,
     thread: Option<thread::JoinHandle<()>>,
 }
 
 impl Progress {
     fn inactive() -> Self {
         Self {
-            stop: Arc::new(AtomicBool::new(true)),
+            stop: None,
             thread: None,
         }
     }
 
     fn new(block: &Block) -> io::Result<Self> {
-        let stop = Arc::new(AtomicBool::new(false));
-        let done = Arc::clone(&stop);
+        let (stop, done) = mpsc::sync_channel(1);
         let label = block.label();
         let started = Instant::now();
         let thread = thread::Builder::new()
@@ -390,33 +435,40 @@ impl Progress {
                 let mut output = AutoStream::new(io::stdout(), ColorChoice::Auto);
                 let mut terminal = io::stdout();
                 let mut frame = 0;
-                while !done.load(Ordering::Relaxed) {
+                loop {
                     let width = crossterm::terminal::size()
                         .map(|(columns, _)| usize::from(columns))
-                        .unwrap_or(80);
-                    let suffix = duration(started.elapsed());
-                    let line = fit(
-                        &format!("  {} {label}  {suffix}", SPINNER[frame % SPINNER.len()]),
-                        width.saturating_sub(1),
-                    );
+                        .unwrap_or(80)
+                        .saturating_sub(1);
+                    let prefix = format!("  {} ", SPINNER[frame % SPINNER.len()]);
+                    let suffix = format!("  {}", duration(started.elapsed()));
+                    let label_width = width
+                        .saturating_sub(measure_text_width(&prefix))
+                        .saturating_sub(measure_text_width(&suffix));
+                    let line = format!("{prefix}{}{suffix}", fit(&label, label_width));
                     let _ = terminal.write_all(b"\r\x1b[2K");
                     let _ = terminal.flush();
                     let _ = write!(output, "{CYAN}{line}{RESET}");
                     let _ = output.flush();
                     frame += 1;
-                    thread::sleep(Duration::from_millis(80));
+                    match done.recv_timeout(Duration::from_millis(80)) {
+                        Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    }
                 }
                 let _ = terminal.write_all(b"\r\x1b[2K");
                 let _ = terminal.flush();
             })?;
         Ok(Self {
-            stop,
+            stop: Some(stop),
             thread: Some(thread),
         })
     }
 
     pub fn finish(mut self) -> io::Result<()> {
-        self.stop.store(true, Ordering::Relaxed);
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -426,7 +478,9 @@ impl Progress {
 
 impl Drop for Progress {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -445,15 +499,6 @@ pub fn heading(title: Option<&str>, command: &str) -> String {
         })
         .unwrap_or("(unnamed block)");
     fit(value, 72)
-}
-
-pub fn first_command(command: &str) -> String {
-    command
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .map(str::trim)
-        .unwrap_or("(empty command)")
-        .to_owned()
 }
 
 fn duration(value: Duration) -> String {
@@ -495,4 +540,30 @@ fn fit(text: &str, width: usize) -> String {
     }
     fitted.push('…');
     fitted
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn progress_shutdown_wakes_the_worker() -> io::Result<()> {
+        let block = Block {
+            position: 1,
+            total: 1,
+            heading: "brief command".into(),
+            command: "app echo ready".into(),
+            deferred: false,
+        };
+        let progress = Progress::new(&block)?;
+        thread::sleep(Duration::from_millis(10));
+        let started = Instant::now();
+        progress.finish()?;
+        assert!(
+            started.elapsed() < Duration::from_millis(50),
+            "{:?}",
+            started.elapsed()
+        );
+        Ok(())
+    }
 }

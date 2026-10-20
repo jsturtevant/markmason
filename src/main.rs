@@ -310,6 +310,7 @@ fn execute(
     dir: &Path,
     timeout: Duration,
     verbose: bool,
+    diagnostics: Option<&mut String>,
     mut stepping: Option<&mut step::Session>,
 ) -> Result<bool> {
     let shell_mode = fixture.shell.borrow().is_some();
@@ -422,7 +423,7 @@ fn execute(
         if let Some(session) = stepping.as_deref_mut() {
             let complete = index + 1 == commands.len() || output.code != 0;
             let verdict = if complete {
-                check_output(case, expected.as_deref(), &output, false, false)
+                check_output(case, expected.as_deref(), &output, false, false, None)
             } else {
                 Ok(())
             };
@@ -448,7 +449,15 @@ fn execute(
             break;
         }
     }
-    check_output(case, expected.as_deref(), &output, verbose, true).map(|()| true)
+    check_output(
+        case,
+        expected.as_deref(),
+        &output,
+        verbose,
+        true,
+        diagnostics,
+    )
+    .map(|()| true)
 }
 
 fn check_output(
@@ -457,21 +466,31 @@ fn check_output(
     output: &process::Output,
     verbose: bool,
     diagnostics: bool,
+    mut buffered: Option<&mut String>,
 ) -> Result<()> {
     if verbose {
-        println!("ACTUAL:\n{}", output.text);
+        emit_diagnostic(&mut buffered, &format!("ACTUAL:\n{}\n", output.text));
     }
     if let Some(expected) = expected {
         let mode = case.output_mode();
         let result = matching::check(&output.text, expected, mode);
         if verbose {
             if matches!(mode, matching::Mode::Substring | matching::Mode::Regex) {
-                println!("ACTUAL:\n{}\nEXPECTED ({mode:?}):\n{expected}", output.text);
+                emit_diagnostic(
+                    &mut buffered,
+                    &format!(
+                        "ACTUAL:\n{}\nEXPECTED ({mode:?}):\n{expected}\n",
+                        output.text
+                    ),
+                );
             } else {
-                println!(
-                    "ACTUAL:\n{}\nDIFF (expected vs actual):\n{}",
-                    output.text,
-                    matching::diff(&output.text, expected)
+                emit_diagnostic(
+                    &mut buffered,
+                    &format!(
+                        "ACTUAL:\n{}\nDIFF (expected vs actual):\n{}\n",
+                        output.text,
+                        matching::diff(&output.text, expected)
+                    ),
                 );
             }
         }
@@ -501,6 +520,14 @@ fn check_output(
         );
     }
     Ok(())
+}
+
+fn emit_diagnostic(buffered: &mut Option<&mut String>, text: &str) {
+    if let Some(buffer) = buffered.as_deref_mut() {
+        buffer.push_str(text);
+    } else {
+        print!("{text}");
+    }
 }
 
 fn run_setup(
@@ -571,7 +598,7 @@ fn run_setup(
         .with_context(|| format!("Markdown setup {} failed", path.display()))?;
         for case in setup_spec.cases.iter().filter(|case| !case.always) {
             cancellation::check()?;
-            execute(case, fixture, dir, timeout, verbose, None).with_context(|| {
+            execute(case, fixture, dir, timeout, verbose, None, None).with_context(|| {
                 format!("Markdown setup {} failed: {}", path.display(), case.command)
             })?;
         }
@@ -580,6 +607,7 @@ fn run_setup(
             dir,
             timeout,
             &path.display().to_string(),
+            0,
             &mut state.deferred,
         );
         state.chain.pop();
@@ -624,6 +652,8 @@ struct Deferred {
     dir: PathBuf,
     timeout: Duration,
     file: String,
+    position: usize,
+    total: usize,
 }
 
 struct Setup {
@@ -636,17 +666,22 @@ fn defer(
     dir: &Path,
     timeout: Duration,
     file: &str,
+    ordinary_blocks: usize,
     deferred: &mut Vec<Deferred>,
 ) {
+    let always: Vec<_> = spec.cases.iter().filter(|case| case.always).collect();
+    let total = ordinary_blocks + always.len();
     deferred.extend(
-        spec.cases
-            .iter()
-            .filter(|case| case.always)
-            .map(|case| Deferred {
+        always
+            .into_iter()
+            .enumerate()
+            .map(|(index, case)| Deferred {
                 case: case.clone(),
                 dir: dir.to_owned(),
                 timeout,
                 file: file.to_owned(),
+                position: ordinary_blocks + index + 1,
+                total,
             }),
     );
 }
@@ -656,7 +691,7 @@ fn presented_block(case: &spec::Case, position: usize, total: usize) -> presenta
         position,
         total,
         heading: presentation::heading(case.title.as_deref(), &case.command),
-        command: presentation::first_command(&case.command),
+        command: case.command.clone(),
         deferred: case.always,
     }
 }
@@ -665,35 +700,32 @@ fn run_deferred(
     deferred: &[Deferred],
     fixture: &Fixture,
     verbose: bool,
-    ordinary_blocks: usize,
     document: &mut presentation::Document,
     presenter: &mut presentation::Presenter,
 ) -> Result<()> {
-    for (index, block) in deferred.iter().enumerate() {
+    for block in deferred {
         let _cleanup = cancellation::Cleanup::new();
-        let presented = presented_block(
-            &block.case,
-            ordinary_blocks + index + 1,
-            ordinary_blocks + deferred.len(),
-        );
+        let presented = presented_block(&block.case, block.position, block.total);
         let progress = presenter.block_start(&presented)?;
+        let mut diagnostics = String::new();
         match execute(
             &block.case,
             fixture,
             &block.dir,
             block.timeout,
             verbose,
+            Some(&mut diagnostics),
             None,
         ) {
             Ok(true) => {
                 document.passed += 1;
-                presenter.block_pass(progress, &presented)?;
+                presenter.block_pass(progress, &presented, &diagnostics)?;
             }
             Ok(false) => unreachable!("Deferred blocks never use walkthrough input"),
             Err(error) => {
                 document.failed += 1;
                 document.failed_headings.push(presented.heading.clone());
-                presenter.block_fail(progress, &block.file, &presented, &error)?;
+                presenter.block_fail(progress, &block.file, &presented, &error, &diagnostics)?;
             }
         }
     }
@@ -1093,7 +1125,14 @@ fn run(options: Options) -> Result<bool> {
                 failed += 1;
             }
         } else {
-            defer(&spec, &dir, timeout, &file, &mut setup.deferred);
+            defer(
+                &spec,
+                &dir,
+                timeout,
+                &file,
+                indices.len(),
+                &mut setup.deferred,
+            );
             document.total = indices.len() + setup.deferred.len();
             for (offset, index) in indices.iter().copied().enumerate() {
                 if cancellation::signal().is_some() {
@@ -1101,12 +1140,13 @@ fn run(options: Options) -> Result<bool> {
                     break;
                 }
                 let case = &spec.cases[index];
-                let block = presented_block(case, offset + 1, document.total);
+                let block = presented_block(case, offset + 1, listed_total);
                 let progress = if stepping.is_none() {
                     Some(presenter.block_start(&block)?)
                 } else {
                     None
                 };
+                let mut diagnostics = String::new();
                 let result = if let Some(session) = stepping.as_mut() {
                     session
                         .begin_block(
@@ -1114,18 +1154,28 @@ fn run(options: Options) -> Result<bool> {
                             Some(&block.heading),
                             first_block + offset + 1,
                             offset + 1,
-                            document.total,
+                            listed_total,
                         )
-                        .and_then(|()| execute(case, &fixture, &dir, timeout, false, Some(session)))
+                        .and_then(|()| {
+                            execute(case, &fixture, &dir, timeout, false, None, Some(session))
+                        })
                 } else {
-                    execute(case, &fixture, &dir, timeout, verbose, None)
+                    execute(
+                        case,
+                        &fixture,
+                        &dir,
+                        timeout,
+                        verbose,
+                        Some(&mut diagnostics),
+                        None,
+                    )
                 };
                 let stop_file = spec.shell.is_some() && result.is_err();
                 match result {
                     Ok(true) => {
                         document.passed += 1;
                         if let Some(progress) = progress {
-                            presenter.block_pass(progress, &block)?;
+                            presenter.block_pass(progress, &block, &diagnostics)?;
                         }
                     }
                     Ok(false) => document.cancelled = true,
@@ -1133,14 +1183,26 @@ fn run(options: Options) -> Result<bool> {
                         if cancellation::signal().is_some() {
                             document.cancelled = true;
                             if let Some(progress) = progress {
-                                presenter.block_cancel(progress, &block)?;
+                                presenter.block_cancel(
+                                    progress,
+                                    &file,
+                                    &block,
+                                    &error,
+                                    &diagnostics,
+                                )?;
                             }
                         } else {
                             failed += 1;
                             document.failed += 1;
                             document.failed_headings.push(block.heading.clone());
                             if let Some(progress) = progress {
-                                presenter.block_fail(progress, &file, &block, &error)?;
+                                presenter.block_fail(
+                                    progress,
+                                    &file,
+                                    &block,
+                                    &error,
+                                    &diagnostics,
+                                )?;
                             }
                         }
                     }
@@ -1163,7 +1225,6 @@ fn run(options: Options) -> Result<bool> {
                 &setup.deferred,
                 &fixture,
                 verbose,
-                indices.len(),
                 &mut document,
                 &mut presenter,
             )?;

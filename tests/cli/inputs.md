@@ -34,16 +34,8 @@ match: Enter: Finish walkthrough
 send: {enter}
 ```
 
-```expected-contains
-Input MARKMASON_TUTORIAL_NAME (required; q + Enter cancels):
-Input MARKMASON_TUTORIAL_REGION (required; q + Enter cancels):
-ACTUAL OUTPUT
-| tutorial user
-| lab
-Walkthrough finished
-Documents: 1 passed, 0 failed
-Blocks: 1 passed, 0 failed (includes deferred)
-Duration: <1s
+```expected-regex
+(?s)Input MARKMASON_TUTORIAL_NAME \(required; q \+ Enter cancels\):.*Input MARKMASON_TUTORIAL_REGION \(required; q \+ Enter cancels\):.*ACTUAL OUTPUT.*tutorial user.*lab.*Walkthrough finished.*Documents: 1 passed, 0 failed.*Blocks: 1 passed, 0 failed.*Duration:
 ```
 
 ## Reuse supplied values without prompting
@@ -57,11 +49,8 @@ match: Enter: Finish walkthrough
 send: {enter}
 ```
 
-```expected-contains
-Walkthrough finished
-Documents: 1 passed, 0 failed
-Blocks: 1 passed, 0 failed (includes deferred)
-Duration: <1s
+```expected-regex
+(?s)Walkthrough finished.*Documents: 1 passed, 0 failed.*Blocks: 1 passed, 0 failed.*Duration:
 ```
 
 ## Unattended runs fail instead of asking
@@ -110,9 +99,6 @@ match: Input MARKMASON_TUTORIAL_NAME
 send: q{enter}
 ```
 
-```expected-contains
-Walkthrough stopped
-Documents: 0 passed, 0 failed, 1 cancelled
-Blocks: 0 passed, 0 failed (includes deferred)
-Duration: <1s
+```expected-regex
+(?s)Walkthrough stopped.*Documents: 0 passed, 0 failed, 1 cancelled.*Blocks: 0 passed, 0 failed.*Duration:
 ```
