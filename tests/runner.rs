@@ -256,7 +256,7 @@ fn always_blocks_share_bash_and_markdown_setup_state() {
         "---\nshell: bash\nsetup: mm setup.md\ntimeout: 0.5\n---\n\
          ```markmason\nfinish ordinary\n```\n```expected\nshared ordinary\n```\n\
          ```markmason\napp sleep\n```\n\
-         ```bash markmason always\ntest \"$PWD\" = \"$WORKING\"\nfinish cleanup\n```\n\
+         ```bash markmason always\ntest \"$PWD\" -ef \"$WORKING\"\nfinish cleanup\n```\n\
          ```expected\nshared cleanup\n```\n",
     )
     .unwrap();
