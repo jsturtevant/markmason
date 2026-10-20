@@ -29,6 +29,13 @@ description: >-
   feature relevant to the project.
 - Put one short, useful explanation beside each command. Say what it does or
   why its output matters.
+- Treat walkthroughs as lessons for humans, not scripts hidden in Markdown.
+  Prefer familiar CLI commands and short, named steps over dense query languages,
+  nested pipelines, or general-purpose selection algorithms.
+- Put reusable prerequisite checks in a clearly named `setup.md`: inspect the
+  connected system and verify named resources exist, even when inputs came from
+  the environment. Keep setup readable as its own guide; do not duplicate shared
+  checks in each scenario just to make them visible in step mode.
 - Keep the prose brief and natural. Avoid filler, marketing language, and
   repeated "this test verifies" introductions.
 - Use descriptive headings and put commands in `markmason` fenced blocks.
