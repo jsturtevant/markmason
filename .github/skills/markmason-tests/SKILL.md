@@ -55,6 +55,15 @@ description: >-
 - Prefer exact `expected` output for short, stable results.
 - Use `expected-contains` for selected whole lines, in order. It is not substring
   or regex matching, and unmatched trailing lines still fail.
+- Use `expected-substring` for a stable literal phrase inside dynamic output.
+  Prefer it over piping through `grep` or rewriting output just for an assertion.
+- Use `expected-regex` only when the match needs a pattern, such as a generated
+  ID or duration. Write Rust regex escapes directly in the fence.
+- Treat each substring or regex block as one assertion over the full output,
+  not a list of independent lines. Preserve whitespace and path separators;
+  only CRLF line endings normalize. Extra output before and after is allowed.
+- Confirm the installed `mm` supports these fences before using them; older
+  versions may ignore unrecognized assertion blocks and check only the exit code.
 - Assert actual version output, not just a successful exit or help text saying
   "Print version". Hardcode the current version and document updating the
   assertion alongside the package version.
