@@ -179,9 +179,9 @@ Bash replacement; run Linux `mm` and Linux tools inside WSL instead.
 No PowerShell, cmd, or other-shell fallback is attempted.
 
 Runner-owned path variables are exported to Bash; on Windows their values use
-forward slashes for Bash and native-tool interoperability. Other inherited values,
-including `KUBECONFIG`, remain unchanged. Commands use real Bash expansion rather
-than textual replacement, so single quotes and escaped dollars work normally.
+forward slashes for Bash and native-tool interoperability. Other inherited
+values remain unchanged. Commands use real Bash expansion rather than textual
+replacement, so single quotes and escaped dollars work normally.
 Expected blocks retain the usual runner variable substitution.
 
 `stdin` remains application input for the first logical command only; later
@@ -295,6 +295,45 @@ disabling the reusable view.
   `--step` and `--list` cannot be combined.
 
 Try the [executable walkthrough](../tests/cli/walkthrough.md) in this checkout.
+
+## Required environment inputs
+
+Declare an ordered mapping of environment names to plain-text questions in
+frontmatter:
+
+```yaml
+inputs:
+  TUTORIAL_NAME: Name to display in the walkthrough
+  OUTPUT_FORMAT: Output format for the examples
+```
+
+- Names must match `[A-Za-z_][A-Za-z0-9_]*`, and questions must be nonempty
+  strings. Structured defaults and implicit detection of arbitrary shell
+  variables are not supported.
+- Nonempty caller environment values are reused without prompting. Missing or
+  empty values prompt only with `--step`; unattended runs list all missing
+  names and fail before cloning, fixtures, or setup commands.
+- Requirements in recursive Markdown setup are collected first as well. A
+  name declared more than once prompts only once, using the root declaration
+  first. Windows environment names are case-insensitive.
+- Pressing Enter on an empty answer asks again. `q` then Enter, EOF, or Ctrl+C
+  cancels before setup. Values are passed as literal environment data, never
+  evaluated as shell commands, and do not leak into subsequent files or the
+  calling terminal.
+- Inputs are ordinary environment variables, not additional direct-mode
+  substitution placeholders. Use `shell: bash` for `$NAME` expansion in
+  commands. The existing fixture placeholders keep their original behavior.
+- `--list` does not prompt or require values. Runner-managed environment names
+  such as `REPO_ROOT`, `PROJECT_NAME`, `XDG_CONFIG_HOME`, `GH_CONFIG_DIR`, and the
+  configured application home are rejected rather than silently overridden.
+  `BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `TERM`, and the reserved
+  `__markmason_` prefix are also protected.
+- On Windows, input declarations that differ only in capitalization are rejected
+  before prompting or setup. Use identical spelling across prerequisites and
+  Bash commands; Bash variable lookup is case-sensitive even on Windows.
+- These are visible, plain-text prompts: do not use them for secrets.
+
+See the [real-terminal input tests](../tests/cli/inputs.md).
 
 ## Interactive terminals
 

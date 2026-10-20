@@ -71,6 +71,20 @@ To prepare a walkthrough from another Markdown document, add
 automatically in the walkthrough's shared environment, so the state it creates
 is available to later steps. See [setup and state](tests/cli/state.md).
 
+Declare required environment values instead of supplying a long command prefix:
+
+```yaml
+inputs:
+  TUTORIAL_NAME: Name to display in the walkthrough
+  OUTPUT_FORMAT: Output format for the examples
+```
+
+With `--step`, missing inputs are prompted for before setup; existing nonempty
+environment values are reused. Unattended runs fail clearly if inputs are
+missing, and `--list` never prompts. Values are plain text, not secret prompts.
+Inputs declared by Markdown prerequisites are collected before any setup runs.
+See the [executable input examples](tests/cli/inputs.md).
+
 Add `shell: bash` when the tutorial needs shell variables, functions, pipelines,
 or `cd` changes to persist across commands and Markdown setup:
 

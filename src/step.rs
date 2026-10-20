@@ -276,6 +276,49 @@ impl Session {
         }
     }
 
+    pub fn prompt_input(&mut self, file: &str, input: &spec::Input) -> Result<Option<String>> {
+        self.restore_screen()?;
+        let raw = self.screen.then(RawInput::new).transpose()?;
+        let newline = if self.screen { "\r\n" } else { "\n" };
+        write!(
+            self.output,
+            "{BOLD}{}{RESET}{newline}{}{newline}",
+            plain(file),
+            plain(&input.prompt).replace('\n', newline)
+        )?;
+        loop {
+            write!(
+                self.output,
+                "{CYAN}Input {}{RESET} (required; q + Enter cancels):{newline}",
+                input.name
+            )?;
+            self.output.flush()?;
+            let value = self.read_line()?;
+            let value = value
+                .as_deref()
+                .map(|value| value.trim_end_matches(['\r', '\n']));
+            match value {
+                None | Some("q" | "Q" | "quit") => {
+                    self.stopped = true;
+                    return Ok(None);
+                }
+                Some(value) if value.trim().is_empty() || value.contains('\0') => {
+                    write!(
+                        self.output,
+                        "Enter a nonempty value without NUL characters.{newline}"
+                    )?;
+                }
+                Some(value) => {
+                    // Catch buffered interrupts before and after restoring native signals.
+                    self.collect_keys()?;
+                    drop(raw);
+                    self.collect_keys()?;
+                    return Ok(Some(value.to_owned()));
+                }
+            }
+        }
+    }
+
     fn read_keys(&mut self) -> Result<Option<String>> {
         let in_view = self.screen_active;
         let _raw = RawInput::new()?;

@@ -6,12 +6,19 @@ use std::time::Duration;
 
 #[derive(Debug, Default)]
 pub struct Spec {
+    pub inputs: Vec<Input>,
     pub shell: Option<Shell>,
     pub clone: Option<String>,
     pub setup: Option<String>,
     pub tags: Vec<String>,
     pub timeout: Option<Duration>,
     pub cases: Vec<Case>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Input {
+    pub name: String,
+    pub prompt: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,6 +131,26 @@ pub fn parse_with_shell(content: &str, shell: Option<Shell>) -> Result<Spec> {
             let map = value
                 .as_mapping()
                 .context("Frontmatter must be a YAML object")?;
+            if let Some(inputs) = map.get(Value::from("inputs")) {
+                let names = Regex::new(r"^[A-Za-z_][A-Za-z0-9_]*$").unwrap();
+                for (name, prompt) in inputs
+                    .as_mapping()
+                    .context("Frontmatter inputs must map environment names to prompt strings")?
+                {
+                    let name = name
+                        .as_str()
+                        .filter(|name| names.is_match(name))
+                        .context("Input names must be portable environment variable names")?;
+                    let prompt = prompt
+                        .as_str()
+                        .filter(|prompt| !prompt.trim().is_empty() && !prompt.contains('\0'))
+                        .context("Each input must have a nonempty prompt string")?;
+                    spec.inputs.push(Input {
+                        name: name.to_owned(),
+                        prompt: prompt.to_owned(),
+                    });
+                }
+            }
             if let Some(value) = map
                 .get(Value::from("shell"))
                 .filter(|value| !value.is_null())
