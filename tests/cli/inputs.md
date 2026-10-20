@@ -8,8 +8,8 @@ its commands. This is not automatic shell-variable inference.
 
 ```yaml
 inputs:
-  KUBECONFIG: Path to the kubeconfig for your disposable cluster
-  STORAGE_CONFIG: Name of the existing storage configuration
+  TUTORIAL_NAME: Name to display in the walkthrough
+  OUTPUT_FORMAT: Output format for the examples
 ```
 
 Inputs are plain text, not secret/password prompts. Do not use them for secrets.

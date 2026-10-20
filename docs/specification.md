@@ -179,9 +179,9 @@ Bash replacement; run Linux `mm` and Linux tools inside WSL instead.
 No PowerShell, cmd, or other-shell fallback is attempted.
 
 Runner-owned path variables are exported to Bash; on Windows their values use
-forward slashes for Bash and native-tool interoperability. Other inherited values,
-including `KUBECONFIG`, remain unchanged. Commands use real Bash expansion rather
-than textual replacement, so single quotes and escaped dollars work normally.
+forward slashes for Bash and native-tool interoperability. Other inherited
+values remain unchanged. Commands use real Bash expansion rather than textual
+replacement, so single quotes and escaped dollars work normally.
 Expected blocks retain the usual runner variable substitution.
 
 `stdin` remains application input for the first logical command only; later
@@ -303,8 +303,8 @@ frontmatter:
 
 ```yaml
 inputs:
-  KUBECONFIG: Path to the kubeconfig for the disposable cluster
-  STORAGE_CONFIG: Name of an existing storage configuration
+  TUTORIAL_NAME: Name to display in the walkthrough
+  OUTPUT_FORMAT: Output format for the examples
 ```
 
 - Names must match `[A-Za-z_][A-Za-z0-9_]*`, and questions must be nonempty

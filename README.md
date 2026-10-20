@@ -75,8 +75,8 @@ Declare required environment values instead of supplying a long command prefix:
 
 ```yaml
 inputs:
-  KUBECONFIG: Path to the kubeconfig for your disposable cluster
-  STORAGE_CONFIG: Name of the existing storage configuration
+  TUTORIAL_NAME: Name to display in the walkthrough
+  OUTPUT_FORMAT: Output format for the examples
 ```
 
 With `--step`, missing inputs are prompted for before setup; existing nonempty
