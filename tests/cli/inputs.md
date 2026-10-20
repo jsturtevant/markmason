@@ -34,8 +34,15 @@ match: Enter: Finish walkthrough
 send: {enter}
 ```
 
-```expected-regex
-(?s)Input MARKMASON_TUTORIAL_NAME \(required; q \+ Enter cancels\):.*Input MARKMASON_TUTORIAL_REGION \(required; q \+ Enter cancels\):.*ACTUAL OUTPUT.*tutorial user.*lab.*Walkthrough finished.*Documents: 1 passed, 0 failed.*Blocks: 1 passed, 0 failed.*Duration:
+```expected-contains
+Input MARKMASON_TUTORIAL_NAME (required; q + Enter cancels):
+Input MARKMASON_TUTORIAL_REGION (required; q + Enter cancels):
+ACTUAL OUTPUT
+| tutorial user
+| lab
+Walkthrough finished
+Documents: 1 passed, 0 failed
+Blocks: 1 passed, 0 failed (includes deferred)
 ```
 
 ## Reuse supplied values without prompting
@@ -49,8 +56,10 @@ match: Enter: Finish walkthrough
 send: {enter}
 ```
 
-```expected-regex
-(?s)Walkthrough finished.*Documents: 1 passed, 0 failed.*Blocks: 1 passed, 0 failed.*Duration:
+```expected-contains
+Walkthrough finished
+Documents: 1 passed, 0 failed
+Blocks: 1 passed, 0 failed (includes deferred)
 ```
 
 ## Unattended runs fail instead of asking
@@ -59,8 +68,10 @@ send: {enter}
 mm-test-cli with-env MARKMASON_TUTORIAL_NAME "" MARKMASON_TUTORIAL_REGION "" -- mm tests/fixtures/inputs/lesson.md
 ```
 
-```expected-regex
-(?s)✗ FAIL  Setup.*Missing required inputs: MARKMASON_TUTORIAL_NAME, MARKMASON_TUTORIAL_REGION. Set these environment variables or use --step to be prompted.*Documents: 0 passed, 1 failed.*Blocks: 0 passed, 0 failed
+```expected-substring
+  ✗ FAIL  Setup
+    Document: lesson.md
+    Missing required inputs: MARKMASON_TUTORIAL_NAME, MARKMASON_TUTORIAL_REGION. Set these environment variables or use --step to be prompted.
 ```
 
 ## Cancel immediately after the final input
@@ -99,6 +110,8 @@ match: Input MARKMASON_TUTORIAL_NAME
 send: q{enter}
 ```
 
-```expected-regex
-(?s)Walkthrough stopped.*Documents: 0 passed, 0 failed, 1 cancelled.*Blocks: 0 passed, 0 failed.*Duration:
+```expected-contains
+Walkthrough stopped
+Documents: 0 passed, 0 failed, 1 cancelled
+Blocks: 0 passed, 0 failed (includes deferred)
 ```

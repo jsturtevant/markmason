@@ -26,8 +26,11 @@ The deferred block calls that function in the same Bash session at the end.
 mm tests/fixtures/always/lesson.md --home-env TEST_HOME
 ```
 
-```expected-regex
-(?s)RUN  Always 3/3 — Remove the state at the end.*✓ PASS Always 3/3 — Remove the state at the end.*Documents: 1 passed, 0 failed.*Blocks: 3 passed, 0 failed.*Duration:
+```expected-contains
+RUN  Always 3/3 — Remove the state at the end
+✓ PASS Always 3/3 — Remove the state at the end
+Documents: 1 passed, 0 failed
+Blocks: 3 passed, 0 failed (includes deferred)
 ```
 
 Use `bash markmason always` for Markdown language styling. Add `shell: bash`
@@ -47,8 +50,12 @@ mm tests/fixtures/always/lesson.md --step --home-env TEST_HOME
 q
 ```
 
-```expected-regex
-(?s)RUN  Always 3/3 — Remove the state at the end.*✓ PASS Always 3/3 — Remove the state at the end.*Walkthrough stopped.*Documents: 0 passed, 0 failed, 1 cancelled.*Blocks: 1 passed, 0 failed.*Duration:
+```expected-contains
+RUN  Always 3/3 — Remove the state at the end
+✓ PASS Always 3/3 — Remove the state at the end
+Walkthrough stopped
+Documents: 0 passed, 0 failed, 1 cancelled
+Blocks: 1 passed, 0 failed (includes deferred)
 ```
 
 All cleanup blocks are attempted in document order, even if one fails.

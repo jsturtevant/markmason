@@ -26,8 +26,28 @@ match: Enter: Finish walkthrough
 send: {enter}
 ```
 
-```expected-regex
-(?s)▶ lesson\.md  \|  Block 1/2 — Build output one command at a time.*COMMAND 1 OF 2.*mm-test-cli echo first.*IN PROGRESS.*COMMAND 2 OF 2.*mm-test-cli echo second.*✓ PASS  Block matched expectations.*▶ lesson\.md  \|  Block 2/2 — Send input to the application.*application input.*Walkthrough finished.*Blocks: 2 passed, 0 failed.*Duration:
+```expected-contains
+▶ lesson.md | Block 1/2 — Build output one command at a time
+COMMAND 1 OF 2
+> [running] mm-test-cli echo first
+EXPECTED OUTPUT (whole block; exact, exit 0)
+| first
+| second
+ACTUAL OUTPUT SO FAR
+| first
+IN PROGRESS Assertion checked after the block finishes.
+COMMAND 2 OF 2
+> [running] mm-test-cli echo second
+ACTUAL OUTPUT
+| first
+| second
+✓ PASS Block matched expectations.
+▶ lesson.md | Block 2/2 — Send input to the application
+| application input
+ACTUAL OUTPUT
+| application input
+Walkthrough finished
+Blocks: 2 passed, 0 failed (includes deferred)
 ```
 
 ## Keep a real Bash session alive between pauses
@@ -51,8 +71,19 @@ match: Enter: Finish walkthrough
 send: {enter}
 ```
 
-```expected-regex
-(?s)▶ lesson\.md  \|  Block 1/2 — Expand a value prepared by setup.*COMMAND 1 OF 3.*COMMAND 2 OF 3.*ready.*COMMAND 3 OF 3.*shared setup is ready.*▶ lesson\.md  \|  Block 2/2 — Keep a loop together.*one.*two.*Walkthrough finished.*Blocks: 2 passed, 0 failed.*Duration:
+```expected-contains
+▶ lesson.md | Block 1/2 — Expand a value prepared by setup
+COMMAND 1 OF 3
+COMMAND 2 OF 3
+| ready
+COMMAND 3 OF 3
+| shared setup is ready
+▶ lesson.md | Block 2/2 — Keep a loop together
+COMMAND 1 OF 1
+| one
+| two
+Walkthrough finished
+Blocks: 2 passed, 0 failed (includes deferred)
 ```
 
 ## Run to the next block, then finish the file
@@ -74,8 +105,23 @@ match: Enter: Run first command
 send: f{enter}
 ```
 
-```expected-regex
-(?s)▶ navigation\.md  \|  Block 1/3 — First block.*mm-test-cli echo first.*mm-test-cli echo second.*✓ PASS  Block matched expectations.*▶ navigation\.md  \|  Block 2/3 — Second block.*\[next\].*mm-test-cli echo third.*Ready\. No commands in this block have run\..*▶ navigation\.md  \|  Block 3/3 — Last block.*last.*Walkthrough finished.*Blocks: 3 passed, 0 failed.*Duration:
+```expected-contains
+▶ navigation.md | Block 1/3 — First block
+> [running] mm-test-cli echo first
+> [running] mm-test-cli echo second
+ACTUAL OUTPUT
+| first
+| second
+✓ PASS Block matched expectations.
+▶ navigation.md | Block 2/3 — Second block
+> [next] mm-test-cli echo third
+ACTUAL OUTPUT SO FAR
+| (empty)
+Ready. No commands in this block have run.
+▶ navigation.md | Block 3/3 — Last block
+| last
+Walkthrough finished
+Blocks: 3 passed, 0 failed (includes deferred)
 ```
 
 ## Scroll complete output without executing commands
@@ -102,8 +148,17 @@ match: | finished
 send: {enter}
 ```
 
-```expected-regex
-(?s)▶ scrolling\.md  \|  Block 1/1 — A complete scrollable section.*Keep the command context visible.*\[done\].*mm-test-cli echo started.*> \[next\].*mm-test-cli echo finished.*output-30.*finished.*✓ PASS  Block matched expectations.*Walkthrough finished.*Blocks: 1 passed, 0 failed.*Duration:
+```expected-contains
+▶ scrolling.md | Block 1/1 — A complete scrollable section
+Keep the command context visible, and scroll to inspect every output line.
+[done] mm-test-cli echo started
+> [next] mm-test-cli echo finished
+| output-30
+▶ scrolling.md | Block 1/1 — A complete scrollable section
+| finished
+✓ PASS Block matched expectations.
+Walkthrough finished
+Blocks: 1 passed, 0 failed (includes deferred)
 ```
 
 ## Cancel while running to the next block
@@ -159,8 +214,12 @@ match: Enter: Next command
 send: q{enter}
 ```
 
-```expected-regex
-(?s)COMMAND 1 OF 2.*ACTUAL OUTPUT SO FAR.*first.*Walkthrough stopped.*Blocks: 0 passed, 0 failed.*Duration:
+```expected-contains
+COMMAND 1 OF 2
+ACTUAL OUTPUT SO FAR
+| first
+Walkthrough stopped
+Blocks: 0 passed, 0 failed (includes deferred)
 ```
 
 ## Search for a file in the picker
@@ -183,8 +242,14 @@ match: Enter: Finish walkthrough
 send: {enter}
 ```
 
-```expected-regex
-(?s)MARKMASON WALKTHROUGH.*▶ lesson\.md  \|  Block 1/2 — Build output one command at a time.*COMMAND 1 OF 2.*COMMAND 2 OF 2.*▶ lesson\.md  \|  Block 2/2 — Send input to the application.*Walkthrough finished.*Blocks: 2 passed, 0 failed.*Duration:
+```expected-contains
+MARKMASON WALKTHROUGH
+▶ lesson.md | Block 1/2 — Build output one command at a time
+COMMAND 1 OF 2
+COMMAND 2 OF 2
+▶ lesson.md | Block 2/2 — Send input to the application
+Walkthrough finished
+Blocks: 2 passed, 0 failed (includes deferred)
 ```
 
 ## Cancel the picker without running a tutorial
@@ -215,8 +280,15 @@ match: Enter: Finish walkthrough
 send: {enter}
 ```
 
-```expected-regex
-(?s)EXPECTED OUTPUT \(exact, exit 0\).*different.*ACTUAL OUTPUT.*actual.*✗ FAIL.*Line 1 mismatch:.*Walkthrough finished.*Blocks: 0 passed, 1 failed.*Duration:
+```expected-contains
+EXPECTED OUTPUT (exact, exit 0)
+| different
+ACTUAL OUTPUT
+| actual
+✗ FAIL
+| Line 1 mismatch:
+Walkthrough finished
+Blocks: 0 passed, 1 failed (includes deferred)
 ```
 
 ## Select a file explicitly when no terminal is available
@@ -249,6 +321,15 @@ match: Enter: Finish walkthrough
 send: {enter}
 ```
 
-```expected-regex
-(?s)▶ walkthrough\.md  \|  Block 1/2 — Inspect the prepared application state.*ACTUAL OUTPUT.*ready.*✓ PASS  Block matched expectations.*▶ walkthrough\.md  \|  Block 2/2 — Inspect the prepared configuration.*ACTUAL OUTPUT.*true.*✓ PASS  Block matched expectations.*Walkthrough finished.*Blocks: 2 passed, 0 failed.*Duration:
+```expected-contains
+▶ walkthrough.md | Block 1/2 — Inspect the prepared application state
+ACTUAL OUTPUT
+| ready
+✓ PASS Block matched expectations.
+▶ walkthrough.md | Block 2/2 — Inspect the prepared configuration
+ACTUAL OUTPUT
+| true
+✓ PASS Block matched expectations.
+Walkthrough finished
+Blocks: 2 passed, 0 failed (includes deferred)
 ```

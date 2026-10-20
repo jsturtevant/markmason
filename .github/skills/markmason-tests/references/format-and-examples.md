@@ -138,8 +138,10 @@ Keep an expected exit after `always`, for example `markmason always (exit 2)`.
 
   When asserting a nested `mm` run, use the shared presentation vocabulary:
   document `RUN`/`✓ PASS`/`✗ FAIL` lines, `Block N/N — heading` or
-  `Always N/N — heading`, `Documents:`, and `Blocks:`. Prefer `expected-regex`
-  for durations and multi-document ordering rather than asserting spinner frames.
+  `Always N/N — heading`, `Documents:`, and `Blocks:`. Keep these assertions
+  readable as example output; do not collapse them into dense one-line regexes.
+  The stable `Blocks:` total is the final summary line, so `expected-contains`
+  can skip the dynamic duration without leaving unmatched trailing output.
 
 ## Frontmatter and state
 

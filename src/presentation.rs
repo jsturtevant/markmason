@@ -401,12 +401,12 @@ impl Presenter {
         }
         writeln!(
             self.output,
-            "\nBlocks: {passed_blocks} passed, {failed_blocks} failed (includes deferred)"
+            "\nDuration: {}",
+            duration(self.started.elapsed())
         )?;
         writeln!(
             self.output,
-            "Duration: {}",
-            duration(self.started.elapsed())
+            "Blocks: {passed_blocks} passed, {failed_blocks} failed (includes deferred)"
         )?;
         self.output.flush()
     }
@@ -426,6 +426,10 @@ impl Progress {
     }
 
     fn new(block: &Block) -> io::Result<Self> {
+        Self::start(block, Duration::from_millis(80), true)
+    }
+
+    fn start(block: &Block, interval: Duration, render: bool) -> io::Result<Self> {
         let (stop, done) = mpsc::sync_channel(1);
         let label = block.label();
         let started = Instant::now();
@@ -436,28 +440,32 @@ impl Progress {
                 let mut terminal = io::stdout();
                 let mut frame = 0;
                 loop {
-                    let width = crossterm::terminal::size()
-                        .map(|(columns, _)| usize::from(columns))
-                        .unwrap_or(80)
-                        .saturating_sub(1);
-                    let prefix = format!("  {} ", SPINNER[frame % SPINNER.len()]);
-                    let suffix = format!("  {}", duration(started.elapsed()));
-                    let label_width = width
-                        .saturating_sub(measure_text_width(&prefix))
-                        .saturating_sub(measure_text_width(&suffix));
-                    let line = format!("{prefix}{}{suffix}", fit(&label, label_width));
-                    let _ = terminal.write_all(b"\r\x1b[2K");
-                    let _ = terminal.flush();
-                    let _ = write!(output, "{CYAN}{line}{RESET}");
-                    let _ = output.flush();
+                    if render {
+                        let width = crossterm::terminal::size()
+                            .map(|(columns, _)| usize::from(columns))
+                            .unwrap_or(80)
+                            .saturating_sub(1);
+                        let prefix = format!("  {} ", SPINNER[frame % SPINNER.len()]);
+                        let suffix = format!("  {}", duration(started.elapsed()));
+                        let label_width = width
+                            .saturating_sub(measure_text_width(&prefix))
+                            .saturating_sub(measure_text_width(&suffix));
+                        let line = format!("{prefix}{}{suffix}", fit(&label, label_width));
+                        let _ = terminal.write_all(b"\r\x1b[2K");
+                        let _ = terminal.flush();
+                        let _ = write!(output, "{CYAN}{line}{RESET}");
+                        let _ = output.flush();
+                    }
                     frame += 1;
-                    match done.recv_timeout(Duration::from_millis(80)) {
+                    match done.recv_timeout(interval) {
                         Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
                         Err(mpsc::RecvTimeoutError::Timeout) => {}
                     }
                 }
-                let _ = terminal.write_all(b"\r\x1b[2K");
-                let _ = terminal.flush();
+                if render {
+                    let _ = terminal.write_all(b"\r\x1b[2K");
+                    let _ = terminal.flush();
+                }
             })?;
         Ok(Self {
             stop: Some(stop),
@@ -555,12 +563,12 @@ mod tests {
             command: "app echo ready".into(),
             deferred: false,
         };
-        let progress = Progress::new(&block)?;
+        let progress = Progress::start(&block, Duration::from_secs(5), false)?;
         thread::sleep(Duration::from_millis(10));
         let started = Instant::now();
         progress.finish()?;
         assert!(
-            started.elapsed() < Duration::from_millis(50),
+            started.elapsed() < Duration::from_secs(1),
             "{:?}",
             started.elapsed()
         );

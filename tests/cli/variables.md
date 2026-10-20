@@ -62,6 +62,9 @@ mm tests/fixtures/custom-home --home-env MYCLI_HOME
 Rename the home variable to match the application.
 [This spec](../fixtures/custom-home/home.md) checks both its environment and substitution.
 
-```expected-regex
-(?s)RUN  home\.md.*✓ PASS  home\.md  1/1 blocks.*Documents: 1 passed, 0 failed.*Blocks: 1 passed, 0 failed
+```expected-contains
+RUN  home.md
+  RUN  Block 1/1 — Report the custom home directory
+  ✓ PASS Block 1/1 — Report the custom home directory
+Blocks: 1 passed, 0 failed (includes deferred)
 ```

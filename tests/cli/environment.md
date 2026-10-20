@@ -11,8 +11,13 @@ mm-test-cli with-env E2E_FILE_PATTERN basic -- mm tests/fixtures/passing
 
 Include files whose relative paths match the pattern.
 
-```expected-regex
-(?s)RUN  basic\.md.*✓ PASS  basic\.md  2/2 blocks.*Blocks: 2 passed, 0 failed
+```expected-contains
+RUN  basic.md
+  RUN  Block 1/2 — Show help
+  ✓ PASS Block 1/2 — Show help
+  RUN  Block 2/2 — Show the installed version
+  ✓ PASS Block 2/2 — Show the installed version
+Blocks: 2 passed, 0 failed (includes deferred)
 ```
 
 ## Exclude paths from the environment
@@ -23,8 +28,11 @@ mm-test-cli with-env E2E_FILE_EXCLUDE basic -- mm tests/fixtures/passing
 
 Exclude matching file paths.
 
-```expected-regex
-(?s)RUN  extra\.md.*✓ PASS  extra\.md  1/1 blocks.*Blocks: 1 passed, 0 failed
+```expected-contains
+RUN  extra.md
+  RUN  Block 1/1 — Show the installed version
+  ✓ PASS Block 1/1 — Show the installed version
+Blocks: 1 passed, 0 failed (includes deferred)
 ```
 
 ## Require tags from the environment
@@ -35,8 +43,13 @@ mm-test-cli with-env E2E_TAGS SMOKE,cli -- mm tests/fixtures/passing
 
 Require every listed tag, ignoring case.
 
-```expected-regex
-(?s)RUN  basic\.md.*✓ PASS  basic\.md  2/2 blocks.*Blocks: 2 passed, 0 failed
+```expected-contains
+RUN  basic.md
+  RUN  Block 1/2 — Show help
+  ✓ PASS Block 1/2 — Show help
+  RUN  Block 2/2 — Show the installed version
+  ✓ PASS Block 2/2 — Show the installed version
+Blocks: 2 passed, 0 failed (includes deferred)
 ```
 
 ## Exclude tags from the environment
@@ -47,8 +60,11 @@ mm-test-cli with-env E2E_TAGS_EXCLUDE smoke -- mm tests/fixtures/passing
 
 Exclude files with any listed tag.
 
-```expected-regex
-(?s)RUN  extra\.md.*✓ PASS  extra\.md  1/1 blocks.*Blocks: 1 passed, 0 failed
+```expected-contains
+RUN  extra.md
+  RUN  Block 1/1 — Show the installed version
+  ✓ PASS Block 1/1 — Show the installed version
+Blocks: 1 passed, 0 failed (includes deferred)
 ```
 
 ## Choose a different variable prefix
@@ -59,8 +75,13 @@ mm-test-cli with-env E2E_TAGS extra DOC_TAGS smoke -- mm tests/fixtures/passing 
 
 Change the filter prefix. `DOC_TAGS` is used; the default `E2E_TAGS` is ignored.
 
-```expected-regex
-(?s)RUN  basic\.md.*✓ PASS  basic\.md  2/2 blocks.*Blocks: 2 passed, 0 failed
+```expected-contains
+RUN  basic.md
+  RUN  Block 1/2 — Show help
+  ✓ PASS Block 1/2 — Show help
+  RUN  Block 2/2 — Show the installed version
+  ✓ PASS Block 2/2 — Show the installed version
+Blocks: 2 passed, 0 failed (includes deferred)
 ```
 
 ## Override the include pattern
@@ -71,8 +92,13 @@ mm-test-cli with-env E2E_FILE_PATTERN extra -- mm tests/fixtures/passing --file-
 
 An explicit file pattern replaces the environment's include pattern.
 
-```expected-regex
-(?s)RUN  basic\.md.*✓ PASS  basic\.md  2/2 blocks.*Blocks: 2 passed, 0 failed
+```expected-contains
+RUN  basic.md
+  RUN  Block 1/2 — Show help
+  ✓ PASS Block 1/2 — Show help
+  RUN  Block 2/2 — Show the installed version
+  ✓ PASS Block 2/2 — Show the installed version
+Blocks: 2 passed, 0 failed (includes deferred)
 ```
 
 ## Override the exclude pattern
@@ -83,8 +109,13 @@ mm-test-cli with-env E2E_FILE_EXCLUDE basic -- mm tests/fixtures/passing --file-
 
 An explicit file exclusion replaces the environment's exclusion.
 
-```expected-regex
-(?s)RUN  basic\.md.*✓ PASS  basic\.md  2/2 blocks.*Blocks: 2 passed, 0 failed
+```expected-contains
+RUN  basic.md
+  RUN  Block 1/2 — Show help
+  ✓ PASS Block 1/2 — Show help
+  RUN  Block 2/2 — Show the installed version
+  ✓ PASS Block 2/2 — Show the installed version
+Blocks: 2 passed, 0 failed (includes deferred)
 ```
 
 ## Override required tags
@@ -95,8 +126,13 @@ mm-test-cli with-env E2E_TAGS extra -- mm tests/fixtures/passing --tags smoke
 
 Explicit tags replace the environment's required tags.
 
-```expected-regex
-(?s)RUN  basic\.md.*✓ PASS  basic\.md  2/2 blocks.*Blocks: 2 passed, 0 failed
+```expected-contains
+RUN  basic.md
+  RUN  Block 1/2 — Show help
+  ✓ PASS Block 1/2 — Show help
+  RUN  Block 2/2 — Show the installed version
+  ✓ PASS Block 2/2 — Show the installed version
+Blocks: 2 passed, 0 failed (includes deferred)
 ```
 
 ## Override excluded tags
@@ -107,8 +143,13 @@ mm-test-cli with-env E2E_TAGS_EXCLUDE smoke -- mm tests/fixtures/passing --tags-
 
 Explicit tag exclusions replace the environment's excluded tags.
 
-```expected-regex
-(?s)RUN  basic\.md.*✓ PASS  basic\.md  2/2 blocks.*Blocks: 2 passed, 0 failed
+```expected-contains
+RUN  basic.md
+  RUN  Block 1/2 — Show help
+  ✓ PASS Block 1/2 — Show help
+  RUN  Block 2/2 — Show the installed version
+  ✓ PASS Block 2/2 — Show the installed version
+Blocks: 2 passed, 0 failed (includes deferred)
 ```
 
 ## Enable verbose output from the environment
@@ -120,6 +161,13 @@ mm-test-cli with-env VERBOSE " YES " -- mm tests/fixtures/diagnostics
 `VERBOSE` accepts `1`, `true`, or `yes`, ignoring case and surrounding spaces.
 It shows captured output and the comparison diff, just like `--verbose`.
 
-```expected-regex
-(?s)RUN  output\.md.*ACTUAL:.*hello.*DIFF \(expected vs actual\):.*✓ PASS Block 1/1 — Print a short result for diagnostics.*Blocks: 1 passed, 0 failed.*Duration:
+```expected-contains
+RUN  output.md
+ACTUAL:
+hello
+DIFF (expected vs actual):
+hello
+✓ PASS Block 1/1 — Print a short result for diagnostics
+Documents: 1 passed, 0 failed
+Blocks: 1 passed, 0 failed (includes deferred)
 ```

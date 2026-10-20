@@ -15,8 +15,16 @@ mm tests/fixtures/passing
 Run every `.md` file in the directory. `basic.md` has two cases;
 `extra.md` has one.
 
-```expected-regex
-(?s)RUN  basic\.md.*✓ PASS  basic\.md  2/2 blocks.*RUN  extra\.md.*✓ PASS  extra\.md  1/1 blocks.*Documents: 2 passed, 0 failed.*Blocks: 3 passed, 0 failed
+```expected-contains
+RUN  basic.md
+  RUN  Block 1/2 — Show help
+  ✓ PASS Block 1/2 — Show help
+  RUN  Block 2/2 — Show the installed version
+  ✓ PASS Block 2/2 — Show the installed version
+RUN  extra.md
+  RUN  Block 1/1 — Show the installed version
+  ✓ PASS Block 1/1 — Show the installed version
+Blocks: 3 passed, 0 failed (includes deferred)
 ```
 
 With no failures, `mm` exits with code 0.
@@ -29,8 +37,15 @@ mm tests/fixtures/passing --list
 
 Preview commands without running them.
 
-```expected-regex
-(?s)basic\.md.*Block 1/2 — Show help.*mm --help.*Block 2/2 — Show the installed version.*mm --version.*extra\.md.*Block 1/1 — Show the installed version.*mm --version
+```expected
+basic.md
+  Block 1/2 — Show help
+    mm --help
+  Block 2/2 — Show the installed version
+    mm --version
+extra.md
+  Block 1/1 — Show the installed version
+    mm --version
 ```
 
 No recursion: these fixtures only call help or version, never this guide's directory.
@@ -44,8 +59,13 @@ mm tests/fixtures/discovery --list
 Discovery includes [nested Markdown files](../fixtures/discovery).
 Paths in the listing are relative to the selected spec directory.
 
-```expected-regex
-(?s)a\.md.*Block 1/1 — Run a top-level command.*mm-test-cli echo top.*nested/b\.md.*Block 1/1 — Run a nested command.*mm-test-cli echo nested
+```expected
+a.md
+  Block 1/1 — Run a top-level command
+    mm-test-cli echo top
+nested/b.md
+  Block 1/1 — Run a nested command
+    mm-test-cli echo nested
 ```
 
 ## Run nested specs in order
@@ -56,8 +76,14 @@ mm tests/fixtures/discovery
 
 Both discovered files run, in path order.
 
-```expected-regex
-(?s)RUN  a\.md.*✓ PASS  a\.md  1/1 blocks.*RUN  nested/b\.md.*✓ PASS  nested/b\.md  1/1 blocks.*Documents: 2 passed, 0 failed.*Blocks: 2 passed, 0 failed
+```expected-contains
+RUN  a.md
+  RUN  Block 1/1 — Run a top-level command
+  ✓ PASS Block 1/1 — Run a top-level command
+RUN  nested/b.md
+  RUN  Block 1/1 — Run a nested command
+  ✓ PASS Block 1/1 — Run a nested command
+Blocks: 2 passed, 0 failed (includes deferred)
 ```
 
 ## Choose the working directory
@@ -69,8 +95,11 @@ mm tests/fixtures/working-directory --cwd tests/fixtures/passing
 `--cwd` controls where commands run, not where specs are found.
 [This spec](../fixtures/working-directory/location.md) checks the actual directory.
 
-```expected-regex
-(?s)RUN  location\.md.*✓ PASS  location\.md  1/1 blocks.*Documents: 1 passed, 0 failed.*Blocks: 1 passed, 0 failed
+```expected-contains
+RUN  location.md
+  RUN  Block 1/1 — Report the actual working directory
+  ✓ PASS Block 1/1 — Report the actual working directory
+Blocks: 1 passed, 0 failed (includes deferred)
 ```
 
 ## Show output and comparison details
@@ -81,8 +110,15 @@ mm tests/fixtures/diagnostics --verbose
 
 Show captured output and a comparison diff, even when the assertion passes.
 
-```expected-regex
-(?s)RUN  output\.md.*ACTUAL:.*hello.*DIFF \(expected vs actual\):.*✓ PASS Block 1/1 — Print a short result for diagnostics.*Blocks: 1 passed, 0 failed.*Duration:
+```expected-contains
+RUN  output.md
+ACTUAL:
+hello
+DIFF (expected vs actual):
+hello
+✓ PASS Block 1/1 — Print a short result for diagnostics
+Documents: 1 passed, 0 failed
+Blocks: 1 passed, 0 failed (includes deferred)
 ```
 
 [Filter tests](filtering.md) | [Error cases](errors.md)

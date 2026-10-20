@@ -182,7 +182,9 @@ The final summary separates documents from blocks, lists every passing and
 failing document, and lists failed headings beneath their document. Deferred
 `always` blocks are included in the explicit block totals. Setup, terminal, and
 fixture cleanup errors fail the document without pretending to be Markdown
-blocks. Quitting a walkthrough produces a yellow cancelled document and keeps
+blocks. Duration appears before the stable final `Blocks:` line so executable
+guides can use readable whole-line assertions without hardcoding timing.
+Quitting a walkthrough produces a yellow cancelled document and keeps
 the historical successful exit when no real failure occurred.
 
 `--list` groups blocks by document, labels them with their execution position,

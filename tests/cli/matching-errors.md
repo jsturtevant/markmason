@@ -13,8 +13,12 @@ mm tests/fixtures/matching-substring
 [`first` does not match `prefix first`](../fixtures/matching-substring/output.md).
 Contains matching is not a substring search.
 
-```expected-regex
-(?s)✗ FAIL  Block 1/1 — Print a line that only partially matches.*Expected line 1 not found in output:.*expected: "first".*Blocks: 0 passed, 1 failed
+```expected-substring
+  ✗ FAIL  Block 1/1 — Print a line that only partially matches
+    Document: output.md
+    Command: mm-test-cli lines "prefix first"
+    Expected line 1 not found in output:
+      expected: "first"
 ```
 
 ## Reject lines in the wrong order
@@ -25,8 +29,12 @@ mm tests/fixtures/matching-order
 
 [Both lines exist](../fixtures/matching-order/output.md), but in the wrong order.
 
-```expected-regex
-(?s)✗ FAIL  Block 1/1 — Print the expected lines in reverse order.*Expected line 2 not found in output:.*expected: "second".*Blocks: 0 passed, 1 failed
+```expected-substring
+  ✗ FAIL  Block 1/1 — Print the expected lines in reverse order
+    Document: output.md
+    Command: mm-test-cli lines second first
+    Expected line 2 not found in output:
+      expected: "second"
 ```
 
 ## Reject unmatched trailing output
@@ -37,8 +45,12 @@ mm tests/fixtures/matching-trailing
 
 [Extra output after the match](../fixtures/matching-trailing/output.md) still fails.
 
-```expected-regex
-(?s)✗ FAIL  Block 1/1 — Print extra output after the expected line.*Actual output has 1 unmatched trailing line\(s\):.*trailing.*Blocks: 0 passed, 1 failed
+```expected-substring
+  ✗ FAIL  Block 1/1 — Print extra output after the expected line
+    Document: output.md
+    Command: mm-test-cli lines first trailing
+    Actual output has 1 unmatched trailing line(s):
+    trailing
 ```
 
 ## Report a missing substring
@@ -50,8 +62,12 @@ literal text it wanted alongside the full output.
 mm tests/fixtures/substring-mismatch
 ```
 
-```expected-regex
-(?s)Expected substring not found in output:.*expected: "missing phrase".*Actual output:.*prefix first.*second trailing
+```expected-substring
+    Expected substring not found in output:
+      expected: "missing phrase"
+    Actual output:
+    prefix first
+    second trailing
 ```
 
 ## Report a missing regex match
@@ -63,8 +79,12 @@ instead. Diagnostics quote the pattern, so a literal backslash displays as `\\`.
 mm tests/fixtures/regex-mismatch
 ```
 
-```expected-regex
-(?s)Expected regex not found in output:.*expected: "id: \\\\d\+".*Actual output:.*id: unknown.*request complete
+```expected-substring
+    Expected regex not found in output:
+      expected: "id: \\d+"
+    Actual output:
+    id: unknown
+    request complete
 ```
 
 ## Reject malformed patterns before execution
