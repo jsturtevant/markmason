@@ -1,6 +1,14 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use regex::Regex;
 use std::sync::LazyLock;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    Exact,
+    Contains,
+    Substring,
+    Regex,
+}
 
 pub fn strip_ansi(text: &str) -> String {
     static ANSI: LazyLock<Regex> =
@@ -60,9 +68,34 @@ pub fn prepare(actual: &str, expected: &str) -> (Vec<String>, Vec<String>) {
     (actual, expected)
 }
 
-pub fn check(actual: &str, expected: &str, contains: bool) -> Result<()> {
+pub fn check(actual: &str, expected: &str, mode: Mode) -> Result<()> {
+    match mode {
+        Mode::Substring | Mode::Regex => {
+            let actual = actual.replace("\r\n", "\n");
+            let expected = expected.replace("\r\n", "\n");
+            let matched = if mode == Mode::Substring {
+                actual.contains(&expected)
+            } else {
+                Regex::new(&expected)
+                    .context("Invalid expected-regex pattern")?
+                    .is_match(&actual)
+            };
+            if !matched {
+                let kind = if mode == Mode::Substring {
+                    "substring"
+                } else {
+                    "regex"
+                };
+                bail!(
+                    "Expected {kind} not found in output:\n  expected: {expected:?}\nActual output:\n{actual}"
+                );
+            }
+            return Ok(());
+        }
+        Mode::Exact | Mode::Contains => {}
+    }
     let (actual, expected) = prepare(actual, expected);
-    if contains {
+    if mode == Mode::Contains {
         let mut a = 0;
         for (e, exp) in expected.iter().enumerate() {
             while a < actual.len() && &actual[a] != exp {

@@ -35,9 +35,19 @@ pub struct Case {
     pub command: String,
     pub expected: Option<String>,
     pub exit_code: i32,
-    pub contains: bool,
+    pub matching: crate::matching::Mode,
     pub stdin: Option<String>,
     pub pty: Option<Vec<Step>>,
+}
+
+impl Case {
+    pub fn output_mode(&self) -> crate::matching::Mode {
+        if self.pty.is_some() && self.matching == crate::matching::Mode::Exact {
+            crate::matching::Mode::Contains
+        } else {
+            self.matching
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -242,7 +252,13 @@ pub fn parse_with_shell(content: &str, shell: Option<Shell>) -> Result<Spec> {
         let kind = info.split_whitespace().next().unwrap_or("");
         let recognized = matches!(
             kind,
-            "markmason" | "expected" | "expected-contains" | "stdin" | "pty"
+            "markmason"
+                | "expected"
+                | "expected-contains"
+                | "expected-substring"
+                | "expected-regex"
+                | "stdin"
+                | "pty"
         );
         let prose = body[description_start..range.start].trim();
         if !prose.is_empty() {
@@ -319,7 +335,7 @@ pub fn parse_with_shell(content: &str, shell: Option<Shell>) -> Result<Spec> {
                         "Invalid markmason exit code: expected a nonnegative 32-bit integer",
                     )?,
                     expected: None,
-                    contains: false,
+                    matching: crate::matching::Mode::Exact,
                     stdin: None,
                     pty: None,
                 });
@@ -327,9 +343,17 @@ pub fn parse_with_shell(content: &str, shell: Option<Shell>) -> Result<Spec> {
             } else if let Some(index) = current {
                 let case = &mut spec.cases[index];
                 match info.as_ref() {
-                    "expected" | "expected-contains" => {
+                    "expected" | "expected-contains" | "expected-substring" | "expected-regex" => {
+                        case.matching = match info.as_ref() {
+                            "expected-contains" => crate::matching::Mode::Contains,
+                            "expected-substring" => crate::matching::Mode::Substring,
+                            "expected-regex" => {
+                                Regex::new(block).context("Invalid expected-regex pattern")?;
+                                crate::matching::Mode::Regex
+                            }
+                            _ => crate::matching::Mode::Exact,
+                        };
                         case.expected = Some(block.to_owned());
-                        case.contains = info.as_ref() == "expected-contains";
                     }
                     "stdin" => case.stdin = Some(format!("{block}\n")),
                     "pty" => case.pty = Some(parse_steps(&block.lines().collect::<Vec<_>>())?),

@@ -143,6 +143,8 @@ that prints text, shows prompts, and writes test state. Both go on `PATH`.
 | Interactive walkthrough | `--step`, combined with the usual filters |
 | Exact output | `expected` block |
 | Ordered whole-line matching | `expected-contains` block; no unmatched trailing lines |
+| Literal text anywhere in output | `expected-substring` block |
+| Regex search across output | `expected-regex` block; Rust regex syntax |
 | Expected failure | `markmason (exit 1)` on the opening fence |
 | Piped input | `stdin` block |
 | Interactive terminal | `pty` block with `match:` / `send:` |
