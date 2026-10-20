@@ -392,11 +392,30 @@ pub struct Terminal {
     pub child: Box<dyn portable_pty::Child + Send + Sync>,
     pub master: Option<Box<dyn portable_pty::MasterPty + Send>>,
     pub rx: Receiver<std::io::Result<Vec<u8>>>,
-    pub send_tx: mpsc::Sender<Vec<u8>>,
-    pub written_rx: Receiver<std::io::Result<()>>,
+    pub input: TerminalInput,
     #[cfg(windows)]
     tree: Option<crate::windows::ProcessTree>,
     finished: bool,
+}
+
+struct WriteRequest {
+    input: Vec<u8>,
+    completed: mpsc::SyncSender<std::io::Result<()>>,
+}
+
+#[derive(Clone)]
+pub struct TerminalInput {
+    send: mpsc::Sender<WriteRequest>,
+}
+
+impl TerminalInput {
+    pub fn write(&self, input: Vec<u8>) -> Result<Receiver<std::io::Result<()>>> {
+        let (completed, result) = mpsc::sync_channel(1);
+        self.send
+            .send(WriteRequest { input, completed })
+            .context("PTY input writer stopped")?;
+        Ok(result)
+    }
 }
 
 impl Terminal {
@@ -491,14 +510,15 @@ impl Terminal {
         }
         drop(pair.slave);
         let master = Some(pair.master);
-        let (send_tx, send_rx) = mpsc::channel::<Vec<u8>>();
-        let (written_tx, written_rx) = mpsc::channel();
+        let (send_tx, send_rx) = mpsc::channel::<WriteRequest>();
         thread::spawn(move || {
-            for input in send_rx {
+            for request in send_rx {
                 let mut writer = writer.lock().unwrap();
-                let result = writer.write_all(&input).and_then(|()| writer.flush());
+                let result = writer
+                    .write_all(&request.input)
+                    .and_then(|()| writer.flush());
                 let failed = result.is_err();
-                if written_tx.send(result).is_err() || failed {
+                if request.completed.send(result).is_err() || failed {
                     break;
                 }
             }
@@ -507,8 +527,7 @@ impl Terminal {
             child,
             master,
             rx,
-            send_tx,
-            written_rx,
+            input: TerminalInput { send: send_tx },
             #[cfg(windows)]
             tree: Some(tree),
             finished: false,
@@ -563,7 +582,7 @@ pub struct Interaction<'a> {
     raw_cursor: usize,
     clean_cursor: usize,
     pending: Option<Instant>,
-    sending: bool,
+    sending: Option<Receiver<std::io::Result<()>>>,
 }
 
 impl<'a> Interaction<'a> {
@@ -574,7 +593,7 @@ impl<'a> Interaction<'a> {
             raw_cursor: 0,
             clean_cursor: 0,
             pending: None,
-            sending: false,
+            sending: None,
         }
     }
 
@@ -582,24 +601,24 @@ impl<'a> Interaction<'a> {
         &mut self,
         raw: &str,
         clean: &str,
-        send: &mpsc::Sender<Vec<u8>>,
-        written: &Receiver<std::io::Result<()>>,
+        input: &TerminalInput,
         running: bool,
     ) -> Result<()> {
-        if self.sending {
+        if let Some(written) = &self.sending {
             match written.try_recv() {
                 Ok(result) => {
                     result.context("Failed writing PTY input")?;
                     self.index += 1;
-                    self.sending = false;
+                    self.sending = None;
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(error) => bail!("PTY input writer stopped: {error}"),
             }
         } else if let Some(send_at) = self.pending {
             if Instant::now() >= send_at && running {
-                send.send(spec::input_keys(&self.steps[self.index].input).into_bytes())?;
-                self.sending = true;
+                self.sending = Some(
+                    input.write(spec::input_keys(&self.steps[self.index].input).into_bytes())?,
+                );
                 self.pending = None;
             }
         } else if let Some(step) = self.steps.get(self.index) {
@@ -624,7 +643,17 @@ impl<'a> Interaction<'a> {
     }
 
     pub fn sending(&self) -> bool {
-        self.sending
+        self.sending.is_some()
+    }
+
+    pub fn settle_write(&mut self, timeout: Duration) -> Result<()> {
+        let Some(written) = self.sending.take() else {
+            return Ok(());
+        };
+        written
+            .recv_timeout(timeout)
+            .context("Timed out waiting for PTY input write")?
+            .context("Failed writing PTY input")
     }
 
     pub fn check_complete(&self, final_command: bool, code: i32, output: &str) -> Result<()> {
@@ -655,8 +684,7 @@ pub fn pty(
         child,
         master,
         rx,
-        send_tx,
-        written_rx,
+        input,
         #[cfg(windows)]
         tree,
         ..
@@ -687,7 +715,7 @@ pub fn pty(
                     timeout.as_millis()
                 );
             }
-            interaction.advance(&raw, &clean, send_tx, written_rx, exited.is_none())?;
+            interaction.advance(&raw, &clean, input, exited.is_none())?;
             if exited.is_none() {
                 exited = child.try_wait()?;
                 if exited.is_some() {
@@ -720,4 +748,40 @@ pub fn pty(
         terminal.finished = true;
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pty_write_completions_are_scoped_to_their_request() -> Result<()> {
+        let (send, receive) = mpsc::channel();
+        let input = TerminalInput { send };
+        let steps = [spec::Step {
+            text: "ready".into(),
+            input: "yes".into(),
+            raw: false,
+        }];
+        let mut interaction = Interaction::new(&steps);
+
+        interaction.advance("", "ready", &input, true)?;
+        interaction.pending = Some(Instant::now());
+        interaction.advance("", "ready", &input, true)?;
+        let pty_write = receive.recv()?;
+        let recovery = input.write(vec![3])?;
+        let recovery_write = receive.recv()?;
+
+        recovery_write.completed.send(Ok(()))?;
+        assert!(recovery.recv()?.is_ok());
+        interaction.advance("", "ready", &input, true)?;
+        assert!(interaction.sending());
+        assert_eq!(interaction.completed(), 0);
+
+        pty_write.completed.send(Ok(()))?;
+        interaction.advance("", "ready", &input, true)?;
+        assert!(!interaction.sending());
+        assert_eq!(interaction.completed(), 1);
+        Ok(())
+    }
 }

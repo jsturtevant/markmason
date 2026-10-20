@@ -729,6 +729,14 @@ fn always_fences_compose_with_languages_exits_and_assertions() -> Result<()> {
 }
 
 #[test]
+fn bash_recovery_interrupts_only_before_completion_markers_arrive() {
+    assert!(shell::recovery_needs_interrupt(None, None));
+    assert!(!shell::recovery_needs_interrupt(Some(0), None));
+    assert!(!shell::recovery_needs_interrupt(None, Some(1)));
+    assert!(!shell::recovery_needs_interrupt(Some(0), Some(1)));
+}
+
+#[test]
 fn parses_substring_and_regex_assertions() -> Result<()> {
     for (fence, mode, expected) in [
         ("expected-substring", matching::Mode::Substring, r"a[1]\b"),

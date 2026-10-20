@@ -168,6 +168,10 @@ fn read_capture(path: &Path, offset: u64) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+pub(crate) fn recovery_needs_interrupt(status: Option<i32>, frame_end: Option<usize>) -> bool {
+    status.is_none() && frame_end.is_none()
+}
+
 pub struct Session {
     terminal: Option<process::Terminal>,
     directory: TempDir,
@@ -310,6 +314,7 @@ impl Session {
         let mut interrupted = None;
         let mut recovery_deadline = None;
         let mut cleanup = None;
+        let mut recovery_write = None;
         loop {
             match terminal.rx.recv_timeout(Duration::from_millis(10)) {
                 Ok(chunk) => bytes.extend(chunk.context("Failed reading Bash terminal")?),
@@ -338,8 +343,7 @@ impl Session {
                 block.interaction.advance(
                     &format!("{}{command_raw}", block.raw),
                     &format!("{}{clean}", block.clean),
-                    &terminal.send_tx,
-                    &terminal.written_rx,
+                    &terminal.input,
                     status.is_none(),
                 )?;
             }
@@ -374,13 +378,10 @@ impl Session {
                         return Err(error);
                     }
                     interrupted = Some(error);
-                    if status.is_none() || frame_end.is_none() {
-                        cleanup = Some(cancellation::Cleanup::new());
-                        recovery_deadline = Some(Instant::now() + Duration::from_secs(2));
-                        terminal
-                            .send_tx
-                            .send(vec![3])
-                            .context("Failed to interrupt Bash for deferred blocks")?;
+                    cleanup = Some(cancellation::Cleanup::new());
+                    recovery_deadline = Some(Instant::now() + Duration::from_secs(2));
+                    if recovery_needs_interrupt(status, frame_end) {
+                        recovery_write = Some(terminal.input.write(vec![3])?);
                     }
                 }
             }
@@ -395,11 +396,25 @@ impl Session {
                 self.pending = bytes[frame_end..].to_vec();
                 self.stdout_position += stdout;
                 self.stderr_position += stderr;
-                self.ready = true;
                 if let Some(error) = interrupted {
+                    let deadline = recovery_deadline.context("Missing Bash recovery deadline")?;
+                    if let Some(block) = block.as_deref_mut() {
+                        block
+                            .interaction
+                            .settle_write(deadline.saturating_duration_since(Instant::now()))
+                            .context("Could not finish interrupted PTY input write")?;
+                    }
+                    if let Some(written) = recovery_write {
+                        written
+                            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                            .context("Timed out writing Bash recovery interrupt")?
+                            .context("Failed writing Bash recovery interrupt")?;
+                    }
+                    self.ready = true;
                     drop(cleanup);
                     return Err(error);
                 }
+                self.ready = true;
                 if let Some(block) = block {
                     block.raw.push_str(command_raw);
                     block.clean.push_str(&output.text);
