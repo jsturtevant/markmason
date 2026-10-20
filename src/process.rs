@@ -653,7 +653,9 @@ impl<'a> Interaction<'a> {
         written
             .recv_timeout(timeout)
             .context("Timed out waiting for PTY input write")?
-            .context("Failed writing PTY input")
+            .context("Failed writing PTY input")?;
+        self.index += 1;
+        Ok(())
     }
 
     pub fn check_complete(&self, final_command: bool, code: i32, output: &str) -> Result<()> {
@@ -782,6 +784,30 @@ mod tests {
         interaction.advance("", "ready", &input, true)?;
         assert!(!interaction.sending());
         assert_eq!(interaction.completed(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn settling_a_pty_write_completes_its_step() -> Result<()> {
+        let (send, receive) = mpsc::channel();
+        let input = TerminalInput { send };
+        let steps = [spec::Step {
+            text: "ready".into(),
+            input: "yes".into(),
+            raw: false,
+        }];
+        let mut interaction = Interaction::new(&steps);
+
+        interaction.advance("", "ready", &input, true)?;
+        interaction.pending = Some(Instant::now());
+        interaction.advance("", "ready", &input, true)?;
+        let write = receive.recv()?;
+        write.completed.send(Ok(()))?;
+
+        interaction.settle_write(Duration::from_secs(1))?;
+        assert!(!interaction.sending());
+        assert_eq!(interaction.completed(), 1);
+        interaction.check_complete(true, 0, "")?;
         Ok(())
     }
 }
