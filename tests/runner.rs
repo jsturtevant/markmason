@@ -217,11 +217,14 @@ fn pty_cleanup_steps_run_after_bash_timeout_recovery() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(
         dir.path().join("lesson.md"),
-        "---\nshell: bash\ntimeout: 2\n---\n\
+        format!(
+            "---\nshell: bash\ntimeout: {}\n---\n\
          ```markmason\napp sleep\n```\n\
          ```markmason always\napp interactive\n```\n\
-         ```pty\nmatch: Ready?\nsend: cleanup{enter}finished{enter}\n```\n\
+         ```pty\nmatch: Ready?\nsend: cleanup{{enter}}\nmatch: Ready?\nsend: finished{{enter}}\n```\n\
          ```expected-regex\n(?s)accepted cleanup.*done finished\n```\n",
+            if cfg!(windows) { 5 } else { 2 }
+        ),
     )
     .unwrap();
     let output = command(dir.path()).output().unwrap();
