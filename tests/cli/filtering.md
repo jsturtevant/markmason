@@ -19,12 +19,8 @@ mm tests/fixtures/passing --file-pattern basic
 `--file-pattern` matches file paths only. Here it runs both cases in
 `basic.md`, not individual commands.
 
-```expected
-basic.md
-PASS mm --help
-PASS mm --version
-pass 2
-fail 0
+```expected-regex
+(?s)RUN  basic\.md.*✓ PASS  basic\.md  2/2 blocks.*Documents: 1 passed, 0 failed.*Blocks: 2 passed, 0 failed
 ```
 
 ## Exclude files by path
@@ -35,11 +31,8 @@ mm tests/fixtures/passing --file-exclude basic
 
 Skip files whose paths match `basic`.
 
-```expected
-extra.md
-PASS mm --version
-pass 1
-fail 0
+```expected-regex
+(?s)RUN  extra\.md.*✓ PASS  extra\.md  1/1 blocks.*Documents: 1 passed, 0 failed.*Blocks: 1 passed, 0 failed
 ```
 
 ## Require every listed tag
@@ -50,12 +43,8 @@ mm tests/fixtures/passing --tags SMOKE,cli
 
 Require both tags. Matching ignores case, so `SMOKE` matches `smoke`.
 
-```expected
-basic.md
-PASS mm --help
-PASS mm --version
-pass 2
-fail 0
+```expected-regex
+(?s)RUN  basic\.md.*✓ PASS  basic\.md  2/2 blocks.*Documents: 1 passed, 0 failed.*Blocks: 2 passed, 0 failed
 ```
 
 ## Exclude a tag
@@ -66,11 +55,8 @@ mm tests/fixtures/passing --tags-exclude smoke
 
 Skip files with the `smoke` tag.
 
-```expected
-extra.md
-PASS mm --version
-pass 1
-fail 0
+```expected-regex
+(?s)RUN  extra\.md.*✓ PASS  extra\.md  1/1 blocks.*Documents: 1 passed, 0 failed.*Blocks: 1 passed, 0 failed
 ```
 
 ## Select all commands in a matching file
@@ -82,12 +68,8 @@ mm tests/fixtures/passing --test-name-pattern basic.md
 `--test-name-pattern` matches file paths or commands. Here the file name
 matches, so both cases run, just as with `--file-pattern basic`.
 
-```expected
-basic.md
-PASS mm --help
-PASS mm --version
-pass 2
-fail 0
+```expected-regex
+(?s)RUN  basic\.md.*✓ PASS  basic\.md  2/2 blocks.*Documents: 1 passed, 0 failed.*Blocks: 2 passed, 0 failed
 ```
 
 ## Select individual commands
@@ -99,13 +81,8 @@ mm tests/fixtures/passing --test-name-pattern "^mm --version$"
 Here the pattern matches commands instead: only `mm --version` runs in
 each file. `--file-pattern` cannot select individual commands.
 
-```expected
-basic.md
-PASS mm --version
-extra.md
-PASS mm --version
-pass 2
-fail 0
+```expected-regex
+(?s)RUN  basic\.md.*Block 1/1 — Show the installed version.*RUN  extra\.md.*Block 1/1 — Show the installed version.*Documents: 2 passed, 0 failed.*Blocks: 2 passed, 0 failed
 ```
 
 Combine the flags to narrow files first, then select commands within them.
@@ -120,14 +97,8 @@ mm tests/fixtures/passing --test-name-pattern "^mm --help$" --test-name-pattern 
 
 Repeated name patterns are alternatives: a command only needs to match one.
 
-```expected
-basic.md
-PASS mm --help
-PASS mm --version
-extra.md
-PASS mm --version
-pass 3
-fail 0
+```expected-regex
+(?s)RUN  basic\.md.*Block 1/2 — Show help.*Block 2/2 — Show the installed version.*RUN  extra\.md.*Block 1/1 — Show the installed version.*Documents: 2 passed, 0 failed.*Blocks: 3 passed, 0 failed
 ```
 
 See [environment filters](environment.md) for variables and flag precedence,

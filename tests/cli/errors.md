@@ -53,12 +53,8 @@ mm tests/fixtures/mismatch
 [This spec](../fixtures/mismatch/mismatch.md) expects the wrong text.
 The command succeeds, but the assertion fails and `mm` exits with code 1.
 
-```expected-contains
-pass 0
-fail 1
-FAIL mm --help: Line 1 mismatch:
-expected: "not the help output"
-actual: "Standalone Markdown-driven CLI end-to-end test runner"
+```expected-regex
+(?s)✗ FAIL  Block 1/1 — Compare help with deliberately incorrect output.*Line 1 mismatch:.*expected: "not the help output".*actual:   "Standalone Markdown-driven CLI end-to-end test runner".*Documents: 0 passed, 1 failed.*Blocks: 0 passed, 1 failed
 ```
 
 ## Reject invalid frontmatter
@@ -82,12 +78,8 @@ mm tests/fixtures/setup-failure
 
 Setup runs before a file's cases. If it fails, those cases are skipped.
 
-```expected-contains
-pass 0
-fail 1
-FAIL setup: Setup command failed: mm --not-an-option
-error: unexpected argument '--not-an-option' found
-For more information, try '--help'.
+```expected-regex
+(?s)✗ FAIL  Setup.*Setup command failed: mm --not-an-option.*error: unexpected argument '--not-an-option' found.*Documents: 0 passed, 1 failed.*Blocks: 0 passed, 0 failed
 ```
 
 ## List cases without running setup
@@ -98,9 +90,8 @@ mm tests/fixtures/setup-failure --cwd tests/fixtures/nonexistent --list
 
 Listing still works with broken setup and a nonexistent `--cwd`: neither is used.
 
-```expected
-setup.md
-mm --version
+```expected-regex
+(?s)setup\.md.*Block 1/1 — List a command that setup prevents from running.*mm --version
 ```
 
 ## Report filters with no matches

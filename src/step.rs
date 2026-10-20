@@ -185,6 +185,8 @@ pub struct Session {
     input: Option<Receiver<io::Result<Option<String>>>>,
     pending_keys: VecDeque<Event>,
     blocks: usize,
+    run_block: usize,
+    document_blocks: usize,
     block: usize,
     file: String,
     title: Option<String>,
@@ -235,6 +237,8 @@ impl Session {
             input,
             pending_keys: VecDeque::new(),
             blocks,
+            run_block: 0,
+            document_blocks: 0,
             block: 0,
             file: String::new(),
             title: None,
@@ -453,7 +457,14 @@ impl Session {
         Ok(())
     }
 
-    pub fn begin_block(&mut self, file: &str, title: Option<&str>, block: usize) -> Result<()> {
+    pub fn begin_block(
+        &mut self,
+        file: &str,
+        title: Option<&str>,
+        run_block: usize,
+        block: usize,
+        document_blocks: usize,
+    ) -> Result<()> {
         self.pause_before_block =
             self.mode == Mode::Block || (self.mode == Mode::File && self.file != file);
         if self.pause_before_block {
@@ -461,7 +472,9 @@ impl Session {
         }
         self.file = file.to_owned();
         self.title = title.map(str::to_owned);
+        self.run_block = run_block;
         self.block = block;
+        self.document_blocks = document_blocks;
         self.frame = None;
         self.scroll = 0;
         self.hint = None;
@@ -578,15 +591,13 @@ impl Session {
         let mut lines = vec![
             format!("{CYAN}{RULE}{RESET}"),
             format!(
-                "{BOLD}{}{RESET}  |  Block {} of {}",
+                "{CYAN}▶ {}{RESET}  |  {BOLD}Block {}/{} — {}{RESET}",
                 plain(&self.file),
                 self.block,
-                self.blocks
+                self.document_blocks,
+                plain(self.title.as_deref().unwrap_or("(unnamed block)"))
             ),
         ];
-        if let Some(title) = self.title.as_deref().filter(|title| !title.is_empty()) {
-            lines.push(format!("{BOLD}## {}{RESET}", plain(title)));
-        }
         if !frame.description.is_empty() {
             lines.push(String::new());
             lines.extend(plain(&frame.description).lines().map(str::to_owned));
@@ -624,11 +635,11 @@ impl Session {
             Phase::Progress => lines.push(format!(
                 "  {YELLOW}IN PROGRESS{RESET}  Assertion checked after the block finishes."
             )),
-            Phase::Passed => {
-                lines.push(format!("  {GREEN}PASS{RESET}  Block matched expectations."))
-            }
+            Phase::Passed => lines.push(format!(
+                "  {GREEN}✓ PASS{RESET}  Block matched expectations."
+            )),
             Phase::Failed | Phase::ExecutionError => {
-                lines.push(format!("  {RED}FAIL{RESET}"));
+                lines.push(format!("  {RED}✗ FAIL{RESET}"));
                 lines.extend(details);
             }
         }
@@ -725,7 +736,7 @@ impl Session {
             "Stop this file"
         } else if frame.is_some_and(|frame| frame.phase == Phase::Ready) {
             "Run first command"
-        } else if complete && self.block == self.blocks {
+        } else if complete && self.run_block == self.blocks {
             "Finish walkthrough"
         } else if complete {
             "Next block"
@@ -839,17 +850,14 @@ impl Session {
         result
     }
 
-    pub fn finish(&mut self, passed: usize, failed: usize) -> Result<()> {
+    pub fn finish(&mut self) -> Result<()> {
         self.restore_screen()?;
         let label = if self.stopped {
             "Walkthrough stopped"
         } else {
             "Walkthrough finished"
         };
-        writeln!(
-            self.output,
-            "\n{CYAN}{RULE}{RESET}\n{BOLD}{label}{RESET}\nPassed blocks: {passed}\nFailed blocks: {failed}"
-        )?;
+        writeln!(self.output, "\n{CYAN}{RULE}{RESET}\n{BOLD}{label}{RESET}")?;
         self.output.flush()?;
         Ok(())
     }

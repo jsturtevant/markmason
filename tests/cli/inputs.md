@@ -41,8 +41,9 @@ ACTUAL OUTPUT
 | tutorial user
 | lab
 Walkthrough finished
-Passed blocks: 1
-Failed blocks: 0
+Documents: 1 passed, 0 failed
+Blocks: 1 passed, 0 failed (includes deferred)
+Duration: <1s
 ```
 
 ## Reuse supplied values without prompting
@@ -58,8 +59,9 @@ send: {enter}
 
 ```expected-contains
 Walkthrough finished
-Passed blocks: 1
-Failed blocks: 0
+Documents: 1 passed, 0 failed
+Blocks: 1 passed, 0 failed (includes deferred)
+Duration: <1s
 ```
 
 ## Unattended runs fail instead of asking
@@ -68,8 +70,8 @@ Failed blocks: 0
 mm-test-cli with-env MARKMASON_TUTORIAL_NAME "" MARKMASON_TUTORIAL_REGION "" -- mm tests/fixtures/inputs/lesson.md
 ```
 
-```expected-contains
-FAIL setup: Missing required inputs: MARKMASON_TUTORIAL_NAME, MARKMASON_TUTORIAL_REGION. Set these environment variables or use --step to be prompted.
+```expected-regex
+(?s)✗ FAIL  Setup.*Missing required inputs: MARKMASON_TUTORIAL_NAME, MARKMASON_TUTORIAL_REGION. Set these environment variables or use --step to be prompted.*Documents: 0 passed, 1 failed.*Blocks: 0 passed, 0 failed
 ```
 
 ## Cancel immediately after the final input
@@ -110,6 +112,7 @@ send: q{enter}
 
 ```expected-contains
 Walkthrough stopped
-Passed blocks: 0
-Failed blocks: 0
+Documents: 0 passed, 0 failed, 1 cancelled
+Blocks: 0 passed, 0 failed (includes deferred)
+Duration: <1s
 ```
