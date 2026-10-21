@@ -101,7 +101,9 @@ just test-markdown
 This builds `mm` and [`mm-test-cli`](tests/support/README.md), a small app
 that prints text, shows prompts, and writes test state for demonstrating Markmason features.
 
-Use `mm --help` for CLI options.
+The [specification reference](docs/specification.md) may help users who need exact
+behavior, but is primarily written for agents and contributors developing
+Markmason itself. Use `mm --help` for CLI options.
 
 ## Develop and self-test
 
