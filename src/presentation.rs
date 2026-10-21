@@ -111,7 +111,7 @@ impl Presenter {
     ) -> io::Result<()> {
         progress.finish()?;
         self.diagnostics(diagnostics)?;
-        if !self.tty || block.deferred {
+        if !self.tty || block.deferred || !diagnostics.is_empty() {
             let line = format!("  ✓ PASS {}", block.label());
             writeln!(
                 self.output,
@@ -445,12 +445,12 @@ impl Progress {
                             .map(|(columns, _)| usize::from(columns))
                             .unwrap_or(80)
                             .saturating_sub(1);
-                        let prefix = format!("  {} ", SPINNER[frame % SPINNER.len()]);
-                        let suffix = format!("  {}", duration(started.elapsed()));
-                        let label_width = width
-                            .saturating_sub(measure_text_width(&prefix))
-                            .saturating_sub(measure_text_width(&suffix));
-                        let line = format!("{prefix}{}{suffix}", fit(&label, label_width));
+                        let line = progress_line(
+                            SPINNER[frame % SPINNER.len()],
+                            &label,
+                            &duration(started.elapsed()),
+                            width,
+                        );
                         let _ = terminal.write_all(b"\r\x1b[2K");
                         let _ = terminal.flush();
                         let _ = write!(output, "{CYAN}{line}{RESET}");
@@ -526,6 +526,24 @@ fn terminal_width() -> usize {
         .unwrap_or(79)
 }
 
+fn progress_line(spinner: char, label: &str, elapsed: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let prefix = format!("  {spinner} ");
+    let suffix = format!("  {elapsed}");
+    let suffix_width = measure_text_width(&suffix);
+    if suffix_width >= width {
+        return fit(&suffix, width);
+    }
+    let prefix_width = measure_text_width(&prefix);
+    if prefix_width + suffix_width > width {
+        return format!("{}{}", fit(&prefix, width - suffix_width), suffix);
+    }
+    let label_width = width - prefix_width - suffix_width;
+    format!("{prefix}{}{suffix}", fit(label, label_width))
+}
+
 fn fit(text: &str, width: usize) -> String {
     if width == 0 {
         return String::new();
@@ -573,5 +591,14 @@ mod tests {
             started.elapsed()
         );
         Ok(())
+    }
+
+    #[test]
+    fn progress_line_clamps_ultra_narrow_terminals_and_keeps_timer_when_possible() {
+        for (width, elapsed) in [(8, "<1s"), (10, "00:01")] {
+            let line = progress_line('⠋', "a very long heading", elapsed, width);
+            assert!(measure_text_width(&line) <= width, "{width}: {line:?}");
+            assert!(line.contains(elapsed), "{width}: {line:?}");
+        }
     }
 }

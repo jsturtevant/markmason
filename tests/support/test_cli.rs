@@ -155,6 +155,12 @@ fn main() {
             println!("before timeout");
             thread::sleep(Duration::from_secs(10));
         }
+        "sleep-ready" => {
+            println!("before timeout");
+            io::stdout().flush().unwrap();
+            fs::write(&args[2], "ready").unwrap();
+            thread::sleep(Duration::from_secs(10));
+        }
         "pause" => thread::sleep(Duration::from_millis(350)),
         "background" | "background-pty" => {
             let mut command = Command::new(env::current_exe().unwrap());

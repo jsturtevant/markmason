@@ -178,7 +178,8 @@ fn tty_spinner_clears_before_verbose_diagnostics() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(
         dir.path().join("lesson.md"),
-        "## Wait briefly\n```markmason\napp pause\n```\n",
+        "## Wait briefly\n```markmason\napp pause\n```\n\
+         ## Wait again\n```markmason\napp pause\n```\n",
     )
     .unwrap();
     let pair = native_pty_system()
@@ -222,8 +223,14 @@ fn tty_spinner_clears_before_verbose_diagnostics() {
     let cleared = raw[..actual]
         .rfind("\r\x1b[2K")
         .expect("spinner should clear before diagnostics");
+    let first_pass = actual
+        + raw[actual..]
+            .find("✓ PASS Block 1/2")
+            .expect("first verbose block should retain its PASS identity");
     assert!(cleared < actual, "{raw}");
-    assert!(!raw[actual..].contains('⠋'), "{raw}");
+    assert!(!raw[actual..first_pass].contains('⠋'), "{raw}");
+    assert!(raw.contains("✓ PASS Block 1/2 — Wait briefly"), "{raw}");
+    assert!(raw.contains("✓ PASS Block 2/2 — Wait again"), "{raw}");
 }
 
 #[cfg(unix)]
@@ -3540,26 +3547,43 @@ fn bash_job_control_process_groups_are_cleaned_on_every_exit_path() {
 fn cancelled_bash_block_keeps_command_and_captured_output_diagnostics() {
     let dir = tempfile::tempdir().unwrap();
     let lesson = dir.path().join("lesson.md");
+    let ready = dir.path().join("ready");
     fs::write(
         &lesson,
-        "---\nshell: bash\n---\n```markmason\napp sleep\n```\n",
+        format!(
+            "---\nshell: bash\n---\n```markmason\napp sleep-ready '{}'\n```\n",
+            shell_path(&ready)
+        ),
     )
     .unwrap();
-    let child = command(&lesson)
+    let mut child = command(&lesson)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    std::thread::sleep(Duration::from_millis(200));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !ready.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if !ready.exists() {
+        child.kill().unwrap();
+        panic!(
+            "Bash command did not report readiness: {}",
+            text(&child.wait_with_output().unwrap())
+        );
+    }
     assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGINT) }, 0);
     let output = child.wait_with_output().unwrap();
     let transcript = text(&output);
     assert_eq!(output.status.code(), Some(130), "{transcript}");
     assert!(
-        transcript.contains("■ CANCELLED  Block 1/1 — app sleep"),
+        transcript.contains("■ CANCELLED  Block 1/1 — app sleep-ready"),
         "{transcript}"
     );
-    assert!(transcript.contains("Command: app sleep"), "{transcript}");
+    assert!(
+        transcript.contains("Command: app sleep-ready"),
+        "{transcript}"
+    );
     assert!(transcript.contains("Output so far:"), "{transcript}");
     assert!(transcript.contains("before timeout"), "{transcript}");
 }
