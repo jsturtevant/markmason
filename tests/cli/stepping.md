@@ -7,6 +7,10 @@ press. Run from the repository root with `mm` and `mm-test-cli` on `PATH`.
 The [walkthrough guide](walkthrough.md) is tutorial input; this file tests the
 interactive runner itself.
 
+The document line shows total wall time for the selected Markdown file, including
+time spent paused for inspection. The block line keeps a separate per-block timer.
+These dynamic values are intentionally not hardcoded in the assertions below.
+
 ## Continue after every command, then finish
 
 ```markmason
@@ -27,7 +31,6 @@ send: {enter}
 ```
 
 ```expected-contains
-▶ lesson.md | Block 1/2 — Build output one command at a time
 COMMAND 1 OF 2
 > [running] mm-test-cli echo first
 EXPECTED OUTPUT (whole block; exact, exit 0)
@@ -42,7 +45,6 @@ ACTUAL OUTPUT
 | first
 | second
 ✓ PASS Block matched expectations.
-▶ lesson.md | Block 2/2 — Send input to the application
 | application input
 ACTUAL OUTPUT
 | application input
@@ -72,13 +74,11 @@ send: {enter}
 ```
 
 ```expected-contains
-▶ lesson.md | Block 1/2 — Expand a value prepared by setup
 COMMAND 1 OF 3
 COMMAND 2 OF 3
 | ready
 COMMAND 3 OF 3
 | shared setup is ready
-▶ lesson.md | Block 2/2 — Keep a loop together
 COMMAND 1 OF 1
 | one
 | two
@@ -106,19 +106,16 @@ send: f{enter}
 ```
 
 ```expected-contains
-▶ navigation.md | Block 1/3 — First block
 > [running] mm-test-cli echo first
 > [running] mm-test-cli echo second
 ACTUAL OUTPUT
 | first
 | second
 ✓ PASS Block matched expectations.
-▶ navigation.md | Block 2/3 — Second block
 > [next] mm-test-cli echo third
 ACTUAL OUTPUT SO FAR
 | (empty)
 Ready. No commands in this block have run.
-▶ navigation.md | Block 3/3 — Last block
 | last
 Walkthrough finished
 Blocks: 3 passed, 0 failed (includes deferred)
@@ -149,12 +146,10 @@ send: {enter}
 ```
 
 ```expected-contains
-▶ scrolling.md | Block 1/1 — A complete scrollable section
 Keep the command context visible, and scroll to inspect every output line.
 [done] mm-test-cli echo started
 > [next] mm-test-cli echo finished
 | output-30
-▶ scrolling.md | Block 1/1 — A complete scrollable section
 | finished
 ✓ PASS Block matched expectations.
 Walkthrough finished
@@ -244,10 +239,8 @@ send: {enter}
 
 ```expected-contains
 MARKMASON WALKTHROUGH
-▶ lesson.md | Block 1/2 — Build output one command at a time
 COMMAND 1 OF 2
 COMMAND 2 OF 2
-▶ lesson.md | Block 2/2 — Send input to the application
 Walkthrough finished
 Blocks: 2 passed, 0 failed (includes deferred)
 ```
@@ -322,11 +315,9 @@ send: {enter}
 ```
 
 ```expected-contains
-▶ walkthrough.md | Block 1/2 — Inspect the prepared application state
 ACTUAL OUTPUT
 | ready
 ✓ PASS Block matched expectations.
-▶ walkthrough.md | Block 2/2 — Inspect the prepared configuration
 ACTUAL OUTPUT
 | true
 ✓ PASS Block matched expectations.

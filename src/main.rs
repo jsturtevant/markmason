@@ -388,13 +388,20 @@ fn execute(
             session.preview(index + 1)?;
         }
         let result = (|| -> Result<process::Output> {
+            let mut progress = || {
+                if let Some(session) = stepping.as_deref_mut() {
+                    session.refresh_timer()?;
+                }
+                Ok(())
+            };
             if let Some(shell) = fixture.shell.borrow_mut().as_mut() {
-                shell.run(
+                shell.run_with_progress(
                     &command,
                     stdin.take(),
                     shell_block.as_mut(),
                     timeout,
                     index + 1 == commands.len(),
+                    &mut progress,
                 )
             } else if let Some(steps) = &case.pty {
                 let (result, completed) = process::pty(
@@ -403,8 +410,11 @@ fn execute(
                     &fixture.env,
                     &steps[step_index..],
                     timeout,
-                    &fixture.processes,
-                    index + 1 == commands.len(),
+                    process::PtyExecution {
+                        scope: &fixture.processes,
+                        final_command: index + 1 == commands.len(),
+                        progress: &mut progress,
+                    },
                 )?;
                 step_index += completed;
                 Ok(result)
@@ -416,13 +426,14 @@ fn execute(
                 let mut input = stdin.take();
                 let mut output = None;
                 for stage in stages {
-                    let result = process::run(
+                    let result = process::run_with_progress(
                         &resolve(&stage, dir)?,
                         &fixture.cwd,
                         &fixture.env,
                         input,
                         timeout,
                         &fixture.processes,
+                        &mut progress,
                     )?;
                     if result.code != 0 {
                         output = Some(result);
@@ -1493,7 +1504,7 @@ fn run(options: Options) -> Result<bool> {
         for (file, spec, indices) in &specs {
             let listed_total = indices.len() + spec.cases.iter().filter(|case| case.always).count();
             if indices.is_empty() {
-                presenter.document_start(file)?;
+                presenter.list_document(file, &[])?;
                 presenter.setup_fail(
                     file,
                     &anyhow::anyhow!(
@@ -1591,9 +1602,7 @@ fn run(options: Options) -> Result<bool> {
                 not_run: false,
                 duration: Duration::ZERO,
             };
-            if stepping.is_none() {
-                presenter.document_finish(&document)?;
-            }
+            presenter.document_finish(&document)?;
             documents.push(document);
             failed += 1;
             if options.fail_fast {
@@ -1634,6 +1643,8 @@ fn run(options: Options) -> Result<bool> {
         };
         if stepping.is_none() {
             presenter.document_start(&file)?;
+        } else if let Some(session) = stepping.as_mut() {
+            session.begin_document(&file);
         }
         let timeout = spec
             .timeout
@@ -1651,6 +1662,9 @@ fn run(options: Options) -> Result<bool> {
             else {
                 return Ok(None);
             };
+            if stepping.is_some() {
+                presenter.resume_document(&file, document_started)?;
+            }
             cancellation::check()?;
             Fixture::new(
                 &options,
@@ -1667,9 +1681,7 @@ fn run(options: Options) -> Result<bool> {
             Ok(None) => {
                 document.cancelled = true;
                 document.duration = document_started.elapsed();
-                if stepping.is_none() {
-                    presenter.document_finish(&document)?;
-                }
+                presenter.document_finish(&document)?;
                 documents.push(document);
                 break;
             }
@@ -1682,9 +1694,7 @@ fn run(options: Options) -> Result<bool> {
                     document.errors += 1;
                     presenter.setup_fail(&file, &error)?;
                 }
-                if stepping.is_none() {
-                    presenter.document_finish(&document)?;
-                }
+                presenter.document_finish(&document)?;
                 documents.push(document);
                 failed += 1;
                 if cancellation::signal().is_some() {
@@ -1701,15 +1711,20 @@ fn run(options: Options) -> Result<bool> {
             chain: vec![root.join(&file)],
             deferred: Vec::new(),
         };
+        let mut setup_diagnostics = String::new();
         let setup_result = run_setup(
             &spec,
             &dir,
             &fixture,
             &options.cwd,
             timeout,
-            (verbose, None),
+            (verbose, Some(&mut setup_diagnostics)),
             &mut setup,
         );
+        presenter.details(&setup_diagnostics)?;
+        if stepping.is_some() && setup_result.is_ok() {
+            presenter.end_document_progress()?;
+        }
         if let Err(error) = &setup_result {
             if cancellation::signal().is_some() {
                 document.cancelled = true;
@@ -1743,10 +1758,11 @@ fn run(options: Options) -> Result<bool> {
                 };
                 let mut diagnostics = String::new();
                 let result = if let Some(session) = stepping.as_mut() {
+                    let heading = presentation::full_heading(case.title.as_deref(), &case.command);
                     session
                         .begin_block(
                             &file,
-                            Some(&block.heading),
+                            Some(&heading),
                             first_block + offset + 1,
                             offset + 1,
                             listed_total,
@@ -1814,6 +1830,9 @@ fn run(options: Options) -> Result<bool> {
             presenter.document_error(&file, "Terminal", &error)?;
             failed += 1;
         }
+        if stepping.is_some() && setup_result.is_ok() {
+            presenter.resume_document(&file, document_started)?;
+        }
         if setup_result.is_ok() {
             let before_failed = document.failed;
             run_deferred(
@@ -1830,12 +1849,13 @@ fn run(options: Options) -> Result<bool> {
             presenter.document_error(&file, "Fixture cleanup", &error)?;
             failed += 1;
         }
+        if stepping.is_some() {
+            presenter.end_document_progress()?;
+        }
         document.cancelled |= cancellation::signal().is_some()
             || stepping.as_ref().is_some_and(step::Session::stopped);
         document.duration = document_started.elapsed();
-        if stepping.is_none() {
-            presenter.document_finish(&document)?;
-        }
+        presenter.document_finish(&document)?;
         documents.push(document);
         if cancellation::signal().is_some() {
             break;

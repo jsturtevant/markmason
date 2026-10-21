@@ -162,6 +162,10 @@ fn main() {
             thread::sleep(Duration::from_secs(10));
         }
         "pause" => thread::sleep(Duration::from_millis(350)),
+        "pause-output" => {
+            println!("setup-ready");
+            thread::sleep(Duration::from_millis(1300));
+        }
         "timeline" => {
             let now = || {
                 SystemTime::now()

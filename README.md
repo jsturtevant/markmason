@@ -55,7 +55,8 @@ mm path/to/walkthrough.md --step       # Walk through one file directly
 ```
 
 Normal terminal runs show a live spinner for the current Markdown heading and
-one completion line per document. Redirected/CI output uses append-only
+separate right-aligned elapsed timers for the current document and block.
+One completion line is printed per document. Redirected/CI output uses append-only
 `RUN`, `✓ PASS`, and `✗ FAIL` block lines. The final summary lists passing and
 failing documents separately from block totals; deferred cleanup is included in
 the block count. `--list` and `--step` use the same document paths, headings,

@@ -68,6 +68,8 @@ pub struct Presenter {
     tty: bool,
     started: Instant,
     output: Destination,
+    document: Option<(String, Instant)>,
+    document_progress: Option<DocumentProgress>,
 }
 
 enum Destination {
@@ -99,6 +101,8 @@ impl Presenter {
             tty,
             started: Instant::now(),
             output: Destination::Live(AutoStream::new(io::stdout(), ColorChoice::Auto)),
+            document: None,
+            document_progress: None,
         }
     }
 
@@ -107,6 +111,8 @@ impl Presenter {
             tty: false,
             started: Instant::now(),
             output: Destination::Buffered(StripStream::new(Vec::new())),
+            document: None,
+            document_progress: None,
         }
     }
 
@@ -121,20 +127,33 @@ impl Presenter {
 
     pub fn document_start(&mut self, file: &str) -> io::Result<()> {
         if self.tty {
-            writeln!(
-                self.output,
-                "{CYAN}{}{RESET}",
-                fit(&format!("▶ {file}"), terminal_width())
-            )?;
+            self.resume_document(file, Instant::now())?;
         } else {
             writeln!(self.output, "RUN  {file}")?;
         }
         self.output.flush()
     }
 
+    pub fn resume_document(&mut self, file: &str, started: Instant) -> io::Result<()> {
+        self.stop_document_progress()?;
+        self.document = Some((file.to_owned(), started));
+        self.start_document_progress()
+    }
+
+    pub fn end_document_progress(&mut self) -> io::Result<()> {
+        self.stop_document_progress()?;
+        self.document = None;
+        Ok(())
+    }
+
     pub fn block_start(&mut self, block: &Block) -> io::Result<Progress> {
         if self.tty {
-            Progress::new(block)
+            self.stop_document_progress()?;
+            let (file, started) = self
+                .document
+                .as_ref()
+                .ok_or_else(|| io::Error::other("Missing active document progress"))?;
+            Progress::new(file, *started, block)
         } else {
             writeln!(self.output, "  RUN  {}", block.label())?;
             self.output.flush()?;
@@ -149,7 +168,7 @@ impl Presenter {
         diagnostics: &str,
     ) -> io::Result<()> {
         progress.finish()?;
-        self.details(diagnostics)?;
+        self.write_details(diagnostics)?;
         if !self.tty || block.deferred || !diagnostics.is_empty() {
             let line = format!("  ✓ PASS {}", block.label());
             writeln!(
@@ -163,6 +182,7 @@ impl Presenter {
             )?;
             self.output.flush()?;
         }
+        self.start_document_progress()?;
         Ok(())
     }
 
@@ -175,7 +195,7 @@ impl Presenter {
         diagnostics: &str,
     ) -> io::Result<()> {
         progress.finish()?;
-        self.details(diagnostics)?;
+        self.write_details(diagnostics)?;
         writeln!(self.output, "  {RED}✗ FAIL{RESET}  {}", block.label())?;
         writeln!(self.output, "    Document: {file}")?;
         for (index, command) in block.command.lines().enumerate() {
@@ -192,7 +212,8 @@ impl Presenter {
         for line in format!("{error:#}").lines() {
             writeln!(self.output, "    {line}")?;
         }
-        self.output.flush()
+        self.output.flush()?;
+        self.start_document_progress()
     }
 
     pub fn block_cancel(
@@ -204,7 +225,7 @@ impl Presenter {
         diagnostics: &str,
     ) -> io::Result<()> {
         progress.finish()?;
-        self.details(diagnostics)?;
+        self.write_details(diagnostics)?;
         writeln!(
             self.output,
             "  {YELLOW}■ CANCELLED{RESET}  {}",
@@ -225,10 +246,21 @@ impl Presenter {
         for line in format!("{error:#}").lines() {
             writeln!(self.output, "    {line}")?;
         }
-        self.output.flush()
+        self.output.flush()?;
+        self.start_document_progress()
     }
 
     pub fn details(&mut self, diagnostics: &str) -> io::Result<()> {
+        let restart = self.document_progress.is_some();
+        self.stop_document_progress()?;
+        self.write_details(diagnostics)?;
+        if restart {
+            self.start_document_progress()?;
+        }
+        Ok(())
+    }
+
+    fn write_details(&mut self, diagnostics: &str) -> io::Result<()> {
         if !diagnostics.is_empty() {
             write!(self.output, "{diagnostics}")?;
             self.output.flush()?;
@@ -237,6 +269,8 @@ impl Presenter {
     }
 
     pub fn document_finish(&mut self, document: &Document) -> io::Result<()> {
+        self.stop_document_progress()?;
+        self.document = None;
         let elapsed = duration(document.duration);
         if document.failed() {
             if document.failed > 0 {
@@ -301,6 +335,7 @@ impl Presenter {
     }
 
     pub fn setup_fail(&mut self, file: &str, error: &anyhow::Error) -> io::Result<()> {
+        self.stop_document_progress()?;
         writeln!(self.output, "  {RED}✗ FAIL{RESET}  Setup")?;
         writeln!(self.output, "    Document: {file}")?;
         for line in format!("{error:#}").lines() {
@@ -315,6 +350,7 @@ impl Presenter {
         label: &str,
         error: &anyhow::Error,
     ) -> io::Result<()> {
+        self.stop_document_progress()?;
         writeln!(self.output, "  {RED}✗ FAIL{RESET}  {label}")?;
         writeln!(self.output, "    Document: {file}")?;
         for line in format!("{error:#}").lines() {
@@ -329,6 +365,7 @@ impl Presenter {
         label: &str,
         error: &anyhow::Error,
     ) -> io::Result<()> {
+        self.stop_document_progress()?;
         writeln!(self.output, "  {YELLOW}■ CANCELLED{RESET}  {label}")?;
         writeln!(self.output, "    Document: {file}")?;
         for line in format!("{error:#}").lines() {
@@ -349,6 +386,7 @@ impl Presenter {
     }
 
     pub fn summary(&mut self, documents: &[Document]) -> io::Result<()> {
+        self.stop_document_progress()?;
         let passed_documents = documents.iter().filter(|doc| doc.succeeded()).count();
         let failed_documents = documents.iter().filter(|doc| doc.failed()).count();
         let cancelled_documents = documents
@@ -468,6 +506,81 @@ impl Presenter {
         )?;
         self.output.flush()
     }
+
+    fn start_document_progress(&mut self) -> io::Result<()> {
+        if self.tty
+            && self.document_progress.is_none()
+            && let Some((file, started)) = &self.document
+        {
+            self.document_progress = Some(DocumentProgress::new(file, *started)?);
+        }
+        Ok(())
+    }
+
+    fn stop_document_progress(&mut self) -> io::Result<()> {
+        if let Some(progress) = self.document_progress.take() {
+            progress.finish()?;
+        }
+        Ok(())
+    }
+}
+
+struct DocumentProgress {
+    stop: Option<mpsc::SyncSender<()>>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl DocumentProgress {
+    fn new(file: &str, started: Instant) -> io::Result<Self> {
+        let (stop, done) = mpsc::sync_channel(1);
+        let file = file.to_owned();
+        let thread = thread::Builder::new()
+            .name("markmason-document-progress".into())
+            .spawn(move || {
+                let mut output = AutoStream::new(io::stdout(), ColorChoice::Auto);
+                let mut terminal = io::stdout();
+                loop {
+                    let width = terminal_width();
+                    let line =
+                        timed_line(&format!("▶ {file}"), &duration(started.elapsed()), width);
+                    let _ = terminal.write_all(b"\r\x1b[2K");
+                    let _ = terminal.flush();
+                    let _ = write!(output, "{CYAN}{line}{RESET}");
+                    let _ = output.flush();
+                    match done.recv_timeout(Duration::from_millis(80)) {
+                        Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    }
+                }
+                let _ = terminal.write_all(b"\r\x1b[2K");
+                let _ = terminal.flush();
+            })?;
+        Ok(Self {
+            stop: Some(stop),
+            thread: Some(thread),
+        })
+    }
+
+    fn finish(mut self) -> io::Result<()> {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+        Ok(())
+    }
+}
+
+impl Drop for DocumentProgress {
+    fn drop(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
 }
 
 pub struct Progress {
@@ -483,11 +596,26 @@ impl Progress {
         }
     }
 
-    fn new(block: &Block) -> io::Result<Self> {
-        Self::start(block, Duration::from_millis(80), true)
+    fn new(file: &str, document_started: Instant, block: &Block) -> io::Result<Self> {
+        Self::start_internal(
+            block,
+            Duration::from_millis(80),
+            true,
+            Some((file.to_owned(), document_started)),
+        )
     }
 
+    #[cfg(test)]
     fn start(block: &Block, interval: Duration, render: bool) -> io::Result<Self> {
+        Self::start_internal(block, interval, render, None)
+    }
+
+    fn start_internal(
+        block: &Block,
+        interval: Duration,
+        render: bool,
+        document: Option<(String, Instant)>,
+    ) -> io::Result<Self> {
         let (stop, done) = mpsc::sync_channel(1);
         let label = block.label();
         let started = Instant::now();
@@ -497,22 +625,33 @@ impl Progress {
                 let mut output = AutoStream::new(io::stdout(), ColorChoice::Auto);
                 let mut terminal = io::stdout();
                 let mut frame = 0;
+                let mut drawn = false;
                 loop {
                     if render {
-                        let width = crossterm::terminal::size()
-                            .map(|(columns, _)| usize::from(columns))
-                            .unwrap_or(80)
-                            .saturating_sub(1);
+                        let width = terminal_width();
                         let line = progress_line(
                             SPINNER[frame % SPINNER.len()],
                             &label,
                             &duration(started.elapsed()),
                             width,
                         );
-                        let _ = terminal.write_all(b"\r\x1b[2K");
+                        if drawn && document.is_some() {
+                            let _ = terminal.write_all(b"\r\x1b[2K\x1b[1A\r\x1b[2K");
+                        } else {
+                            let _ = terminal.write_all(b"\r\x1b[2K");
+                        }
                         let _ = terminal.flush();
+                        if let Some((file, document_started)) = &document {
+                            let document_line = timed_line(
+                                &format!("▶ {file}"),
+                                &duration(document_started.elapsed()),
+                                width,
+                            );
+                            let _ = writeln!(output, "{CYAN}{document_line}{RESET}");
+                        }
                         let _ = write!(output, "{CYAN}{line}{RESET}");
                         let _ = output.flush();
+                        drawn = true;
                     }
                     frame += 1;
                     match done.recv_timeout(interval) {
@@ -521,7 +660,11 @@ impl Progress {
                     }
                 }
                 if render {
-                    let _ = terminal.write_all(b"\r\x1b[2K");
+                    if document.is_some() && drawn {
+                        let _ = terminal.write_all(b"\r\x1b[2K\x1b[1A\r\x1b[2K");
+                    } else {
+                        let _ = terminal.write_all(b"\r\x1b[2K");
+                    }
                     let _ = terminal.flush();
                 }
             })?;
@@ -554,6 +697,10 @@ impl Drop for Progress {
 }
 
 pub fn heading(title: Option<&str>, command: &str) -> String {
+    fit(&full_heading(title, command), 72)
+}
+
+pub fn full_heading(title: Option<&str>, command: &str) -> String {
     let value = title
         .map(str::trim)
         .filter(|title| !title.is_empty())
@@ -564,10 +711,10 @@ pub fn heading(title: Option<&str>, command: &str) -> String {
                 .map(str::trim)
         })
         .unwrap_or("(unnamed block)");
-    fit(value, 72)
+    value.to_owned()
 }
 
-fn duration(value: Duration) -> String {
+pub(crate) fn duration(value: Duration) -> String {
     if value < Duration::from_secs(1) {
         return "<1s".into();
     }
@@ -584,6 +731,23 @@ fn terminal_width() -> usize {
         .unwrap_or(79)
 }
 
+pub(crate) fn timed_line(label: &str, elapsed: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let suffix = format!("  {elapsed}");
+    let suffix_width = measure_text_width(&suffix);
+    if suffix_width >= width {
+        return fit(&suffix, width);
+    }
+    let label_width = width - suffix_width;
+    let label = fit(label, label_width);
+    format!(
+        "{label}{}{suffix}",
+        " ".repeat(label_width.saturating_sub(measure_text_width(&label)))
+    )
+}
+
 fn progress_line(spinner: char, label: &str, elapsed: &str, width: usize) -> String {
     if width == 0 {
         return String::new();
@@ -596,10 +760,19 @@ fn progress_line(spinner: char, label: &str, elapsed: &str, width: usize) -> Str
     }
     let prefix_width = measure_text_width(&prefix);
     if prefix_width + suffix_width > width {
-        return format!("{}{}", fit(&prefix, width - suffix_width), suffix);
+        let prefix_width = width - suffix_width;
+        let prefix = fit(&prefix, prefix_width);
+        return format!(
+            "{prefix}{}{suffix}",
+            " ".repeat(prefix_width.saturating_sub(measure_text_width(&prefix)))
+        );
     }
     let label_width = width - prefix_width - suffix_width;
-    format!("{prefix}{}{suffix}", fit(label, label_width))
+    let label = fit(label, label_width);
+    format!(
+        "{prefix}{label}{}{suffix}",
+        " ".repeat(label_width.saturating_sub(measure_text_width(&label)))
+    )
 }
 
 fn fit(text: &str, width: usize) -> String {
@@ -658,5 +831,16 @@ mod tests {
             assert!(measure_text_width(&line) <= width, "{width}: {line:?}");
             assert!(line.contains(elapsed), "{width}: {line:?}");
         }
+    }
+
+    #[test]
+    fn document_and_block_timers_share_the_final_column() {
+        let width = 48;
+        let document = timed_line("▶ a/long/document.md", "02:43", width);
+        let block = progress_line('⠋', "Block 4/19 — Build the project", "00:18", width);
+        assert_eq!(measure_text_width(&document), width);
+        assert_eq!(measure_text_width(&block), width);
+        assert!(document.ends_with("02:43"));
+        assert!(block.ends_with("00:18"));
     }
 }

@@ -4,6 +4,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Output, Stdio},
     sync::{OnceLock, mpsc},
+    thread,
     time::{Duration, Instant},
 };
 use tempfile::TempDir;
@@ -491,6 +492,49 @@ fn parallel_listing_rejects_documents_without_ordinary_blocks() {
         );
         assert!(!transcript.contains("app echo cleanup"), "{transcript}");
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn tty_listing_errors_do_not_start_document_timers() {
+    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+    use std::io::Read;
+
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("prose.md"), "# No commands\n").unwrap();
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 10,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_mm"));
+    command.arg(dir.path());
+    command.arg("--list");
+    command.env("NO_COLOR", "1");
+    command.env("TERM", "xterm-256color");
+    let mut child = pair.slave.spawn_command(command).unwrap();
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().unwrap();
+    let mut bytes = Vec::new();
+    let mut chunk = [0; 4096];
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(count) => bytes.extend_from_slice(&chunk[..count]),
+            Err(error) if error.raw_os_error() == Some(libc::EIO) => break,
+            Err(error) => panic!("Failed reading list terminal: {error}"),
+        }
+    }
+    let status = child.wait().unwrap();
+    let raw = String::from_utf8_lossy(&bytes);
+    assert_eq!(status.exit_code(), 1, "{raw}");
+    assert!(raw.contains("prose.md"), "{raw}");
+    assert!(raw.contains("No test cases found"), "{raw}");
+    assert!(!raw.contains('▶'), "{raw}");
+    assert!(!raw.contains("\r\x1b[2K"), "{raw}");
 }
 
 #[test]
@@ -1224,6 +1268,263 @@ fn partial_output_assertions_keep_their_mode_in_walkthroughs() {
         assert!(output.status.success(), "{transcript}");
         assert!(transcript.contains(label), "{transcript}");
         assert!(transcript.contains("Blocks: 1 passed"), "{transcript}");
+    }
+}
+
+#[test]
+fn redirected_step_pause_does_not_repeat_the_block_panel() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("lesson.md"),
+        "## Pause here\n```markmason\napp echo ready\n```\n```expected\nready\n```\n",
+    )
+    .unwrap();
+    let (child, mut stdin, receive) = step_process(dir.path(), &[]);
+    let mut transcript = String::new();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !transcript.contains("Enter: Finish walkthrough") && Instant::now() < deadline {
+        if let Ok(chunk) = receive.recv_timeout(Duration::from_millis(50)) {
+            transcript.push_str(&chunk.unwrap());
+        }
+    }
+    assert!(
+        transcript.contains("Enter: Finish walkthrough"),
+        "{transcript}"
+    );
+    let panels = transcript.matches("▶ lesson.md").count();
+    thread::sleep(Duration::from_millis(1200));
+    while let Ok(chunk) = receive.try_recv() {
+        transcript.push_str(&chunk.unwrap());
+    }
+    assert_eq!(
+        transcript.matches("▶ lesson.md").count(),
+        panels,
+        "{transcript}"
+    );
+    stdin.write_all(b"\n").unwrap();
+    drop(stdin);
+    let output = child.wait_with_output().unwrap();
+    transcript.extend(receive.into_iter().map(Result::unwrap));
+    assert!(output.status.success(), "{transcript}\n{}", text(&output));
+}
+
+#[test]
+fn redirected_step_output_preserves_full_document_and_heading_labels() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = format!("{}-document-suffix.md", "very-long-".repeat(10));
+    let heading = format!("{} heading suffix", "Distinguishing long ".repeat(6));
+    fs::write(
+        dir.path().join(&file),
+        format!("## {heading}\n```markmason\napp echo ready\n```\n"),
+    )
+    .unwrap();
+    let output = step_output(dir.path(), &[], "f\n");
+    let transcript = text(&output);
+    assert!(output.status.success(), "{transcript}");
+    assert!(transcript.contains(&format!("▶ {file}")), "{transcript}");
+    assert!(
+        transcript.contains(&format!("Block 1/1 — {heading}")),
+        "{transcript}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn step_document_timer_refreshes_during_pauses_and_execution() {
+    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+    use std::io::Read;
+
+    fn elapsed_seconds(line: &str) -> Option<u64> {
+        let elapsed = line.split_whitespace().next_back()?;
+        if elapsed == "<1s" {
+            return Some(0);
+        }
+        let (minutes, seconds) = elapsed.split_once(':')?;
+        Some(minutes.parse::<u64>().ok()? * 60 + seconds.parse::<u64>().ok()?)
+    }
+
+    for (name, frontmatter, pty) in [
+        ("process", "timeout: 30", ""),
+        (
+            "pty",
+            "timeout: 30",
+            "```pty\nmatch: before timeout\nsend: ignored\n```\n",
+        ),
+        ("shell", "shell: bash\ntimeout: 30", ""),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("lesson.md"),
+            format!(
+                "---\n{frontmatter}\nsetup: app pause-output\n---\n\
+                 ## Wait here\n```markmason\n\
+                 app echo ready\napp sleep\n```\n{pty}"
+            ),
+        )
+        .unwrap();
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .unwrap();
+        let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_mm"));
+        command.arg(dir.path());
+        command.arg("--step");
+        command.arg("--file-pattern");
+        command.arg(".");
+        command.arg("--verbose");
+        command.env("NO_COLOR", "1");
+        command.env("TERM", "xterm-256color");
+        command.env(
+            "PATH",
+            std::env::join_paths(
+                std::iter::once(helper().parent().unwrap().to_owned())
+                    .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+            )
+            .unwrap(),
+        );
+        let mut child = pair.slave.spawn_command(command).unwrap();
+        drop(pair.slave);
+        let mut input = pair.master.take_writer().unwrap();
+        let mut reader = pair.master.try_clone_reader().unwrap();
+        let (send, receive) = mpsc::channel();
+        thread::spawn(move || {
+            let mut buffer = [0; 4096];
+            loop {
+                match reader.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(count) => {
+                        if send.send(buffer[..count].to_vec()).is_err() {
+                            break;
+                        }
+                    }
+                    Err(error)
+                        if error.kind() == io::ErrorKind::BrokenPipe
+                            || error.raw_os_error() == Some(libc::EIO) =>
+                    {
+                        break;
+                    }
+                    Err(error) => panic!("Failed reading timer walkthrough: {error}"),
+                }
+            }
+        });
+        let mut bytes = Vec::new();
+        let setup_deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            assert!(
+                Instant::now() < setup_deadline,
+                "{name}: setup document timer did not refresh\n{}",
+                String::from_utf8_lossy(&bytes)
+            );
+            if let Ok(chunk) = receive.recv_timeout(Duration::from_millis(50)) {
+                bytes.extend(chunk);
+            }
+            let raw = String::from_utf8_lossy(&bytes);
+            let setup_output = raw.split("\x1b[?1049h").next().unwrap();
+            if setup_output
+                .split(['\r', '\n'])
+                .filter(|line| line.contains("▶ lesson.md"))
+                .filter_map(elapsed_seconds)
+                .any(|elapsed| elapsed >= 1)
+                && {
+                    let setup_text = dialoguer::console::strip_ansi_codes(setup_output);
+                    setup_text.contains("Setup (app pause-output):")
+                        && setup_text.contains("setup-ready")
+                }
+            {
+                break;
+            }
+        }
+        let pause_deadline = Instant::now() + Duration::from_secs(5);
+        let mut pause_started = None;
+        let pause_elapsed = loop {
+            assert!(
+                Instant::now() < pause_deadline,
+                "{name}: paused document timer did not refresh\n{}",
+                String::from_utf8_lossy(&bytes)
+            );
+            if let Ok(chunk) = receive.recv_timeout(Duration::from_millis(50)) {
+                bytes.extend(chunk);
+            }
+            let raw = String::from_utf8_lossy(&bytes);
+            let frame =
+                dialoguer::console::strip_ansi_codes(raw.rsplit("\x1b[H\x1b[2J").next().unwrap());
+            let document_line = frame.lines().find(|line| line.starts_with("▶ lesson.md"));
+            if frame.contains("Enter: Next command")
+                && let Some(elapsed) = document_line.and_then(elapsed_seconds)
+            {
+                match pause_started {
+                    Some(started) if elapsed > started => break elapsed,
+                    None => pause_started = Some(elapsed),
+                    _ => {}
+                }
+            }
+        };
+        input.write_all(b"f\r").unwrap();
+        input.flush().unwrap();
+        let execution_deadline = Instant::now() + Duration::from_secs(5);
+        let mut execution_started = None;
+        let execution_elapsed = loop {
+            assert!(
+                Instant::now() < execution_deadline,
+                "{name}: execution timer did not refresh\n{}",
+                String::from_utf8_lossy(&bytes)
+            );
+            if let Ok(chunk) = receive.recv_timeout(Duration::from_millis(50)) {
+                bytes.extend(chunk);
+            }
+            let raw = String::from_utf8_lossy(&bytes);
+            let frame =
+                dialoguer::console::strip_ansi_codes(raw.rsplit("\x1b[H\x1b[2J").next().unwrap());
+            let document_line = frame.lines().find(|line| line.starts_with("▶ lesson.md"));
+            if frame.contains("Running command")
+                && let Some(elapsed) = document_line.and_then(elapsed_seconds)
+            {
+                match execution_started {
+                    Some(started) if elapsed > started => break elapsed,
+                    None => execution_started = Some(elapsed),
+                    _ => {}
+                }
+            }
+        };
+        assert!(
+            execution_elapsed > pause_elapsed,
+            "{name}: {}",
+            String::from_utf8_lossy(&bytes)
+        );
+        input.write_all(b"\x03").unwrap();
+        input.flush().unwrap();
+        let status = child.wait().unwrap();
+        let drain_deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match receive.recv_timeout(Duration::from_millis(50)) {
+                Ok(chunk) => bytes.extend(chunk),
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    assert!(
+                        Instant::now() < drain_deadline,
+                        "{name}: PTY reader did not finish\n{}",
+                        String::from_utf8_lossy(&bytes)
+                    );
+                }
+            }
+        }
+        let raw = String::from_utf8_lossy(&bytes);
+        let transcript = dialoguer::console::strip_ansi_codes(&raw);
+        assert_eq!(status.exit_code(), 130, "{name}: {transcript}");
+        let final_line = transcript
+            .lines()
+            .find(|line| line.contains("■ CANCELLED  lesson.md"))
+            .unwrap_or_else(|| panic!("{name}: {transcript}"));
+        let final_elapsed =
+            elapsed_seconds(final_line).unwrap_or_else(|| panic!("{name}: {final_line}"));
+        assert!(
+            final_elapsed >= 3 && final_elapsed >= execution_elapsed,
+            "{name}: {final_line}"
+        );
     }
 }
 
@@ -2020,7 +2321,8 @@ fn step_mode_accepts_environment_file_filters_without_a_picker() {
         assert!(output.status.success(), "{result}");
         assert!(selected.exists(), "{result}");
         assert!(!skipped.exists(), "{result}");
-        assert!(result.contains("▶ chosen.md  |  Block 1/1"), "{result}");
+        assert!(result.contains("▶ chosen.md"), "{result}");
+        assert!(result.contains("Block 1/1"), "{result}");
         assert!(
             !result.contains("Choose a Markdown walkthrough"),
             "{result}"
@@ -2109,10 +2411,8 @@ fn step_mode_picker_searches_navigates_and_cancels_before_setup() {
             assert!(result.contains("Interrupted by signal 2"), "{result}");
             assert!(!result.contains("MARKMASON WALKTHROUGH"), "{result}");
         } else {
-            assert!(
-                result.contains("nested/b selected.md  |  Block 1/1"),
-                "{result}"
-            );
+            assert!(result.contains("▶ nested/b selected.md"), "{result}");
+            assert!(result.contains("Block 1/1"), "{result}");
             assert!(result.contains("Walkthrough finished"), "{result}");
         }
     }
@@ -2389,7 +2689,8 @@ fn step_mode_filters_files_and_checks_combined_output_after_the_block() {
     assert!(output.status.success(), "{result}");
     for expected in [
         "MARKMASON WALKTHROUGH",
-        "lesson.md  |  Block 1/1",
+        "▶ lesson.md",
+        "Block 1/1",
         "Print two lines",
         "COMMAND 1 OF 2",
         " > [running] app echo first",
