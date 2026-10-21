@@ -1061,16 +1061,18 @@ fn failed_file_run(file: String, total: usize, error: anyhow::Error) -> Result<F
     })
 }
 
-fn spawn_worker<T, F>(
+fn start_worker<T, F, S>(
+    spawn: S,
     completed: mpsc::Sender<(usize, Result<T>)>,
     index: usize,
     work: F,
-) -> thread::JoinHandle<()>
+) -> io::Result<()>
 where
     T: Send + 'static,
     F: FnOnce() -> Result<T> + Send + 'static,
+    S: FnOnce(Box<dyn FnOnce() + Send>) -> io::Result<()>,
 {
-    thread::spawn(move || {
+    spawn(Box::new(move || {
         let result = panic::catch_unwind(AssertUnwindSafe(work))
             .map_err(|payload| {
                 let message = payload
@@ -1082,7 +1084,29 @@ where
             })
             .and_then(|result| result);
         let _ = completed.send((index, result));
-    })
+    }))
+}
+
+fn spawn_worker<T, F>(
+    completed: mpsc::Sender<(usize, Result<T>)>,
+    index: usize,
+    work: F,
+) -> io::Result<()>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    start_worker(
+        |task| {
+            thread::Builder::new()
+                .name(format!("markmason-file-{index}"))
+                .spawn(task)
+                .map(|_| ())
+        },
+        completed,
+        index,
+        work,
+    )
 }
 
 fn run_parallel_documents(
@@ -1147,14 +1171,15 @@ fn run_parallel_documents(
                 }
                 continue;
             }
-            let options = Arc::clone(&options);
+            let worker_options = Arc::clone(&options);
             let root = Arc::clone(&root);
             let gh_config = Arc::clone(&gh_config);
             let completed = completed.clone();
-            active += 1;
-            spawn_worker(completed, index, move || {
+            let failed_file = file.clone();
+            let total = indices.len() + spec.cases.iter().filter(|case| case.always).count();
+            let started = spawn_worker(completed, index, move || {
                 run_unattended_document(
-                    &options,
+                    &worker_options,
                     &root,
                     &gh_config,
                     (file.clone(), spec, indices),
@@ -1163,6 +1188,22 @@ fn run_parallel_documents(
                 )
                 .with_context(|| format!("Parallel document {file} failed"))
             });
+            match started {
+                Ok(()) => active += 1,
+                Err(error) => {
+                    let run = failed_file_run(
+                        failed_file,
+                        total,
+                        anyhow::Error::new(error)
+                            .context("Failed to start parallel document worker"),
+                    )?;
+                    let failed = run.document.failed();
+                    runs.insert(index, run);
+                    if options.fail_fast && failed {
+                        stop_scheduling = true;
+                    }
+                }
+            }
         }
         if active == 0 {
             if stop_scheduling || queued.is_empty() {

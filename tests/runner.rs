@@ -335,7 +335,7 @@ fn parallel_fail_fast_stops_scheduling_and_finishes_inflight_cleanup() {
     fs::write(
         dir.path().join("b.md"),
         format!(
-            "```markmason\napp timeline '{}' 300\n```\n\
+            "```markmason\napp timeline '{}' 300\napp fail\n```\n\
              ```markmason always\napp mark '{}'\n```\n",
             shell_path(&dir.path().join("b")),
             shell_path(&b_clean)

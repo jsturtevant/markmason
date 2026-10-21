@@ -874,13 +874,13 @@ fn filters_and_timeout_validation() -> Result<()> {
 #[test]
 fn panicking_parallel_worker_reports_a_result() {
     let (send, receive) = std::sync::mpsc::channel();
-    let worker = spawn_worker(send, 7, || -> Result<()> {
+    spawn_worker(send, 7, || -> Result<()> {
         panic!("deliberate worker panic");
-    });
+    })
+    .unwrap();
     let (index, result) = receive
         .recv_timeout(Duration::from_secs(1))
         .expect("panicking worker did not report completion");
-    worker.join().unwrap();
     assert_eq!(index, 7);
     assert!(
         result
@@ -888,4 +888,18 @@ fn panicking_parallel_worker_reports_a_result() {
             .to_string()
             .contains("deliberate worker panic")
     );
+}
+
+#[test]
+fn worker_creation_failure_is_reported_without_starting_work() {
+    let (send, receive) = std::sync::mpsc::channel::<(usize, Result<()>)>();
+    let error = start_worker(
+        |_| Err(io::Error::other("thread creation denied")),
+        send,
+        3,
+        || Ok(()),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("thread creation denied"));
+    assert!(receive.recv_timeout(Duration::from_millis(10)).is_err());
 }
