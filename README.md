@@ -25,7 +25,7 @@ cargo install --git https://github.com/jsturtevant/markmason --tag v0.4.1 --lock
 Save as `tests/cli/version.md`:
 
 ````markdown
-# Check Markmason
+# Write a Markmason test
 
 ## Show the installed version
 
