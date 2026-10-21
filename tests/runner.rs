@@ -518,6 +518,43 @@ fn parallel_failure_output_is_grouped_in_file_order() {
     assert_eq!(transcript.matches("Command:").count(), 2, "{transcript}");
 }
 
+#[test]
+fn parallel_worker_slot_is_reused_after_setup_failure_or_timeout() {
+    for mode in ["setup", "timeout"] {
+        let dir = tempfile::tempdir().unwrap();
+        let cleaned = dir.path().join("cleaned");
+        let later = dir.path().join("later");
+        let first = if mode == "setup" {
+            "---\nsetup: app fail\n---\n```markmason\napp echo skipped\n```\n".to_owned()
+        } else {
+            format!(
+                "---\ntimeout: 0.1\n---\n```markmason\napp sleep\n```\n\
+                 ```markmason always\napp mark '{}'\n```\n",
+                shell_path(&cleaned)
+            )
+        };
+        fs::write(dir.path().join("a.md"), first).unwrap();
+        fs::write(
+            dir.path().join("b.md"),
+            format!("```markmason\napp mark '{}'\n```\n", shell_path(&later)),
+        )
+        .unwrap();
+        let output = command(dir.path())
+            .args(["--parallel", "1"])
+            .output()
+            .unwrap();
+        let transcript = text(&output);
+        assert_eq!(output.status.code(), Some(1), "{mode}: {transcript}");
+        assert!(later.exists(), "{mode}: {transcript}");
+        assert_eq!(cleaned.exists(), mode == "timeout", "{mode}: {transcript}");
+        assert!(transcript.contains("RUN  b.md"), "{mode}: {transcript}");
+        assert!(
+            transcript.contains("Documents: 1 passed, 1 failed"),
+            "{mode}: {transcript}"
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn parallel_cancellation_allows_inflight_cleanup_and_stops_scheduling() {
