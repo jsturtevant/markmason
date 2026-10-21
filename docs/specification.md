@@ -172,7 +172,12 @@ RUN  getting-started.md
 ```
 
 Interactive terminals show the active document once and update a cyan spinner
-line in place with the current `Block N/N — heading` and elapsed time. Completed
+line in place with the current `Block N/N — heading` and elapsed time. The
+document line has its own elapsed wall-time value, right-aligned to the same
+terminal column as the block timer. Document time starts before inputs/setup and
+includes setup, ordinary blocks, user pauses in `--step`, deferred cleanup, and
+fixture cleanup. It resets for the next file; the block timer resets for each
+block. Completed
 passing ordinary blocks do not add noise; document completion prints one green
 `✓ PASS` line. Failures clear the spinner and print a red `✗ FAIL` block identity,
 the full first command, and the existing mismatch, output, timeout, spawn, setup,
@@ -195,7 +200,9 @@ shared run summary.
 
 Colors follow terminal detection and `NO_COLOR`; redirected output contains no
 ANSI color sequences. Long Unicode paths and headings are display-width
-truncated in live terminal status lines without changing diagnostics.
+truncated in live terminal status lines without changing diagnostics or the
+right-aligned timers. Very narrow terminals keep separate document and block
+lines and clamp each line to the available display width.
 `--verbose` retains its existing meaning: print captured output and comparison
 details inside the same document/block boundaries.
 

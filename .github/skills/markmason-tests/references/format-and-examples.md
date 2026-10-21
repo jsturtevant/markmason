@@ -142,6 +142,8 @@ Keep an expected exit after `always`, for example `markmason always (exit 2)`.
   readable as example output; do not collapse them into dense one-line regexes.
   The stable `Blocks:` total is the final summary line, so `expected-contains`
   can skip the dynamic duration without leaving unmatched trailing output.
+  For TTY walkthrough snapshots, do not hardcode document or block elapsed values;
+  assert the surrounding document/block identity and stable final totals instead.
 
 ## Frontmatter and state
 

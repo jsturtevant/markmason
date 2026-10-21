@@ -1634,6 +1634,8 @@ fn run(options: Options) -> Result<bool> {
         };
         if stepping.is_none() {
             presenter.document_start(&file)?;
+        } else if let Some(session) = stepping.as_mut() {
+            session.begin_document(&file);
         }
         let timeout = spec
             .timeout
@@ -1814,6 +1816,9 @@ fn run(options: Options) -> Result<bool> {
             presenter.document_error(&file, "Terminal", &error)?;
             failed += 1;
         }
+        if stepping.is_some() && setup_result.is_ok() {
+            presenter.resume_document(&file, document_started)?;
+        }
         if setup_result.is_ok() {
             let before_failed = document.failed;
             run_deferred(
@@ -1829,6 +1834,9 @@ fn run(options: Options) -> Result<bool> {
             document.errors += 1;
             presenter.document_error(&file, "Fixture cleanup", &error)?;
             failed += 1;
+        }
+        if stepping.is_some() {
+            presenter.end_document_progress()?;
         }
         document.cancelled |= cancellation::signal().is_some()
             || stepping.as_ref().is_some_and(step::Session::stopped);

@@ -1,4 +1,4 @@
-use crate::{cancellation, matching, spec};
+use crate::{cancellation, matching, presentation, spec};
 use anstream::{AutoStream, ColorChoice};
 use anyhow::{Context, Result, bail};
 use crossterm::{
@@ -19,7 +19,7 @@ use std::{
     ops::Range,
     sync::mpsc::{self, Receiver},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -189,6 +189,7 @@ pub struct Session {
     document_blocks: usize,
     block: usize,
     file: String,
+    document_file: String,
     title: Option<String>,
     frame: Option<Frame>,
     mode: Mode,
@@ -202,6 +203,9 @@ pub struct Session {
     input_text: String,
     hint: Option<String>,
     stopped: bool,
+    document_started: Option<Instant>,
+    block_started: Option<Instant>,
+    timer_rendered: Instant,
 }
 
 impl Session {
@@ -241,6 +245,7 @@ impl Session {
             document_blocks: 0,
             block: 0,
             file: String::new(),
+            document_file: String::new(),
             title: None,
             frame: None,
             mode: Mode::Command,
@@ -254,6 +259,9 @@ impl Session {
             input_text: String::new(),
             hint: None,
             stopped: false,
+            document_started: None,
+            block_started: None,
+            timer_rendered: Instant::now(),
         };
         writeln!(
             session.output,
@@ -276,10 +284,18 @@ impl Session {
                 .recv_timeout(Duration::from_millis(50))
             {
                 Ok(line) => return line.context("Failed reading walkthrough input"),
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Timeout) => self.refresh_timer()?,
                 Err(error) => return Err(error).context("Walkthrough input reader stopped"),
             }
         }
+    }
+
+    fn refresh_timer(&mut self) -> Result<()> {
+        if self.frame.is_some() && self.timer_rendered.elapsed() >= Duration::from_secs(1) {
+            self.timer_rendered = Instant::now();
+            self.render()?;
+        }
+        Ok(())
     }
 
     pub fn prompt_input(&mut self, file: &str, input: &spec::Input) -> Result<Option<String>> {
@@ -335,6 +351,7 @@ impl Session {
                 event
             } else {
                 if !event::poll(Duration::from_millis(50))? {
+                    self.refresh_timer()?;
                     continue;
                 }
                 event::read().context("Failed reading walkthrough key")?
@@ -475,10 +492,18 @@ impl Session {
         self.run_block = run_block;
         self.block = block;
         self.document_blocks = document_blocks;
+        self.block_started = Some(Instant::now());
         self.frame = None;
         self.scroll = 0;
         self.hint = None;
         Ok(())
+    }
+
+    pub fn begin_document(&mut self, file: &str) {
+        self.document_file = file.to_owned();
+        self.document_started = Some(Instant::now());
+        self.block_started = None;
+        self.timer_rendered = Instant::now();
     }
 
     pub fn prepare(
@@ -588,14 +613,38 @@ impl Session {
             Phase::ExecutionError => "OUTPUT CAPTURED BEFORE ERROR",
             _ => "ACTUAL OUTPUT",
         };
+        let (rows, columns) = Term::stdout().size();
+        let width = usize::from(columns).saturating_sub(1);
+        let document_elapsed = self
+            .document_started
+            .map(|started| presentation::duration(started.elapsed()))
+            .unwrap_or_else(|| "<1s".into());
+        let block_elapsed = self
+            .block_started
+            .map(|started| presentation::duration(started.elapsed()))
+            .unwrap_or_else(|| "<1s".into());
         let mut lines = vec![
             format!("{CYAN}{RULE}{RESET}"),
             format!(
-                "{CYAN}▶ {}{RESET}  |  {BOLD}Block {}/{} — {}{RESET}",
-                plain(&self.file),
-                self.block,
-                self.document_blocks,
-                plain(self.title.as_deref().unwrap_or("(unnamed block)"))
+                "{CYAN}{}{RESET}",
+                presentation::timed_line(
+                    &format!("▶ {}", plain(&self.document_file)),
+                    &document_elapsed,
+                    width
+                )
+            ),
+            format!(
+                "{BOLD}{}{RESET}",
+                presentation::timed_line(
+                    &format!(
+                        "  Block {}/{} — {}",
+                        self.block,
+                        self.document_blocks,
+                        plain(self.title.as_deref().unwrap_or("(unnamed block)"))
+                    ),
+                    &block_elapsed,
+                    width
+                )
             ),
         ];
         if !frame.description.is_empty() {
@@ -655,7 +704,6 @@ impl Session {
         }
         let waiting = self.mode == Mode::Command && frame.phase != Phase::Running;
         let action = self.action().to_owned();
-        let (rows, columns) = Term::stdout().size();
         let newline = if self.screen && terminal::is_raw_mode_enabled()? {
             "\r\n"
         } else {

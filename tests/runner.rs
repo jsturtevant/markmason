@@ -1228,6 +1228,41 @@ fn partial_output_assertions_keep_their_mode_in_walkthroughs() {
 }
 
 #[test]
+fn step_document_timer_includes_user_pause_time() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("lesson.md"),
+        "## Pause here\n```markmason\napp echo ready\n```\n```expected\nready\n```\n",
+    )
+    .unwrap();
+    let (child, mut stdin, receive) = step_process(dir.path(), &[]);
+    let mut transcript = String::new();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !transcript.contains("Enter: Finish walkthrough") && Instant::now() < deadline {
+        if let Ok(chunk) = receive.recv_timeout(Duration::from_millis(50)) {
+            transcript.push_str(&chunk.unwrap());
+        }
+    }
+    assert!(
+        transcript.contains("Enter: Finish walkthrough"),
+        "{transcript}"
+    );
+    let timer_deadline = Instant::now() + Duration::from_secs(3);
+    while !transcript.contains("00:01") && Instant::now() < timer_deadline {
+        if let Ok(chunk) = receive.recv_timeout(Duration::from_millis(100)) {
+            transcript.push_str(&chunk.unwrap());
+        }
+    }
+    assert!(transcript.contains("▶ lesson.md"), "{transcript}");
+    assert!(transcript.contains("00:01"), "{transcript}");
+    stdin.write_all(b"\n").unwrap();
+    drop(stdin);
+    let output = child.wait_with_output().unwrap();
+    transcript.extend(receive.into_iter().map(Result::unwrap));
+    assert!(output.status.success(), "{transcript}\n{}", text(&output));
+}
+
+#[test]
 fn invalid_regex_fails_before_running_commands() {
     let specs = tempfile::tempdir().unwrap();
     let marker = specs.path().join("must-not-exist");
@@ -2020,7 +2055,8 @@ fn step_mode_accepts_environment_file_filters_without_a_picker() {
         assert!(output.status.success(), "{result}");
         assert!(selected.exists(), "{result}");
         assert!(!skipped.exists(), "{result}");
-        assert!(result.contains("▶ chosen.md  |  Block 1/1"), "{result}");
+        assert!(result.contains("▶ chosen.md"), "{result}");
+        assert!(result.contains("Block 1/1"), "{result}");
         assert!(
             !result.contains("Choose a Markdown walkthrough"),
             "{result}"
@@ -2109,10 +2145,8 @@ fn step_mode_picker_searches_navigates_and_cancels_before_setup() {
             assert!(result.contains("Interrupted by signal 2"), "{result}");
             assert!(!result.contains("MARKMASON WALKTHROUGH"), "{result}");
         } else {
-            assert!(
-                result.contains("nested/b selected.md  |  Block 1/1"),
-                "{result}"
-            );
+            assert!(result.contains("▶ nested/b selected.md"), "{result}");
+            assert!(result.contains("Block 1/1"), "{result}");
             assert!(result.contains("Walkthrough finished"), "{result}");
         }
     }
@@ -2389,7 +2423,8 @@ fn step_mode_filters_files_and_checks_combined_output_after_the_block() {
     assert!(output.status.success(), "{result}");
     for expected in [
         "MARKMASON WALKTHROUGH",
-        "lesson.md  |  Block 1/1",
+        "▶ lesson.md",
+        "Block 1/1",
         "Print two lines",
         "COMMAND 1 OF 2",
         " > [running] app echo first",
