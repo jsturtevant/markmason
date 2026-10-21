@@ -1,4 +1,4 @@
-use anstream::{AutoStream, ColorChoice};
+use anstream::{AutoStream, ColorChoice, StripStream};
 use dialoguer::console::measure_text_width;
 use std::{
     io::{self, IsTerminal, Write},
@@ -67,7 +67,28 @@ impl Document {
 pub struct Presenter {
     tty: bool,
     started: Instant,
-    output: AutoStream<std::io::Stdout>,
+    output: Destination,
+}
+
+enum Destination {
+    Live(AutoStream<std::io::Stdout>),
+    Buffered(StripStream<Vec<u8>>),
+}
+
+impl Write for Destination {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::Live(output) => output.write(buffer),
+            Self::Buffered(output) => output.write(buffer),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Self::Live(output) => output.flush(),
+            Self::Buffered(output) => output.flush(),
+        }
+    }
 }
 
 impl Presenter {
@@ -77,7 +98,24 @@ impl Presenter {
         Self {
             tty,
             started: Instant::now(),
-            output: AutoStream::new(io::stdout(), ColorChoice::Auto),
+            output: Destination::Live(AutoStream::new(io::stdout(), ColorChoice::Auto)),
+        }
+    }
+
+    pub fn buffered() -> Self {
+        Self {
+            tty: false,
+            started: Instant::now(),
+            output: Destination::Buffered(StripStream::new(Vec::new())),
+        }
+    }
+
+    pub fn into_buffer(self) -> String {
+        match self.output {
+            Destination::Buffered(output) => {
+                String::from_utf8_lossy(&output.into_inner()).into_owned()
+            }
+            Destination::Live(_) => String::new(),
         }
     }
 
@@ -111,7 +149,7 @@ impl Presenter {
         diagnostics: &str,
     ) -> io::Result<()> {
         progress.finish()?;
-        self.diagnostics(diagnostics)?;
+        self.details(diagnostics)?;
         if !self.tty || block.deferred || !diagnostics.is_empty() {
             let line = format!("  ✓ PASS {}", block.label());
             writeln!(
@@ -137,7 +175,7 @@ impl Presenter {
         diagnostics: &str,
     ) -> io::Result<()> {
         progress.finish()?;
-        self.diagnostics(diagnostics)?;
+        self.details(diagnostics)?;
         writeln!(self.output, "  {RED}✗ FAIL{RESET}  {}", block.label())?;
         writeln!(self.output, "    Document: {file}")?;
         for (index, command) in block.command.lines().enumerate() {
@@ -166,7 +204,7 @@ impl Presenter {
         diagnostics: &str,
     ) -> io::Result<()> {
         progress.finish()?;
-        self.diagnostics(diagnostics)?;
+        self.details(diagnostics)?;
         writeln!(
             self.output,
             "  {YELLOW}■ CANCELLED{RESET}  {}",
@@ -190,7 +228,7 @@ impl Presenter {
         self.output.flush()
     }
 
-    fn diagnostics(&mut self, diagnostics: &str) -> io::Result<()> {
+    pub fn details(&mut self, diagnostics: &str) -> io::Result<()> {
         if !diagnostics.is_empty() {
             write!(self.output, "{diagnostics}")?;
             self.output.flush()?;

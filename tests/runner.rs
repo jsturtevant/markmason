@@ -66,6 +66,10 @@ fn text(output: &Output) -> String {
     )
 }
 
+fn nanos(path: impl AsRef<Path>) -> u128 {
+    fs::read_to_string(path).unwrap().parse().unwrap()
+}
+
 #[test]
 fn redirected_progress_groups_documents_blocks_and_failures_without_color() {
     let dir = tempfile::tempdir().unwrap();
@@ -235,6 +239,242 @@ fn fail_fast_is_rejected_with_nonexecuting_or_interactive_modes() {
             text(&output)
         );
     }
+}
+
+#[test]
+fn parallel_workers_overlap_files_respect_limits_and_group_output() {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, delay) in [("a", 500), ("b", 100), ("c", 100)] {
+        fs::write(
+            dir.path().join(format!("{name}.md")),
+            format!(
+                "```markmason\napp timeline '{}' {delay}\n```\n",
+                shell_path(&dir.path().join(name))
+            ),
+        )
+        .unwrap();
+    }
+    let output = command(dir.path())
+        .args(["--parallel", "2"])
+        .output()
+        .unwrap();
+    let transcript = text(&output);
+    assert!(output.status.success(), "{transcript}");
+    assert!(nanos(dir.path().join("a.start")) < nanos(dir.path().join("b.end")));
+    assert!(nanos(dir.path().join("b.start")) < nanos(dir.path().join("a.end")));
+    assert!(
+        nanos(dir.path().join("c.start"))
+            >= nanos(dir.path().join("a.end")).min(nanos(dir.path().join("b.end")))
+    );
+    let a = transcript.find("RUN  a.md").unwrap();
+    let b = transcript.find("RUN  b.md").unwrap();
+    let c = transcript.find("RUN  c.md").unwrap();
+    assert!(a < b && b < c, "{transcript}");
+
+    let output = command(dir.path())
+        .args(["--parallel", "1"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(nanos(dir.path().join("a.end")) <= nanos(dir.path().join("b.start")));
+
+    let output = command(dir.path()).arg("--parallel").output().unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+}
+
+#[test]
+fn parallel_false_is_a_serial_barrier() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("a.md"),
+        format!(
+            "```markmason\napp timeline '{}' 300\n```\n",
+            shell_path(&dir.path().join("a"))
+        ),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("b.md"),
+        format!(
+            "---\nparallel: false\n---\n```markmason\napp timeline '{}' 100\n```\n",
+            shell_path(&dir.path().join("b"))
+        ),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("c.md"),
+        format!(
+            "```markmason\napp timeline '{}' 300\n```\n",
+            shell_path(&dir.path().join("c"))
+        ),
+    )
+    .unwrap();
+    let output = command(dir.path())
+        .args(["--parallel", "3"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(nanos(dir.path().join("a.end")) <= nanos(dir.path().join("b.start")));
+    assert!(nanos(dir.path().join("b.end")) <= nanos(dir.path().join("c.start")));
+}
+
+#[test]
+fn parallel_fail_fast_stops_scheduling_and_finishes_inflight_cleanup() {
+    let dir = tempfile::tempdir().unwrap();
+    let a_clean = dir.path().join("a-clean");
+    let b_clean = dir.path().join("b-clean");
+    let c_ran = dir.path().join("c-ran");
+    fs::write(
+        dir.path().join("a.md"),
+        format!(
+            "```markmason\napp fail\n```\n```markmason always\napp mark '{}'\n```\n",
+            shell_path(&a_clean)
+        ),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("b.md"),
+        format!(
+            "```markmason\napp timeline '{}' 300\n```\n\
+             ```markmason always\napp mark '{}'\n```\n",
+            shell_path(&dir.path().join("b")),
+            shell_path(&b_clean)
+        ),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("c.md"),
+        format!("```markmason\napp mark '{}'\n```\n", shell_path(&c_ran)),
+    )
+    .unwrap();
+    let output = command(dir.path())
+        .args(["--parallel", "2", "--fail-fast"])
+        .output()
+        .unwrap();
+    let transcript = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{transcript}");
+    assert!(a_clean.exists(), "{transcript}");
+    assert!(b_clean.exists(), "{transcript}");
+    assert!(!c_ran.exists(), "{transcript}");
+    assert!(transcript.contains("1 not run"), "{transcript}");
+    assert!(transcript.contains("- c.md"), "{transcript}");
+}
+
+#[test]
+fn parallel_rejects_invalid_values_and_interactive_mode() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("lesson.md"),
+        "```markmason\napp echo ready\n```\n",
+    )
+    .unwrap();
+    for invalid in ["0", "-1", "nope", "257"] {
+        let output = command(dir.path())
+            .args(["--parallel", invalid])
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{invalid}: {}",
+            text(&output)
+        );
+    }
+    let output = command(dir.path())
+        .args(["--parallel", "2", "--step"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert!(
+        text(&output).contains("cannot be used with"),
+        "{}",
+        text(&output)
+    );
+    let output = command(dir.path())
+        .args(["--parallel", "2", "--list"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(text(&output).contains("Block 1/1"), "{}", text(&output));
+}
+
+#[test]
+fn parallel_failure_output_is_grouped_in_file_order() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("a.md"),
+        format!(
+            "```markmason\napp timeline '{}' 300\napp fail\n```\n",
+            shell_path(&dir.path().join("a"))
+        ),
+    )
+    .unwrap();
+    fs::write(dir.path().join("b.md"), "```markmason\napp fail\n```\n").unwrap();
+    let output = command(dir.path())
+        .args(["--parallel", "2"])
+        .output()
+        .unwrap();
+    let transcript = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{transcript}");
+    let a = transcript.find("RUN  a.md").unwrap();
+    let a_end = transcript.find("✗ FAIL  a.md").unwrap();
+    let b = transcript.find("RUN  b.md").unwrap();
+    assert!(a < a_end && a_end < b, "{transcript}");
+    assert_eq!(transcript.matches("Command:").count(), 2, "{transcript}");
+}
+
+#[cfg(unix)]
+#[test]
+fn parallel_cancellation_allows_inflight_cleanup_and_stops_scheduling() {
+    let dir = tempfile::tempdir().unwrap();
+    let a_started = dir.path().join("a-started");
+    let b_started = dir.path().join("b-started");
+    let a_clean = dir.path().join("a-clean");
+    let b_clean = dir.path().join("b-clean");
+    let c_ran = dir.path().join("c-ran");
+    for (name, started, clean) in [("a", &a_started, &a_clean), ("b", &b_started, &b_clean)] {
+        fs::write(
+            dir.path().join(format!("{name}.md")),
+            format!(
+                "```markmason\napp tree '{}'\n```\n\
+                 ```markmason always\napp mark '{}'\n```\n",
+                shell_path(started),
+                shell_path(clean)
+            ),
+        )
+        .unwrap();
+    }
+    fs::write(
+        dir.path().join("c.md"),
+        format!("```markmason\napp mark '{}'\n```\n", shell_path(&c_ran)),
+    )
+    .unwrap();
+    let mut child = command(dir.path())
+        .args(["--parallel", "2"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while (!a_started.exists() || !b_started.exists()) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if !a_started.exists() || !b_started.exists() {
+        child.kill().unwrap();
+        panic!(
+            "Parallel commands did not start: {}",
+            text(&child.wait_with_output().unwrap())
+        );
+    }
+    assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGINT) }, 0);
+    let output = child.wait_with_output().unwrap();
+    let transcript = text(&output);
+    assert_eq!(output.status.code(), Some(130), "{transcript}");
+    assert!(a_clean.exists(), "{transcript}");
+    assert!(b_clean.exists(), "{transcript}");
+    assert!(!c_ran.exists(), "{transcript}");
+    assert!(transcript.contains("CANCELLED"), "{transcript}");
+    assert!(transcript.contains("1 not run"), "{transcript}");
 }
 
 #[cfg(unix)]

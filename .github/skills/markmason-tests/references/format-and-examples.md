@@ -204,3 +204,6 @@ See [the executable guide](../../../../tests/cli/shell.md).
 - Use `--fail-fast` only for execution: it stops after the first failed
   document finishes deferred cleanup and reports later selected files as not run.
   Do not combine it with `--list` or `--step`.
+- Use `--parallel` or `--parallel N` only for independent files. Commands within
+  a file remain ordered. Mark shared-resource files with `parallel: false`; they
+  wait for active files and run alone. `--parallel` and `--step` are incompatible.

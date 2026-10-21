@@ -46,6 +46,8 @@ mm path/to/specs            # Another directory
 mm path/to/walkthrough.md   # One Markdown file
 mm --list                  # Discover without executing
 mm --fail-fast             # Stop after the first failed document cleans up
+mm --parallel              # Use available logical CPUs for independent files
+mm --parallel 8            # Bound file execution to eight workers
 mm --file-pattern greet    # Select files by regex
 mm --step                  # Pick a file and walk through it
 mm --step --file-pattern '^greet\.md$'  # Skip the picker
@@ -157,6 +159,7 @@ that prints text, shows prompts, and writes test state. Both go on `PATH`.
 | Expected failure | `markmason (exit 1)` on the opening fence |
 | Deferred cleanup | `markmason always`; run automatically after the file |
 | Stop after one failed document | `--fail-fast`; cleanup still runs |
+| Bounded file concurrency | `--parallel [N]`; files remain internally ordered |
 | Piped input | `stdin` block |
 | Interactive terminal | `pty` block with `match:` / `send:` |
 | Per-file setup | `setup: python3 setup.py` in YAML frontmatter |
