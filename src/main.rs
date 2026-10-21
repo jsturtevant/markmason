@@ -1504,7 +1504,7 @@ fn run(options: Options) -> Result<bool> {
         for (file, spec, indices) in &specs {
             let listed_total = indices.len() + spec.cases.iter().filter(|case| case.always).count();
             if indices.is_empty() {
-                presenter.document_start(file)?;
+                presenter.list_document(file, &[])?;
                 presenter.setup_fail(
                     file,
                     &anyhow::anyhow!(
@@ -1756,10 +1756,11 @@ fn run(options: Options) -> Result<bool> {
                 };
                 let mut diagnostics = String::new();
                 let result = if let Some(session) = stepping.as_mut() {
+                    let heading = presentation::full_heading(case.title.as_deref(), &case.command);
                     session
                         .begin_block(
                             &file,
-                            Some(&block.heading),
+                            Some(&heading),
                             first_block + offset + 1,
                             offset + 1,
                             listed_total,

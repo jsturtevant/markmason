@@ -627,29 +627,27 @@ impl Session {
             .block_started
             .map(|started| presentation::duration(started.elapsed()))
             .unwrap_or_else(|| "<1s".into());
+        let document_label = format!("▶ {}", plain(&self.document_file));
+        let block_label = format!(
+            "  Block {}/{} — {}",
+            self.block,
+            self.document_blocks,
+            plain(self.title.as_deref().unwrap_or("(unnamed block)"))
+        );
+        let document_line = if self.screen {
+            presentation::timed_line(&document_label, &document_elapsed, width)
+        } else {
+            format!("{document_label}  {document_elapsed}")
+        };
+        let block_line = if self.screen {
+            presentation::timed_line(&block_label, &block_elapsed, width)
+        } else {
+            format!("{block_label}  {block_elapsed}")
+        };
         let mut lines = vec![
             format!("{CYAN}{RULE}{RESET}"),
-            format!(
-                "{CYAN}{}{RESET}",
-                presentation::timed_line(
-                    &format!("▶ {}", plain(&self.document_file)),
-                    &document_elapsed,
-                    width
-                )
-            ),
-            format!(
-                "{BOLD}{}{RESET}",
-                presentation::timed_line(
-                    &format!(
-                        "  Block {}/{} — {}",
-                        self.block,
-                        self.document_blocks,
-                        plain(self.title.as_deref().unwrap_or("(unnamed block)"))
-                    ),
-                    &block_elapsed,
-                    width
-                )
-            ),
+            format!("{CYAN}{document_line}{RESET}"),
+            format!("{BOLD}{block_line}{RESET}"),
         ];
         if !frame.description.is_empty() {
             lines.push(String::new());

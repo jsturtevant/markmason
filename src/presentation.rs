@@ -697,6 +697,10 @@ impl Drop for Progress {
 }
 
 pub fn heading(title: Option<&str>, command: &str) -> String {
+    fit(&full_heading(title, command), 72)
+}
+
+pub fn full_heading(title: Option<&str>, command: &str) -> String {
     let value = title
         .map(str::trim)
         .filter(|title| !title.is_empty())
@@ -707,7 +711,7 @@ pub fn heading(title: Option<&str>, command: &str) -> String {
                 .map(str::trim)
         })
         .unwrap_or("(unnamed block)");
-    fit(value, 72)
+    value.to_owned()
 }
 
 pub(crate) fn duration(value: Duration) -> String {

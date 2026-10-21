@@ -494,6 +494,49 @@ fn parallel_listing_rejects_documents_without_ordinary_blocks() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn tty_listing_errors_do_not_start_document_timers() {
+    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+    use std::io::Read;
+
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("prose.md"), "# No commands\n").unwrap();
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 10,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_mm"));
+    command.arg(dir.path());
+    command.arg("--list");
+    command.env("NO_COLOR", "1");
+    command.env("TERM", "xterm-256color");
+    let mut child = pair.slave.spawn_command(command).unwrap();
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().unwrap();
+    let mut bytes = Vec::new();
+    let mut chunk = [0; 4096];
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(count) => bytes.extend_from_slice(&chunk[..count]),
+            Err(error) if error.raw_os_error() == Some(libc::EIO) => break,
+            Err(error) => panic!("Failed reading list terminal: {error}"),
+        }
+    }
+    let status = child.wait().unwrap();
+    let raw = String::from_utf8_lossy(&bytes);
+    assert_eq!(status.exit_code(), 1, "{raw}");
+    assert!(raw.contains("prose.md"), "{raw}");
+    assert!(raw.contains("No test cases found"), "{raw}");
+    assert!(!raw.contains('▶'), "{raw}");
+    assert!(!raw.contains("\r\x1b[2K"), "{raw}");
+}
+
 #[test]
 fn parallel_failure_output_is_grouped_in_file_order() {
     let dir = tempfile::tempdir().unwrap();
@@ -1263,6 +1306,26 @@ fn redirected_step_pause_does_not_repeat_the_block_panel() {
     let output = child.wait_with_output().unwrap();
     transcript.extend(receive.into_iter().map(Result::unwrap));
     assert!(output.status.success(), "{transcript}\n{}", text(&output));
+}
+
+#[test]
+fn redirected_step_output_preserves_full_document_and_heading_labels() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = format!("{}-document-suffix.md", "very-long-".repeat(10));
+    let heading = format!("{} heading suffix", "Distinguishing long ".repeat(6));
+    fs::write(
+        dir.path().join(&file),
+        format!("## {heading}\n```markmason\napp echo ready\n```\n"),
+    )
+    .unwrap();
+    let output = step_output(dir.path(), &[], "f\n");
+    let transcript = text(&output);
+    assert!(output.status.success(), "{transcript}");
+    assert!(transcript.contains(&format!("▶ {file}")), "{transcript}");
+    assert!(
+        transcript.contains(&format!("Block 1/1 — {heading}")),
+        "{transcript}"
+    );
 }
 
 #[cfg(unix)]
