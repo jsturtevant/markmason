@@ -67,7 +67,12 @@ Learn more with real examples from `mm`:
 - [Stdin and pipes](tests/cli/input.md)
 - [Terminal prompts](tests/cli/interactive.md)
 - [Output matching](tests/cli/matching.md)
+- [Error cases](tests/cli/errors.md)
+- [Matching failures](tests/cli/matching-errors.md)
+- [Runtime failures and timeouts](tests/cli/runtime-errors.md)
 - [Setup and state](tests/cli/state.md)
+- [Required inputs](tests/cli/inputs.md)
+- [Repository fixtures](tests/cli/fixtures.md)
 - [Persistent Bash sessions](tests/cli/shell.md)
 - [Deferred cleanup](tests/cli/cleanup.md)
 - [Path variables](tests/cli/variables.md)
@@ -80,37 +85,7 @@ just test-markdown
 ```
 
 This builds `mm` and [`mm-test-cli`](tests/support/README.md), a small app
-that prints text, shows prompts, and writes test state. Both go on `PATH`.
-`mm-test-cli` is not shipped with `mm`; your own specs run your CLI instead.
-
-## Markmason features
-
-| Feature | Syntax |
-|---------|--------|
-| Run a command | `markmason` block |
-| Interactive walkthrough | `--step`, combined with the usual filters |
-| Exact output | `expected` block |
-| Ordered whole-line matching | `expected-contains` block; no unmatched trailing lines |
-| Literal text anywhere in output | `expected-substring` block |
-| Regex search across output | `expected-regex` block; Rust regex syntax |
-| Expected failure | `markmason (exit 1)` on the opening fence |
-| Deferred cleanup | `markmason always`; run automatically after the file |
-| Stop after one failed document | `--fail-fast`; cleanup still runs |
-| Bounded file concurrency | `--parallel [N]`; files remain internally ordered |
-| Piped input | `stdin` block |
-| Interactive terminal | `pty` block with `match:` / `send:` |
-| Per-file setup | `setup: python3 setup.py` in YAML frontmatter |
-| Shared Markdown setup | `setup: mm sharedset.md` |
-| Persistent Bash session | `shell: bash` in YAML frontmatter |
-| Clone a fixture | `clone: owner/repo` in frontmatter; requires authenticated `gh` |
-| Tags and timeout | `tags: [smoke]`, `timeout: 30` in frontmatter |
-
-By default, commands resolve from `PATH` without a shell. `shell: bash` opts
-one file into a persistent Bash session. Each file gets an isolated home and
-configuration directory; its cases run in order and share state.
-
-Headings describe the behavior. Each `markmason` block is one test: commands run
-in order, combine their output, and stop at the first nonzero exit.
+that prints text, shows prompts, and writes test state for demonstrating Markmason features.
 
 See the [specification reference](docs/specification.md) for setup, matching,
 PTYs, variables, filters, and cleanup details. Use `mm --help` for CLI options.
