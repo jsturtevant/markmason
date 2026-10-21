@@ -92,7 +92,7 @@ Learn more with real examples from `mm`:
 - [Path variables](tests/cli/variables.md)
 - [Environment filters](tests/cli/environment.md)
 
-Run the same files from this checkout (see [development prerequisites](#develop-and-self-test)):
+Run the markmason on these examples from this checkout (see [development prerequisites](#develop-and-self-test)):
 
 ```sh
 just test-markdown
@@ -101,9 +101,7 @@ just test-markdown
 This builds `mm` and [`mm-test-cli`](tests/support/README.md), a small app
 that prints text, shows prompts, and writes test state for demonstrating Markmason features.
 
-The [specification reference](docs/specification.md) may help users who need exact
-behavior, but is primarily written for agents and contributors developing
-Markmason itself. Use `mm --help` for CLI options.
+Use `mm --help` for CLI options.
 
 ## Develop and self-test
 
