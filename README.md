@@ -20,37 +20,14 @@ Or install from source with Rust 1.88+:
 cargo install --git https://github.com/jsturtevant/markmason --tag v0.4.1 --locked
 ```
 
-## Write a test
+## Run a test
 
-Save as `tests/cli/version.md`:
+Run the executable [getting-started guide](tests/cli/cli.md), which includes
+shell-free commands and an optional Bash example:
 
-````markdown
-# Write a Markmason test
-
-## Show the installed version
-
-```markmason
-mm --version
+```sh
+mm tests/cli/cli.md
 ```
-
-```expected
-mm 0.4.1
-```
-````
-
-To use Bash explicitly:
-
-````markdown
-## Say hello with Bash
-
-```markmason
-bash -c "echo Hello, world!"
-```
-
-```expected
-Hello, world!
-```
-````
 
 Run Markmason:
 

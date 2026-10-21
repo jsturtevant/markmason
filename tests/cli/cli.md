@@ -33,4 +33,16 @@ Print the installed version, not the help text describing the flag.
 mm 0.4.1
 ```
 
+## Run Bash explicitly
+
+Bash is optional. Invoke it directly when a test needs shell syntax.
+
+```markmason
+bash -c "echo Hello, world!"
+```
+
+```expected
+Hello, world!
+```
+
 [Run tests](running.md) | [Filter tests](filtering.md) | [Error cases](errors.md)
