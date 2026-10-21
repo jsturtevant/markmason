@@ -144,16 +144,60 @@ assertions work as for ordinary blocks.
   If Bash has exited, been replaced with `exec`, or cannot
   resume safely, deferred commands report the closed session rather than
   starting a new shell with missing state.
-- `--list` marks deferred commands with `[always]` and requires no inputs or
+- `--list` labels deferred commands as `Always` and requires no inputs or
   fixture. Name filters select ordinary blocks only; once one is selected,
   all cleanup blocks in that file run. Matching only cleanup commands selects
   nothing. A file containing only `always` blocks has no runnable ordinary test.
 - Walkthrough cleanup runs automatically outside the fullscreen view, with
-  visible `RUN always` / `PASS always` / `FAIL always` messages. It never asks
+  the same `Always N/N — heading` identity as other views. It never asks
   for another walkthrough confirmation. PTY steps must still be fully scripted.
 
 Keep cleanup safe when ordinary work stopped halfway through. See the
 [runnable guide](../tests/cli/cleanup.md).
+
+## Run progress and summaries
+
+Markmason uses Markdown document paths and block headings as the shared identity
+in normal runs, `--list`, and `--step`. A block without a heading falls back to
+its first command, truncated for display only; diagnostics retain the full
+command and output.
+
+Redirected output is append-only:
+
+```text
+RUN  getting-started.md
+  RUN  Block 1/2 — Create the project
+  ✓ PASS Block 1/2 — Create the project
+✓ PASS  getting-started.md  2/2 blocks  <1s
+```
+
+Interactive terminals show the active document once and update a cyan spinner
+line in place with the current `Block N/N — heading` and elapsed time. Completed
+passing ordinary blocks do not add noise; document completion prints one green
+`✓ PASS` line. Failures clear the spinner and print a red `✗ FAIL` block identity,
+the full first command, and the existing mismatch, output, timeout, spawn, setup,
+terminal, deferred-cleanup, or fixture-cleanup diagnostic.
+
+The final summary separates documents from blocks, lists every passing and
+failing document, and lists failed headings beneath their document. Deferred
+`always` blocks are included in the explicit block totals. Setup, terminal, and
+fixture cleanup errors fail the document without pretending to be Markdown
+blocks. Duration appears before the stable final `Blocks:` line so executable
+guides can use readable whole-line assertions without hardcoding timing.
+Quitting a walkthrough produces a yellow cancelled document and keeps
+the historical successful exit when no real failure occurred.
+
+`--list` groups blocks by document, labels them with their execution position,
+heading, and `Block` or `Always`, then prints their commands without setup,
+inputs, or fixture creation. `--step` uses the same path, `N/N`, heading fallback,
+`✓ PASS`, and `✗ FAIL` vocabulary inside its fullscreen view, followed by the
+shared run summary.
+
+Colors follow terminal detection and `NO_COLOR`; redirected output contains no
+ANSI color sequences. Long Unicode paths and headings are display-width
+truncated in live terminal status lines without changing diagnostics.
+`--verbose` retains its existing meaning: print captured output and comparison
+details inside the same document/block boundaries.
 
 ## Frontmatter and setup
 

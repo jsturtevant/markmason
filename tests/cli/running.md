@@ -15,14 +15,16 @@ mm tests/fixtures/passing
 Run every `.md` file in the directory. `basic.md` has two cases;
 `extra.md` has one.
 
-```expected
-basic.md
-PASS mm --help
-PASS mm --version
-extra.md
-PASS mm --version
-pass 3
-fail 0
+```expected-contains
+RUN  basic.md
+  RUN  Block 1/2 — Show help
+  ✓ PASS Block 1/2 — Show help
+  RUN  Block 2/2 — Show the installed version
+  ✓ PASS Block 2/2 — Show the installed version
+RUN  extra.md
+  RUN  Block 1/1 — Show the installed version
+  ✓ PASS Block 1/1 — Show the installed version
+Blocks: 3 passed, 0 failed (includes deferred)
 ```
 
 With no failures, `mm` exits with code 0.
@@ -37,10 +39,13 @@ Preview commands without running them.
 
 ```expected
 basic.md
-mm --help
-mm --version
+  Block 1/2 — Show help
+    mm --help
+  Block 2/2 — Show the installed version
+    mm --version
 extra.md
-mm --version
+  Block 1/1 — Show the installed version
+    mm --version
 ```
 
 No recursion: these fixtures only call help or version, never this guide's directory.
@@ -56,9 +61,11 @@ Paths in the listing are relative to the selected spec directory.
 
 ```expected
 a.md
-mm-test-cli echo top
+  Block 1/1 — Run a top-level command
+    mm-test-cli echo top
 nested/b.md
-mm-test-cli echo nested
+  Block 1/1 — Run a nested command
+    mm-test-cli echo nested
 ```
 
 ## Run nested specs in order
@@ -69,13 +76,14 @@ mm tests/fixtures/discovery
 
 Both discovered files run, in path order.
 
-```expected
-a.md
-PASS mm-test-cli echo top
-nested/b.md
-PASS mm-test-cli echo nested
-pass 2
-fail 0
+```expected-contains
+RUN  a.md
+  RUN  Block 1/1 — Run a top-level command
+  ✓ PASS Block 1/1 — Run a top-level command
+RUN  nested/b.md
+  RUN  Block 1/1 — Run a nested command
+  ✓ PASS Block 1/1 — Run a nested command
+Blocks: 2 passed, 0 failed (includes deferred)
 ```
 
 ## Choose the working directory
@@ -87,11 +95,11 @@ mm tests/fixtures/working-directory --cwd tests/fixtures/passing
 `--cwd` controls where commands run, not where specs are found.
 [This spec](../fixtures/working-directory/location.md) checks the actual directory.
 
-```expected
-location.md
-PASS mm-test-cli cwd
-pass 1
-fail 0
+```expected-contains
+RUN  location.md
+  RUN  Block 1/1 — Report the actual working directory
+  ✓ PASS Block 1/1 — Report the actual working directory
+Blocks: 1 passed, 0 failed (includes deferred)
 ```
 
 ## Show output and comparison details
@@ -103,14 +111,14 @@ mm tests/fixtures/diagnostics --verbose
 Show captured output and a comparison diff, even when the assertion passes.
 
 ```expected-contains
-output.md
+RUN  output.md
 ACTUAL:
 hello
 DIFF (expected vs actual):
 hello
-PASS mm-test-cli echo hello
-pass 1
-fail 0
+✓ PASS Block 1/1 — Print a short result for diagnostics
+Documents: 1 passed, 0 failed
+Blocks: 1 passed, 0 failed (includes deferred)
 ```
 
 [Filter tests](filtering.md) | [Error cases](errors.md)

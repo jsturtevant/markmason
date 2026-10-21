@@ -6,14 +6,15 @@ ordinary execution fails or a walkthrough stops. Cleanup runs automatically.
 ## See which blocks are deferred
 
 The [example file](../fixtures/always/lesson.md) puts cleanup first in the document.
-Listing shows ordinary commands first and marks cleanup with `[always]`.
+Listing shows ordinary commands first and labels cleanup as `Always`.
 
 ```markmason
 mm tests/fixtures/always/lesson.md --list
 ```
 
 ```expected-contains
-[always] cleanup_example
+Always 3/3 — Remove the state at the end
+cleanup_example
 ```
 
 ## Use the same Bash state
@@ -26,10 +27,10 @@ mm tests/fixtures/always/lesson.md --home-env TEST_HOME
 ```
 
 ```expected-contains
-RUN always (lesson.md): cleanup_example
-PASS always: cleanup_example
-pass 3
-fail 0
+RUN  Always 3/3 — Remove the state at the end
+✓ PASS Always 3/3 — Remove the state at the end
+Documents: 1 passed, 0 failed
+Blocks: 3 passed, 0 failed (includes deferred)
 ```
 
 Use `bash markmason always` for Markdown language styling. Add `shell: bash`
@@ -50,11 +51,11 @@ q
 ```
 
 ```expected-contains
-RUN always (lesson.md): cleanup_example
-PASS always: cleanup_example
+RUN  Always 3/3 — Remove the state at the end
+✓ PASS Always 3/3 — Remove the state at the end
 Walkthrough stopped
-Passed blocks: 1
-Failed blocks: 0
+Documents: 0 passed, 0 failed, 1 cancelled
+Blocks: 1 passed, 0 failed (includes deferred)
 ```
 
 All cleanup blocks are attempted in document order, even if one fails.

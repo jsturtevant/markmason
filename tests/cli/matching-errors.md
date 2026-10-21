@@ -13,11 +13,12 @@ mm tests/fixtures/matching-substring
 [`first` does not match `prefix first`](../fixtures/matching-substring/output.md).
 Contains matching is not a substring search.
 
-```expected-contains
-pass 0
-fail 1
-FAIL mm-test-cli lines "prefix first": Expected line 1 not found in output:
-expected: "first"
+```expected-substring
+  ✗ FAIL  Block 1/1 — Print a line that only partially matches
+    Document: output.md
+    Command: mm-test-cli lines "prefix first"
+    Expected line 1 not found in output:
+      expected: "first"
 ```
 
 ## Reject lines in the wrong order
@@ -28,11 +29,12 @@ mm tests/fixtures/matching-order
 
 [Both lines exist](../fixtures/matching-order/output.md), but in the wrong order.
 
-```expected-contains
-pass 0
-fail 1
-FAIL mm-test-cli lines second first: Expected line 2 not found in output:
-expected: "second"
+```expected-substring
+  ✗ FAIL  Block 1/1 — Print the expected lines in reverse order
+    Document: output.md
+    Command: mm-test-cli lines second first
+    Expected line 2 not found in output:
+      expected: "second"
 ```
 
 ## Reject unmatched trailing output
@@ -43,11 +45,12 @@ mm tests/fixtures/matching-trailing
 
 [Extra output after the match](../fixtures/matching-trailing/output.md) still fails.
 
-```expected-contains
-pass 0
-fail 1
-FAIL mm-test-cli lines first trailing: Actual output has 1 unmatched trailing line(s):
-trailing
+```expected-substring
+  ✗ FAIL  Block 1/1 — Print extra output after the expected line
+    Document: output.md
+    Command: mm-test-cli lines first trailing
+    Actual output has 1 unmatched trailing line(s):
+    trailing
 ```
 
 ## Report a missing substring
@@ -60,11 +63,11 @@ mm tests/fixtures/substring-mismatch
 ```
 
 ```expected-substring
-Expected substring not found in output:
-  expected: "missing phrase"
-Actual output:
-prefix first
-second trailing
+    Expected substring not found in output:
+      expected: "missing phrase"
+    Actual output:
+    prefix first
+    second trailing
 ```
 
 ## Report a missing regex match
@@ -77,11 +80,11 @@ mm tests/fixtures/regex-mismatch
 ```
 
 ```expected-substring
-Expected regex not found in output:
-  expected: "id: \\d+"
-Actual output:
-id: unknown
-request complete
+    Expected regex not found in output:
+      expected: "id: \\d+"
+    Actual output:
+    id: unknown
+    request complete
 ```
 
 ## Reject malformed patterns before execution

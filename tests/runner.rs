@@ -67,6 +67,224 @@ fn text(output: &Output) -> String {
 }
 
 #[test]
+fn redirected_progress_groups_documents_blocks_and_failures_without_color() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("a.md"),
+        "## Create the project\n```markmason\napp echo ready\n```\n```expected\nready\n```\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("b.md"),
+        "```markmason\napp echo ready\napp fail\n```\n",
+    )
+    .unwrap();
+    let output = command(dir.path()).env("NO_COLOR", "1").output().unwrap();
+    let transcript = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{transcript}");
+    for expected in [
+        "RUN  a.md",
+        "RUN  Block 1/1 — Create the project",
+        "✓ PASS Block 1/1 — Create the project",
+        "RUN  b.md",
+        "✗ FAIL  Block 1/1 — app echo ready",
+        "Command: app echo ready",
+        "             app fail",
+        "Documents: 1 passed, 1 failed",
+        "✓ a.md  1/1 blocks",
+        "✗ b.md  0/1 blocks",
+        "└─ app echo ready",
+        "Blocks: 1 passed, 1 failed (includes deferred)",
+        "Duration:",
+    ] {
+        assert!(transcript.contains(expected), "{expected:?}: {transcript}");
+    }
+    assert!(!transcript.contains('\x1b'), "{transcript:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn default_tty_progress_spins_truncates_and_restores_the_line() {
+    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+    use std::io::Read;
+
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("very-long-🚀-document-name.md"),
+        "## Create the project with a deliberately long Unicode heading 🚀🚀🚀\n\
+         ```markmason\napp pause\n```\n",
+    )
+    .unwrap();
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 10,
+            cols: 48,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_mm"));
+    command.arg(dir.path());
+    command.env("TERM", "xterm-256color");
+    command.env("NO_COLOR", "1");
+    command.env(
+        "PATH",
+        std::env::join_paths(
+            std::iter::once(helper().parent().unwrap().to_owned())
+                .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+        )
+        .unwrap(),
+    );
+    let mut child = pair.slave.spawn_command(command).unwrap();
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().unwrap();
+    let mut bytes = Vec::new();
+    let mut chunk = [0; 4096];
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(count) => bytes.extend_from_slice(&chunk[..count]),
+            Err(error) if error.raw_os_error() == Some(libc::EIO) => break,
+            Err(error) => panic!("Failed reading progress terminal: {error}"),
+        }
+    }
+    let status = child.wait().unwrap();
+    let raw = String::from_utf8_lossy(&bytes);
+    assert!(status.success(), "{raw}");
+    assert!(
+        SPINNER_CHARS.iter().any(|spinner| raw.contains(spinner)),
+        "{raw}"
+    );
+    assert!(raw.contains("\r\x1b[2K"), "{raw}");
+    assert!(raw.contains("✓ PASS"), "{raw}");
+    assert!(raw.contains("Summary"), "{raw}");
+    assert!(raw.contains("<1s"), "{raw}");
+    assert!(!raw.contains("\x1b[1;"), "{raw}");
+    for segment in raw.split(['\r', '\n']) {
+        let line = dialoguer::console::strip_ansi_codes(segment);
+        assert!(
+            dialoguer::console::measure_text_width(&line) < 48,
+            "{line:?}\n{raw}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn tty_spinner_clears_before_verbose_diagnostics() {
+    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+    use std::io::Read;
+
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("lesson.md"),
+        "## Wait briefly\n```markmason\napp pause\n```\n\
+         ## Wait again\n```markmason\napp pause\n```\n",
+    )
+    .unwrap();
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 10,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_mm"));
+    command.arg(dir.path());
+    command.arg("--verbose");
+    command.env("TERM", "xterm-256color");
+    command.env("NO_COLOR", "1");
+    command.env(
+        "PATH",
+        std::env::join_paths(
+            std::iter::once(helper().parent().unwrap().to_owned())
+                .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+        )
+        .unwrap(),
+    );
+    let mut child = pair.slave.spawn_command(command).unwrap();
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().unwrap();
+    let mut bytes = Vec::new();
+    let mut chunk = [0; 4096];
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(count) => bytes.extend_from_slice(&chunk[..count]),
+            Err(error) if error.raw_os_error() == Some(libc::EIO) => break,
+            Err(error) => panic!("Failed reading verbose progress terminal: {error}"),
+        }
+    }
+    let status = child.wait().unwrap();
+    let raw = String::from_utf8_lossy(&bytes);
+    assert!(status.success(), "{raw}");
+    let actual = raw.find("ACTUAL:").expect("verbose output should be shown");
+    let cleared = raw[..actual]
+        .rfind("\r\x1b[2K")
+        .expect("spinner should clear before diagnostics");
+    let first_pass = actual
+        + raw[actual..]
+            .find("✓ PASS Block 1/2")
+            .expect("first verbose block should retain its PASS identity");
+    assert!(cleared < actual, "{raw}");
+    assert!(!raw[actual..first_pass].contains('⠋'), "{raw}");
+    assert!(raw.contains("✓ PASS Block 1/2 — Wait briefly"), "{raw}");
+    assert!(raw.contains("✓ PASS Block 2/2 — Wait again"), "{raw}");
+}
+
+#[cfg(unix)]
+const SPINNER_CHARS: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+#[test]
+fn prerequisite_cleanup_keeps_caller_block_identities_stable() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("setup.md"),
+        "```markmason\napp echo setup\n```\n```expected\nsetup\n```\n\
+         ```markmason always\napp echo prerequisite cleanup\n```\n",
+    )
+    .unwrap();
+    let lesson = dir.path().join("lesson.md");
+    fs::write(
+        &lesson,
+        "---\nsetup: mm setup.md\n---\n\
+         ```markmason\napp echo ordinary\n```\n```expected\nordinary\n```\n\
+         ```markmason always\napp echo caller cleanup\n```\n",
+    )
+    .unwrap();
+
+    let listed = command(&lesson).arg("--list").output().unwrap();
+    let listed = text(&listed);
+    assert!(listed.contains("Block 1/2 — app echo ordinary"), "{listed}");
+    assert!(
+        listed.contains("Always 2/2 — app echo caller cleanup"),
+        "{listed}"
+    );
+    assert!(!listed.contains("prerequisite cleanup"), "{listed}");
+
+    let output = command(&lesson).output().unwrap();
+    let transcript = text(&output);
+    assert!(output.status.success(), "{transcript}");
+    assert!(
+        transcript.contains("RUN  Block 1/2 — app echo ordinary"),
+        "{transcript}"
+    );
+    assert!(
+        transcript.contains("RUN  Always 1/1 — app echo prerequisite cleanup"),
+        "{transcript}"
+    );
+    assert!(
+        transcript.contains("RUN  Always 2/2 — app echo caller cleanup"),
+        "{transcript}"
+    );
+    assert!(
+        transcript.contains("Blocks: 3 passed, 0 failed"),
+        "{transcript}"
+    );
+}
+
+#[test]
 fn always_blocks_run_once_after_ordinary_blocks_in_document_order() {
     for shell in ["", "shell: bash\n"] {
         let dir = tempfile::tempdir().unwrap();
@@ -84,11 +302,11 @@ fn always_blocks_run_once_after_ordinary_blocks_in_document_order() {
         let output = command(dir.path()).output().unwrap();
         assert!(output.status.success(), "{}", text(&output));
         assert!(
-            text(&output).contains("pass 4\nfail 0"),
+            text(&output).contains("Blocks: 4 passed, 0 failed"),
             "{}",
             text(&output)
         );
-        assert_eq!(text(&output).matches("RUN always").count(), 3);
+        assert_eq!(text(&output).matches("RUN  Always").count(), 3);
     }
 }
 
@@ -122,7 +340,7 @@ fn always_blocks_run_after_assertion_command_spawn_and_timeout_failures() {
             assert_eq!(output.status.code(), Some(1), "{transcript}");
             assert!(transcript.contains(message), "{message}: {transcript}");
             assert!(marker.exists(), "{shell}{command_text}: {transcript}");
-            assert_eq!(transcript.matches("RUN always").count(), 1, "{transcript}");
+            assert_eq!(transcript.matches("RUN  Always").count(), 1, "{transcript}");
         }
     }
 }
@@ -148,8 +366,15 @@ fn later_always_blocks_run_even_after_cleanup_failures() {
         let output = command(dir.path()).output().unwrap();
         let transcript = text(&output);
         assert_eq!(output.status.code(), Some(1), "{transcript}");
-        assert_eq!(transcript.matches("FAIL always").count(), 2, "{transcript}");
-        assert!(transcript.contains("pass 3\nfail 2"), "{transcript}");
+        assert_eq!(
+            transcript.matches("FAIL  Always").count(),
+            2,
+            "{transcript}"
+        );
+        assert!(
+            transcript.contains("Blocks: 3 passed, 2 failed"),
+            "{transcript}"
+        );
         assert!(marker.exists(), "{transcript}");
     }
 }
@@ -179,7 +404,7 @@ fn always_blocks_preserve_custom_and_ignored_sigint_traps() {
         let output = command(&lesson).output().unwrap();
         assert!(output.status.success(), "{}", text(&output));
         assert!(
-            text(&output).contains("pass 2\nfail 0"),
+            text(&output).contains("Blocks: 2 passed, 0 failed"),
             "{}",
             text(&output)
         );
@@ -208,7 +433,10 @@ fn always_timeout_runs_user_sigint_handler_before_cleanup() {
     let transcript = text(&output);
     assert_eq!(output.status.code(), Some(1), "{transcript}");
     assert!(transcript.contains("timed out"), "{transcript}");
-    assert!(transcript.contains("pass 2\nfail 1"), "{transcript}");
+    assert!(
+        transcript.contains("Blocks: 2 passed, 1 failed"),
+        "{transcript}"
+    );
     assert_eq!(fs::read_to_string(&marker).unwrap(), "released\n");
 }
 
@@ -231,10 +459,13 @@ fn pty_cleanup_steps_run_after_bash_timeout_recovery() {
     let transcript = text(&output);
     assert_eq!(output.status.code(), Some(1), "{transcript}");
     assert!(
-        transcript.contains("PASS always: app interactive"),
+        transcript.contains("✓ PASS Always 2/2 — app interactive"),
         "{transcript}"
     );
-    assert!(transcript.contains("pass 1\nfail 1"), "{transcript}");
+    assert!(
+        transcript.contains("Blocks: 1 passed, 1 failed"),
+        "{transcript}"
+    );
 }
 
 #[test]
@@ -254,7 +485,11 @@ fn always_blocks_report_a_terminated_bash_session_without_restarting() {
     let output = command(dir.path()).output().unwrap();
     let transcript = text(&output);
     assert_eq!(output.status.code(), Some(1), "{transcript}");
-    assert_eq!(transcript.matches("FAIL always").count(), 2, "{transcript}");
+    assert_eq!(
+        transcript.matches("FAIL  Always").count(),
+        2,
+        "{transcript}"
+    );
     assert!(
         transcript.contains("Bash session is closed"),
         "{transcript}"
@@ -291,8 +526,11 @@ fn always_blocks_share_bash_and_markdown_setup_state() {
         .unwrap();
     let transcript = text(&output);
     assert_eq!(output.status.code(), Some(1), "{transcript}");
-    assert!(transcript.contains("pass 3\nfail 1"), "{transcript}");
-    assert!(!transcript.contains("FAIL always"), "{transcript}");
+    assert!(
+        transcript.contains("Blocks: 3 passed, 1 failed"),
+        "{transcript}"
+    );
+    assert!(!transcript.contains("FAIL  Always"), "{transcript}");
 }
 
 #[test]
@@ -317,7 +555,8 @@ fn always_blocks_are_listed_but_cannot_select_a_file_on_their_own() {
         .unwrap();
     let transcript = text(&output);
     assert!(output.status.success(), "{transcript}");
-    assert!(transcript.contains("[always] app mark"), "{transcript}");
+    assert!(transcript.contains("Always 2/2"), "{transcript}");
+    assert!(transcript.contains("app mark"), "{transcript}");
     assert!(!marker.exists());
     let output = command(&lesson)
         .args(["--test-name-pattern", "^app mark"])
@@ -370,7 +609,7 @@ fn always_blocks_are_skipped_when_inputs_fixture_or_setup_fail() {
         let output = runner.output().unwrap();
         assert!(!output.status.success(), "{}", text(&output));
         assert!(!marker.exists(), "{}", text(&output));
-        assert!(!text(&output).contains("RUN always"), "{}", text(&output));
+        assert!(!text(&output).contains("RUN  Always"), "{}", text(&output));
     }
 }
 
@@ -395,7 +634,7 @@ fn always_blocks_do_not_prompt_after_walkthrough_quit_or_eof() {
             let output = step_output(dir.path(), &[], input);
             let transcript = text(&output);
             assert!(output.status.success(), "{transcript}");
-            assert!(transcript.contains("RUN always"), "{transcript}");
+            assert!(transcript.contains("RUN  Always"), "{transcript}");
             assert!(marker.exists(), "{transcript}");
             assert!(!later.exists(), "{transcript}");
         }
@@ -421,7 +660,7 @@ fn partial_output_assertions_keep_their_mode_in_walkthroughs() {
         let transcript = text(&output);
         assert!(output.status.success(), "{transcript}");
         assert!(transcript.contains(label), "{transcript}");
-        assert!(transcript.contains("Passed blocks: 1"), "{transcript}");
+        assert!(transcript.contains("Blocks: 1 passed"), "{transcript}");
     }
 }
 
@@ -558,7 +797,7 @@ fn bash_sessions_isolate_files_ignore_startup_scripts_and_preserve_shell_quoting
         .unwrap();
     let result = text(&output);
     assert!(output.status.success(), "{result}");
-    assert!(result.contains("pass 2\nfail 0"), "{result}");
+    assert!(result.contains("Blocks: 2 passed, 0 failed"), "{result}");
     assert!(!result.contains("unexpected startup"), "{result}");
 }
 
@@ -628,7 +867,7 @@ fn bash_sessions_preserve_previous_status_and_noclobber_in_both_capture_modes() 
         let output = command(&lesson).output().unwrap();
         let result = text(&output);
         assert!(output.status.success(), "{result}");
-        assert!(result.contains("pass 5\nfail 0"), "{result}");
+        assert!(result.contains("Blocks: 5 passed, 0 failed"), "{result}");
     }
 }
 
@@ -652,7 +891,7 @@ fn bash_tracing_preserves_user_options_without_tracing_transport() {
         let output = command(&lesson).arg("--verbose").output().unwrap();
         let result = text(&output);
         assert!(output.status.success(), "{result}");
-        assert!(result.contains("pass 3\nfail 0"), "{result}");
+        assert!(result.contains("Blocks: 3 passed, 0 failed"), "{result}");
         assert!(!result.contains("__markmason_"), "{result}");
         assert!(!result.contains("MARKMASON_END"), "{result}");
         if !pty.is_empty() {
@@ -697,7 +936,7 @@ fn bash_relative_sleep_path_survives_directory_changes_and_step_pauses() {
     transcript.extend(receive.into_iter().map(Result::unwrap));
     let result = format!("{transcript}{}", text(&output));
     assert!(output.status.success(), "{result}");
-    assert!(result.contains("Passed blocks: 1"), "{result}");
+    assert!(result.contains("Blocks: 1 passed"), "{result}");
 }
 
 #[test]
@@ -755,7 +994,7 @@ fn bash_terminal_output_during_a_step_pause_is_not_discarded() {
     let output = child.wait_with_output().unwrap();
     transcript.extend(receive.into_iter().map(Result::unwrap));
     assert!(output.status.success(), "{transcript}\n{}", text(&output));
-    assert!(transcript.contains("Passed blocks: 1"), "{transcript}");
+    assert!(transcript.contains("Blocks: 1 passed"), "{transcript}");
 }
 
 #[test]
@@ -815,7 +1054,7 @@ fn bash_session_shares_setup_state_functions_cwd_and_application_input() {
     let output = command(&lesson).output().unwrap();
     let result = text(&output);
     assert!(output.status.success(), "{result}");
-    assert!(result.contains("pass 3\nfail 0"), "{result}");
+    assert!(result.contains("Blocks: 3 passed, 0 failed"), "{result}");
 }
 
 #[test]
@@ -843,7 +1082,7 @@ fn bash_session_handles_compound_commands_and_preserves_state_after_expected_fai
         .unwrap();
     let result = text(&output);
     assert!(output.status.success(), "{result}");
-    assert!(result.contains("pass 3\nfail 0"), "{result}");
+    assert!(result.contains("Blocks: 3 passed, 0 failed"), "{result}");
 }
 
 #[test]
@@ -862,7 +1101,7 @@ fn bash_session_shares_state_with_scripted_terminal_commands() {
     let output = command(&lesson).output().unwrap();
     let result = text(&output);
     assert!(output.status.success(), "{result}");
-    assert!(result.contains("pass 3\nfail 0"), "{result}");
+    assert!(result.contains("Blocks: 3 passed, 0 failed"), "{result}");
     assert!(!result.contains("MARKMASON_END"), "{result}");
 }
 
@@ -882,7 +1121,7 @@ fn bash_session_steps_after_logical_commands_not_physical_lines() {
     assert!(output.status.success(), "{result}");
     assert_eq!(result.matches("\nEnter:").count(), 3, "{result}");
     assert!(result.contains("COMMAND 3 OF 3"), "{result}");
-    assert!(result.contains("Passed blocks: 1"), "{result}");
+    assert!(result.contains("Blocks: 1 passed"), "{result}");
 }
 
 #[test]
@@ -914,7 +1153,8 @@ fn bash_sessions_stop_the_file_on_errors_and_never_restart_silently() {
         let result = text(&output);
         assert!(!output.status.success(), "{result}");
         assert!(result.contains(expected), "{expected}: {result}");
-        assert!(result.contains("pass 0\nfail 1"), "{result}");
+        assert!(result.contains("Documents: 0 passed, 1 failed"), "{result}");
+        assert!(result.contains("Blocks: 0 passed, 1 failed"), "{result}");
         assert!(!marker.exists(), "{result}");
     }
 }
@@ -944,7 +1184,7 @@ fn bash_session_listing_needs_no_bash_and_missing_bash_fails_before_commands() {
     let result = text(&output);
     assert!(!output.status.success(), "{result}");
     assert!(result.contains("requires Bash on PATH"), "{result}");
-    assert!(result.contains("pass 0\nfail 1"), "{result}");
+    assert!(result.contains("Blocks: 0 passed, 0 failed"), "{result}");
 }
 
 #[test]
@@ -960,10 +1200,8 @@ fn single_file_input_lists_without_setup_and_respects_filters() {
     let output = command(&file).arg("--list").output().unwrap();
     let result = text(&output);
     assert!(output.status.success(), "{result}");
-    assert!(
-        result.contains("lesson.md\n  app echo selected"),
-        "{result}"
-    );
+    assert!(result.contains("lesson.md\n  Block 1/1"), "{result}");
+    assert!(result.contains("    app echo selected"), "{result}");
     assert!(!result.contains("other.md"), "{result}");
     let output = command(&file)
         .args(["--list", "--file-pattern", "^other"])
@@ -1009,7 +1247,7 @@ fn markdown_setup_shares_home_config_cwd_and_custom_variables_and_cleans_up() {
         .unwrap();
     let result = text(&output);
     assert!(output.status.success(), "{result}");
-    assert!(result.contains("pass 2\nfail 0"), "{result}");
+    assert!(result.contains("Blocks: 2 passed, 0 failed"), "{result}");
     assert!(dir.path().join("prepared").is_file(), "{result}");
     assert!(dir.path().join("prerequisites/setup-ran").is_file());
     let homes: Vec<_> = result
@@ -1082,7 +1320,7 @@ fn markdown_setup_failures_skip_later_setup_and_walkthrough_commands() {
         assert!(!output.status.success(), "{result}");
         assert!(result.contains(expected), "{expected}: {result}");
         assert!(!marker.exists(), "{result}");
-        assert!(result.contains("pass 0\nfail 1"), "{result}");
+        assert!(result.contains("Blocks: 0 passed, 0 failed"), "{result}");
         for home in result.lines().filter(|line| {
             Path::new(line).is_absolute()
                 && (line.contains("markmason-home-") || line.contains("markmason-xdg-"))
@@ -1116,7 +1354,7 @@ fn markdown_setup_preserves_expected_nonzero_and_isolation_between_callers() {
         .unwrap();
     let result = text(&output);
     assert!(output.status.success(), "{result}");
-    assert!(result.contains("pass 2\nfail 0"), "{result}");
+    assert!(result.contains("Blocks: 2 passed, 0 failed"), "{result}");
 }
 
 #[test]
@@ -1157,7 +1395,7 @@ fn markdown_setup_shares_cloned_checkout_and_background_processes() {
         .unwrap();
     let result = text(&output);
     assert!(output.status.success(), "{result}");
-    assert!(result.contains("pass 3\nfail 0"), "{result}");
+    assert!(result.contains("Blocks: 3 passed, 0 failed"), "{result}");
     assert!(
         !Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("prepared")
@@ -1219,7 +1457,7 @@ fn step_mode_accepts_environment_file_filters_without_a_picker() {
         assert!(output.status.success(), "{result}");
         assert!(selected.exists(), "{result}");
         assert!(!skipped.exists(), "{result}");
-        assert!(result.contains("chosen.md  |  Block 1 of 1"), "{result}");
+        assert!(result.contains("▶ chosen.md  |  Block 1/1"), "{result}");
         assert!(
             !result.contains("Choose a Markdown walkthrough"),
             "{result}"
@@ -1309,7 +1547,7 @@ fn step_mode_picker_searches_navigates_and_cancels_before_setup() {
             assert!(!result.contains("MARKMASON WALKTHROUGH"), "{result}");
         } else {
             assert!(
-                result.contains("nested/b selected.md  |  Block 1 of 1"),
+                result.contains("nested/b selected.md  |  Block 1/1"),
                 "{result}"
             );
             assert!(result.contains("Walkthrough finished"), "{result}");
@@ -1435,7 +1673,7 @@ fn declared_inputs_are_deduplicated_with_setup_but_do_not_leak_between_files() {
         !transcript.contains("Shared prompt should not appear"),
         "{transcript}"
     );
-    assert!(transcript.contains("Passed blocks: 2"), "{transcript}");
+    assert!(transcript.contains("Blocks: 2 passed"), "{transcript}");
 }
 
 #[cfg(windows)]
@@ -1588,7 +1826,7 @@ fn step_mode_filters_files_and_checks_combined_output_after_the_block() {
     assert!(output.status.success(), "{result}");
     for expected in [
         "MARKMASON WALKTHROUGH",
-        "lesson.md  |  Block 1 of 1",
+        "lesson.md  |  Block 1/1",
         "Print two lines",
         "COMMAND 1 OF 2",
         " > [running] app echo first",
@@ -1599,7 +1837,7 @@ fn step_mode_filters_files_and_checks_combined_output_after_the_block() {
         "ACTUAL OUTPUT\n  | first\n  | second",
         "Finish walkthrough",
         "Walkthrough finished",
-        "Passed blocks: 1\nFailed blocks: 0",
+        "Blocks: 1 passed, 0 failed",
     ] {
         assert!(result.contains(expected), "missing {expected:?}\n{result}");
     }
@@ -1769,7 +2007,7 @@ send: ignored{enter}
                     0 if frame.contains("Enter: Next command") && interrupt => Some(b"\x03"),
                     0 if frame.contains("Enter: Next command") => Some(b"\x1b[F"),
                     1 if frame.contains("IN PROGRESS") => Some(b"\x1b[H"),
-                    2 if frame.contains("## First section") && frame.contains("Rows 1-") => {
+                    2 if frame.contains("lesson.md") && frame.contains("Rows 1-") => {
                         if rows == 24 && cols == 80 {
                             assert!(
                                 frame.lines().any(|line| line.contains("[done]")
@@ -1840,7 +2078,9 @@ send: ignored{enter}
         assert!(flags.contains(&"echo"), "{terminal_state}");
         assert!(!flags.contains(&"-icanon"), "{terminal_state}");
         assert!(!flags.contains(&"-echo"), "{terminal_state}");
-        let cleanup_position = raw.find("RUN always").expect("cleanup should be visible");
+        let cleanup_position = raw
+            .find("Always")
+            .unwrap_or_else(|| panic!("cleanup should be visible:\n{raw}"));
         assert!(raw[..cleanup_position].contains("\x1b[?1049l"), "{raw}");
         assert!(!raw[cleanup_position..].contains("\x1b[?1049h"), "{raw}");
         if long_diagnostic {
@@ -1895,13 +2135,13 @@ send: ignored{enter}
         assert!(
             frames.iter().any(|frame| {
                 let frame = dialoguer::console::strip_ansi_codes(frame);
-                frame.contains("## Second section")
+                frame.contains("Block 2/3")
                     && frame.contains("[next]")
                     && !frame.contains("| first")
             }),
             "{raw}"
         );
-        assert!(raw.contains("Passed blocks: 3"), "{raw}");
+        assert!(raw.contains("Blocks: 3 passed"), "{raw}");
     }
 }
 
@@ -1930,7 +2170,7 @@ fn step_navigation_runs_remaining_commands_and_pauses_before_the_next_block() {
     next_step(&mut child, &receive, &mut transcript);
     assert!(second.exists(), "{transcript}");
     assert!(!third.exists(), "{transcript}");
-    let next = transcript.rsplit("Block 2 of 3").next().unwrap();
+    let next = transcript.rsplit("Block 2/3").next().unwrap();
     assert!(
         next.contains("Ready. No commands in this block have run."),
         "{next}"
@@ -1944,7 +2184,7 @@ fn step_navigation_runs_remaining_commands_and_pauses_before_the_next_block() {
     assert!(third.exists() && last.exists(), "{transcript}");
     assert_eq!(transcript.matches("Enter:").count(), 2, "{transcript}");
     assert!(
-        transcript.contains("Passed blocks: 3\nFailed blocks: 0"),
+        transcript.contains("Blocks: 3 passed, 0 failed"),
         "{transcript}"
     );
 }
@@ -2017,7 +2257,7 @@ fn step_mode_waits_after_every_command_and_quits_mid_block() {
     assert!(!third.exists(), "{transcript}");
     assert!(transcript.contains("Walkthrough stopped"), "{transcript}");
     assert!(
-        transcript.contains("Passed blocks: 0\nFailed blocks: 0"),
+        transcript.contains("Blocks: 0 passed, 0 failed"),
         "{transcript}"
     );
     assert!(!transcript.contains("Input closed"), "{transcript}");
@@ -2088,10 +2328,10 @@ fn step_mode_shows_expected_errors_and_keeps_failure_status_after_continuing() {
     assert!(!skipped.exists(), "{result}");
     for expected in [
         "Command exited 2",
-        "PASS  Block matched expectations.",
+        "✓ PASS  Block matched expectations.",
         "Line 1 mismatch",
         "Continue after failure",
-        "Passed blocks: 2\nFailed blocks: 1",
+        "Blocks: 2 passed, 1 failed",
     ] {
         assert!(result.contains(expected), "missing {expected:?}\n{result}");
     }
@@ -2115,10 +2355,7 @@ fn step_mode_reports_execution_errors_without_treating_them_as_expected_exits() 
         assert!(!output.status.success(), "{result}");
         assert!(result.contains(message), "{result}");
         assert!(result.contains("OUTPUT CAPTURED BEFORE ERROR"), "{result}");
-        assert!(
-            result.contains("Passed blocks: 0\nFailed blocks: 1"),
-            "{result}"
-        );
+        assert!(result.contains("Blocks: 0 passed, 1 failed"), "{result}");
     }
 }
 
@@ -2136,10 +2373,7 @@ fn step_mode_keeps_walkthrough_input_separate_from_stdin_and_terminal_scripts() 
     let output = step_output(dir.path(), &[], "\n\n\n\n");
     let result = text(&output);
     assert!(output.status.success(), "{result}");
-    assert!(
-        result.contains("Passed blocks: 2\nFailed blocks: 0"),
-        "{result}"
-    );
+    assert!(result.contains("Blocks: 2 passed, 0 failed"), "{result}");
     assert!(
         result.contains("ACTUAL OUTPUT\n  | payload\n  | end"),
         "{result}"
@@ -2153,9 +2387,9 @@ fn step_mode_names_files_when_setup_fails_or_no_commands_exist() {
     for (markdown, expected) in [
         (
             "---\nsetup: app fail\n---\n```markmason\napp echo must-not-run\n```\n",
-            "FAIL setup (lesson.md): Setup command failed",
+            "✗ FAIL  Setup",
         ),
-        ("# No commands\n", "FAIL (lesson.md): No test cases found"),
+        ("# No commands\n", "No test cases found"),
     ] {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("lesson.md"), markdown).unwrap();
@@ -2164,10 +2398,8 @@ fn step_mode_names_files_when_setup_fails_or_no_commands_exist() {
         assert!(!output.status.success(), "{result}");
         assert!(result.contains(expected), "{result}");
         assert!(!result.contains("must-not-run"), "{result}");
-        assert!(
-            result.contains("Passed blocks: 0\nFailed blocks: 1"),
-            "{result}"
-        );
+        assert!(result.contains("Documents: 0 passed, 1 failed"), "{result}");
+        assert!(result.contains("Blocks: 0 passed, 0 failed"), "{result}");
     }
 }
 
@@ -2300,7 +2532,11 @@ app bulk
     .unwrap();
     let output = command(dir.path()).output().unwrap();
     assert!(output.status.success(), "{}", text(&output));
-    assert!(text(&output).contains("pass 7"), "{}", text(&output));
+    assert!(
+        text(&output).contains("Blocks: 7 passed, 0 failed"),
+        "{}",
+        text(&output)
+    );
 }
 
 #[test]
@@ -2345,7 +2581,7 @@ app echo unselected
     let output = command(dir.path()).output().unwrap();
     assert!(output.status.success(), "{}", text(&output));
     assert!(
-        text(&output).contains("pass 3\nfail 0"),
+        text(&output).contains("Blocks: 3 passed, 0 failed"),
         "{}",
         text(&output)
     );
@@ -2355,7 +2591,7 @@ app echo unselected
         .unwrap();
     assert!(output.status.success(), "{}", text(&output));
     assert!(
-        text(&output).contains("pass 1\nfail 0"),
+        text(&output).contains("Blocks: 1 passed, 0 failed"),
         "{}",
         text(&output)
     );
@@ -2364,7 +2600,7 @@ app echo unselected
     assert!(output.status.success(), "{}", text(&output));
     assert!(
         text(&output).contains(
-            "  app write-state TEST_HOME ready\n  app state\n  app echo \"hello | world\" | app cat"
+            "    app write-state TEST_HOME ready\n    app state\n    app echo \"hello | world\" | app cat"
         ),
         "{}",
         text(&output)
@@ -2445,7 +2681,7 @@ after
     let output = command(dir.path()).output().unwrap();
     assert!(output.status.success(), "{}", text(&output));
     assert!(
-        text(&output).contains("pass 1\nfail 0"),
+        text(&output).contains("Blocks: 1 passed, 0 failed"),
         "{}",
         text(&output)
     );
@@ -2481,10 +2717,10 @@ fn literal_examples_do_not_execute_and_prose_does_not_drop_assertions() {
             let result = text(&output);
             assert_eq!(output.status.success(), success, "{result}");
             if success {
-                assert!(result.contains("pass 1\nfail 0"), "{result}");
+                assert!(result.contains("Blocks: 1 passed, 0 failed"), "{result}");
             } else {
                 assert!(result.contains("Line 1 mismatch"), "{result}");
-                assert!(result.contains("pass 0\nfail 1"), "{result}");
+                assert!(result.contains("Blocks: 0 passed, 1 failed"), "{result}");
             }
             assert!(!result.contains("missing-executable-markmason"), "{result}");
         }
@@ -2511,7 +2747,11 @@ fn each_file_chooses_its_own_setup_command() {
     .unwrap();
     let output = command(dir.path()).output().unwrap();
     assert!(output.status.success(), "{}", text(&output));
-    assert!(text(&output).contains("pass 2"), "{}", text(&output));
+    assert!(
+        text(&output).contains("Blocks: 2 passed, 0 failed"),
+        "{}",
+        text(&output)
+    );
 }
 
 #[test]
@@ -2628,7 +2868,7 @@ fn recursive_discovery_tags_files_and_name_filter_failures() {
         .output()
         .unwrap();
     assert!(!output.status.success());
-    assert!(text(&output).contains("fail 1"));
+    assert!(text(&output).contains("Blocks: 0 passed, 1 failed"));
     let output = command(dir.path())
         .args(["--test-name-pattern", "app fail"])
         .output()
@@ -2747,10 +2987,10 @@ send: unused{enter}
     let result = text(&output);
     assert_eq!(output.status.code(), Some(1), "{result}");
     for expected in [
-        "pass 0\nfail 2",
+        "Blocks: 0 passed, 2 failed",
         "PTY command timed out after 2000ms.",
         "Waiting for step 0: match \"missing\"",
-        "Output so far:\nReady?",
+        "Output so far:\n    Ready?",
         "PTY exited before completing step 2: match \"missing\"",
         "accepted yes",
         "done no",
@@ -3304,6 +3544,52 @@ fn bash_job_control_process_groups_are_cleaned_on_every_exit_path() {
 
 #[cfg(unix)]
 #[test]
+fn cancelled_bash_block_keeps_command_and_captured_output_diagnostics() {
+    let dir = tempfile::tempdir().unwrap();
+    let lesson = dir.path().join("lesson.md");
+    let ready = dir.path().join("ready");
+    fs::write(
+        &lesson,
+        format!(
+            "---\nshell: bash\n---\n```markmason\napp sleep-ready '{}'\n```\n",
+            shell_path(&ready)
+        ),
+    )
+    .unwrap();
+    let mut child = command(&lesson)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !ready.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if !ready.exists() {
+        child.kill().unwrap();
+        panic!(
+            "Bash command did not report readiness: {}",
+            text(&child.wait_with_output().unwrap())
+        );
+    }
+    assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGINT) }, 0);
+    let output = child.wait_with_output().unwrap();
+    let transcript = text(&output);
+    assert_eq!(output.status.code(), Some(130), "{transcript}");
+    assert!(
+        transcript.contains("■ CANCELLED  Block 1/1 — app sleep-ready"),
+        "{transcript}"
+    );
+    assert!(
+        transcript.contains("Command: app sleep-ready"),
+        "{transcript}"
+    );
+    assert!(transcript.contains("Output so far:"), "{transcript}");
+    assert!(transcript.contains("before timeout"), "{transcript}");
+}
+
+#[cfg(unix)]
+#[test]
 fn repeated_interrupts_stop_current_work_but_not_later_always_blocks() {
     for shell in ["", "shell: bash\n"] {
         let dir = tempfile::tempdir().unwrap();
@@ -3357,7 +3643,11 @@ fn repeated_interrupts_stop_current_work_but_not_later_always_blocks() {
         let transcript = text(&output);
         assert_eq!(output.status.code(), Some(130), "{transcript}");
         assert!(last.exists(), "{transcript}");
-        assert_eq!(transcript.matches("FAIL always").count(), 1, "{transcript}");
+        assert_eq!(
+            transcript.matches("FAIL  Always").count(),
+            1,
+            "{transcript}"
+        );
     }
 }
 
@@ -3459,12 +3749,13 @@ fn interrupts_reap_commands_stop_descendants_and_clean_up_fixtures() {
                 );
             }
             let output = runner.wait_with_output().unwrap();
+            let transcript = text(&output);
             assert_eq!(
                 output.status.code(),
                 Some(128 + signal),
-                "{mode}: {}",
-                text(&output)
+                "{mode}: {transcript}"
             );
+            assert!(transcript.contains("CANCELLED"), "{mode}: {transcript}");
             for pid in &info[..2] {
                 let pid: i32 = pid.parse().unwrap();
                 let stopped = unsafe { libc::kill(pid, 0) } == -1;
@@ -3487,12 +3778,7 @@ fn interrupts_reap_commands_stop_descendants_and_clean_up_fixtures() {
                 !later.exists(),
                 "{mode}: execution continued after cancellation"
             );
-            assert_eq!(
-                cleaned.exists(),
-                mode != "setup",
-                "{mode}: {}",
-                text(&output)
-            );
+            assert_eq!(cleaned.exists(), mode != "setup", "{mode}: {transcript}");
         }
     }
 }

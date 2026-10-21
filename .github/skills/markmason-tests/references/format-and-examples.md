@@ -131,10 +131,17 @@ Keep an expected exit after `always`, for example `markmason always (exit 2)`.
 - Expect cleanup to run without another walkthrough confirmation. Script any
   PTY input rather than requiring a person to answer a cleanup prompt.
 - Select ordinary commands with filters; cleanup-only command matches do not
-  select a file. `--list` labels deferred blocks with `[always]`.
+  select a file. `--list` labels deferred blocks as `Always`.
 - Do not assume a terminated Bash session can retain its state. A timed-out or
   interrupted command gets a bounded chance to yield the same session; otherwise
   deferred commands fail explicitly.
+
+  When asserting a nested `mm` run, use the shared presentation vocabulary:
+  document `RUN`/`✓ PASS`/`✗ FAIL` lines, `Block N/N — heading` or
+  `Always N/N — heading`, `Documents:`, and `Blocks:`. Keep these assertions
+  readable as example output; do not collapse them into dense one-line regexes.
+  The stable `Blocks:` total is the final summary line, so `expected-contains`
+  can skip the dynamic duration without leaving unmatched trailing output.
 
 ## Frontmatter and state
 

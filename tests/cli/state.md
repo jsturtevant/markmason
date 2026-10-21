@@ -48,15 +48,18 @@ mm tests/fixtures/isolation --home-env TEST_HOME
 [These two files](../fixtures/isolation) get separate homes.
 The second cannot see the first file's home or configuration state.
 
-```expected
-a.md
-PASS mm-test-cli state
-PASS mm-test-cli write-state XDG_CONFIG_HOME ready
-b.md
-PASS mm-test-cli state-exists
-PASS mm-test-cli state-exists XDG_CONFIG_HOME
-pass 4
-fail 0
+```expected-contains
+RUN  a.md
+  RUN  Block 1/2 — Read home state created by setup
+  ✓ PASS Block 1/2 — Read home state created by setup
+  RUN  Block 2/2 — Write configuration state
+  ✓ PASS Block 2/2 — Write configuration state
+RUN  b.md
+  RUN  Block 1/2 — Check for leaked home state
+  ✓ PASS Block 1/2 — Check for leaked home state
+  RUN  Block 2/2 — Check for leaked configuration state
+  ✓ PASS Block 2/2 — Check for leaked configuration state
+Blocks: 4 passed, 0 failed (includes deferred)
 ```
 
 ## Reuse a getting-started document
@@ -74,10 +77,11 @@ Both files can also run directly:
 mm tests/fixtures/markdown-setup/walkthrough.md --home-env TEST_HOME
 ```
 
-```expected
-walkthrough.md
-PASS mm-test-cli state
-PASS mm-test-cli state-exists XDG_CONFIG_HOME
-pass 2
-fail 0
+```expected-contains
+RUN  walkthrough.md
+  RUN  Block 1/2 — Inspect the prepared application state
+  ✓ PASS Block 1/2 — Inspect the prepared application state
+  RUN  Block 2/2 — Inspect the prepared configuration
+  ✓ PASS Block 2/2 — Inspect the prepared configuration
+Blocks: 2 passed, 0 failed (includes deferred)
 ```

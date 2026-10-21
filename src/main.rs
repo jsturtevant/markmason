@@ -1,5 +1,6 @@
 mod cancellation;
 mod matching;
+mod presentation;
 mod process;
 mod shell;
 mod spec;
@@ -309,6 +310,7 @@ fn execute(
     dir: &Path,
     timeout: Duration,
     verbose: bool,
+    diagnostics: Option<&mut String>,
     mut stepping: Option<&mut step::Session>,
 ) -> Result<bool> {
     let shell_mode = fixture.shell.borrow().is_some();
@@ -421,7 +423,7 @@ fn execute(
         if let Some(session) = stepping.as_deref_mut() {
             let complete = index + 1 == commands.len() || output.code != 0;
             let verdict = if complete {
-                check_output(case, expected.as_deref(), &output, false, false)
+                check_output(case, expected.as_deref(), &output, false, false, None)
             } else {
                 Ok(())
             };
@@ -447,7 +449,15 @@ fn execute(
             break;
         }
     }
-    check_output(case, expected.as_deref(), &output, verbose, true).map(|()| true)
+    check_output(
+        case,
+        expected.as_deref(),
+        &output,
+        verbose,
+        true,
+        diagnostics,
+    )
+    .map(|()| true)
 }
 
 fn check_output(
@@ -456,25 +466,50 @@ fn check_output(
     output: &process::Output,
     verbose: bool,
     diagnostics: bool,
+    mut buffered: Option<&mut String>,
 ) -> Result<()> {
     if verbose {
-        println!("ACTUAL:\n{}", output.text);
+        emit_diagnostic(&mut buffered, &format!("ACTUAL:\n{}\n", output.text));
     }
     if let Some(expected) = expected {
         let mode = case.output_mode();
         let result = matching::check(&output.text, expected, mode);
-        if verbose || (diagnostics && result.is_err()) {
+        if verbose {
             if matches!(mode, matching::Mode::Substring | matching::Mode::Regex) {
-                println!("ACTUAL:\n{}\nEXPECTED ({mode:?}):\n{expected}", output.text);
+                emit_diagnostic(
+                    &mut buffered,
+                    &format!(
+                        "ACTUAL:\n{}\nEXPECTED ({mode:?}):\n{expected}\n",
+                        output.text
+                    ),
+                );
             } else {
-                println!(
-                    "ACTUAL:\n{}\nDIFF (expected vs actual):\n{}",
+                emit_diagnostic(
+                    &mut buffered,
+                    &format!(
+                        "ACTUAL:\n{}\nDIFF (expected vs actual):\n{}\n",
+                        output.text,
+                        matching::diff(&output.text, expected)
+                    ),
+                );
+            }
+        }
+        if let Err(error) = result {
+            if diagnostics && !verbose {
+                if matches!(mode, matching::Mode::Substring | matching::Mode::Regex) {
+                    bail!(
+                        "{error:#}\nACTUAL:\n{}\nEXPECTED ({mode:?}):\n{expected}",
+                        output.text
+                    );
+                }
+                bail!(
+                    "{error:#}\nACTUAL:\n{}\nDIFF (expected vs actual):\n{}",
                     output.text,
                     matching::diff(&output.text, expected)
                 );
             }
+            return Err(error);
         }
-        result?;
     }
     if output.code != case.exit_code {
         bail!(
@@ -485,6 +520,14 @@ fn check_output(
         );
     }
     Ok(())
+}
+
+fn emit_diagnostic(buffered: &mut Option<&mut String>, text: &str) {
+    if let Some(buffer) = buffered.as_deref_mut() {
+        buffer.push_str(text);
+    } else {
+        print!("{text}");
+    }
 }
 
 fn run_setup(
@@ -555,7 +598,7 @@ fn run_setup(
         .with_context(|| format!("Markdown setup {} failed", path.display()))?;
         for case in setup_spec.cases.iter().filter(|case| !case.always) {
             cancellation::check()?;
-            execute(case, fixture, dir, timeout, verbose, None).with_context(|| {
+            execute(case, fixture, dir, timeout, verbose, None, None).with_context(|| {
                 format!("Markdown setup {} failed: {}", path.display(), case.command)
             })?;
         }
@@ -564,6 +607,7 @@ fn run_setup(
             dir,
             timeout,
             &path.display().to_string(),
+            0,
             &mut state.deferred,
         );
         state.chain.pop();
@@ -608,6 +652,8 @@ struct Deferred {
     dir: PathBuf,
     timeout: Duration,
     file: String,
+    position: usize,
+    total: usize,
 }
 
 struct Setup {
@@ -620,51 +666,70 @@ fn defer(
     dir: &Path,
     timeout: Duration,
     file: &str,
+    ordinary_blocks: usize,
     deferred: &mut Vec<Deferred>,
 ) {
+    let always: Vec<_> = spec.cases.iter().filter(|case| case.always).collect();
+    let total = ordinary_blocks + always.len();
     deferred.extend(
-        spec.cases
-            .iter()
-            .filter(|case| case.always)
-            .map(|case| Deferred {
+        always
+            .into_iter()
+            .enumerate()
+            .map(|(index, case)| Deferred {
                 case: case.clone(),
                 dir: dir.to_owned(),
                 timeout,
                 file: file.to_owned(),
+                position: ordinary_blocks + index + 1,
+                total,
             }),
     );
+}
+
+fn presented_block(case: &spec::Case, position: usize, total: usize) -> presentation::Block {
+    presentation::Block {
+        position,
+        total,
+        heading: presentation::heading(case.title.as_deref(), &case.command),
+        command: case.command.clone(),
+        deferred: case.always,
+    }
 }
 
 fn run_deferred(
     deferred: &[Deferred],
     fixture: &Fixture,
     verbose: bool,
-    passed: &mut usize,
-    failed: &mut usize,
-) {
+    document: &mut presentation::Document,
+    presenter: &mut presentation::Presenter,
+) -> Result<()> {
     for block in deferred {
         let _cleanup = cancellation::Cleanup::new();
-        let label = block.case.command.replace('\n', "\n       ");
-        println!("  RUN always ({}): {label}", block.file);
+        let presented = presented_block(&block.case, block.position, block.total);
+        let progress = presenter.block_start(&presented)?;
+        let mut diagnostics = String::new();
         match execute(
             &block.case,
             fixture,
             &block.dir,
             block.timeout,
             verbose,
+            Some(&mut diagnostics),
             None,
         ) {
             Ok(true) => {
-                *passed += 1;
-                println!("  PASS always: {label}");
+                document.passed += 1;
+                presenter.block_pass(progress, &presented, &diagnostics)?;
             }
             Ok(false) => unreachable!("Deferred blocks never use walkthrough input"),
             Err(error) => {
-                *failed += 1;
-                eprintln!("  FAIL always ({}): {label}: {error:#}", block.file);
+                document.failed += 1;
+                document.failed_headings.push(presented.heading.clone());
+                presenter.block_fail(progress, &block.file, &presented, &error, &diagnostics)?;
             }
         }
     }
+    Ok(())
 }
 
 fn collect_inputs(
@@ -901,7 +966,9 @@ fn run(options: Options) -> Result<bool> {
     } else {
         Some(gh_config_dir()?)
     };
-    let (mut passed, mut failed) = (0, 0);
+    let mut failed = 0;
+    let mut presenter = presentation::Presenter::new();
+    let mut documents = Vec::new();
     let blocks = specs
         .iter()
         .map(|(_, spec, indices)| {
@@ -914,32 +981,68 @@ fn run(options: Options) -> Result<bool> {
         .transpose()?;
     let mut block_number = 0;
     for (file, spec, indices) in specs {
-        cancellation::check()?;
+        if cancellation::signal().is_some() {
+            break;
+        }
         let first_block = block_number;
         block_number += indices.len() + spec.cases.iter().filter(|case| case.always).count();
-        let location = if options.step {
-            format!(" ({file})")
-        } else {
-            String::new()
-        };
-        if stepping.is_none() {
-            println!("{file}");
-        }
+        let listed_total = indices.len() + spec.cases.iter().filter(|case| case.always).count();
         if indices.is_empty() {
-            eprintln!(
-                "  FAIL{location}: No test cases found. Expected a fenced markmason command block without always"
+            let error = anyhow::anyhow!(
+                "No test cases found. Expected a fenced markmason command block without always"
             );
+            if stepping.is_none() {
+                presenter.document_start(&file)?;
+            }
+            presenter.setup_fail(&file, &error)?;
+            let document = presentation::Document {
+                file,
+                total: listed_total,
+                passed: 0,
+                failed: 0,
+                errors: 1,
+                failed_headings: Vec::new(),
+                cancelled: false,
+                duration: Duration::ZERO,
+            };
+            if stepping.is_none() {
+                presenter.document_finish(&document)?;
+            }
+            documents.push(document);
             failed += 1;
             continue;
         }
         if options.list {
-            for index in indices {
-                println!("  {}", spec.cases[index].command.replace('\n', "\n  "));
+            let mut listed = Vec::new();
+            for (position, index) in indices.iter().copied().enumerate() {
+                let case = &spec.cases[index];
+                listed.push((
+                    presented_block(case, position + 1, listed_total),
+                    case.command.clone(),
+                ));
             }
-            for case in spec.cases.iter().filter(|case| case.always) {
-                println!("  [always] {}", case.command.replace('\n', "\n  "));
+            for (offset, case) in spec.cases.iter().filter(|case| case.always).enumerate() {
+                listed.push((
+                    presented_block(case, indices.len() + offset + 1, listed_total),
+                    case.command.clone(),
+                ));
             }
+            presenter.list_document(&file, &listed)?;
             continue;
+        }
+        let document_started = std::time::Instant::now();
+        let mut document = presentation::Document {
+            file: file.clone(),
+            total: listed_total,
+            passed: 0,
+            failed: 0,
+            errors: 0,
+            failed_headings: Vec::new(),
+            cancelled: false,
+            duration: Duration::ZERO,
+        };
+        if stepping.is_none() {
+            presenter.document_start(&file)?;
         }
         let timeout = spec
             .timeout
@@ -970,11 +1073,32 @@ fn run(options: Options) -> Result<bool> {
         })();
         let fixture = match fixture {
             Ok(Some(fixture)) => fixture,
-            Ok(None) => break,
+            Ok(None) => {
+                document.cancelled = true;
+                document.duration = document_started.elapsed();
+                if stepping.is_none() {
+                    presenter.document_finish(&document)?;
+                }
+                documents.push(document);
+                break;
+            }
             Err(error) => {
-                eprintln!("  FAIL setup{location}: {error:#}");
-                cancellation::check()?;
+                document.cancelled = cancellation::signal().is_some();
+                document.duration = document_started.elapsed();
+                if document.cancelled {
+                    presenter.document_cancel(&file, "Setup", &error)?;
+                } else {
+                    document.errors += 1;
+                    presenter.setup_fail(&file, &error)?;
+                }
+                if stepping.is_none() {
+                    presenter.document_finish(&document)?;
+                }
+                documents.push(document);
                 failed += 1;
+                if cancellation::signal().is_some() {
+                    break;
+                }
                 continue;
             }
         };
@@ -992,36 +1116,94 @@ fn run(options: Options) -> Result<bool> {
             &mut setup,
         );
         if let Err(error) = &setup_result {
-            eprintln!("  FAIL setup{location}: {error:#}");
-            failed += 1;
+            if cancellation::signal().is_some() {
+                document.cancelled = true;
+                presenter.document_cancel(&file, "Setup", error)?;
+            } else {
+                document.errors += 1;
+                presenter.setup_fail(&file, error)?;
+                failed += 1;
+            }
         } else {
-            defer(&spec, &dir, timeout, &file, &mut setup.deferred);
-            for (offset, index) in indices.into_iter().enumerate() {
+            defer(
+                &spec,
+                &dir,
+                timeout,
+                &file,
+                indices.len(),
+                &mut setup.deferred,
+            );
+            document.total = indices.len() + setup.deferred.len();
+            for (offset, index) in indices.iter().copied().enumerate() {
                 if cancellation::signal().is_some() {
+                    document.cancelled = true;
                     break;
                 }
                 let case = &spec.cases[index];
-                let label = case.command.replace('\n', "\n       ");
+                let block = presented_block(case, offset + 1, listed_total);
+                let progress = if stepping.is_none() {
+                    Some(presenter.block_start(&block)?)
+                } else {
+                    None
+                };
+                let mut diagnostics = String::new();
                 let result = if let Some(session) = stepping.as_mut() {
                     session
-                        .begin_block(&file, case.title.as_deref(), first_block + offset + 1)
-                        .and_then(|()| execute(case, &fixture, &dir, timeout, false, Some(session)))
+                        .begin_block(
+                            &file,
+                            Some(&block.heading),
+                            first_block + offset + 1,
+                            offset + 1,
+                            listed_total,
+                        )
+                        .and_then(|()| {
+                            execute(case, &fixture, &dir, timeout, false, None, Some(session))
+                        })
                 } else {
-                    execute(case, &fixture, &dir, timeout, verbose, None)
+                    execute(
+                        case,
+                        &fixture,
+                        &dir,
+                        timeout,
+                        verbose,
+                        Some(&mut diagnostics),
+                        None,
+                    )
                 };
                 let stop_file = spec.shell.is_some() && result.is_err();
                 match result {
                     Ok(true) => {
-                        passed += 1;
-                        if stepping.is_none() {
-                            println!("  PASS {label}");
+                        document.passed += 1;
+                        if let Some(progress) = progress {
+                            presenter.block_pass(progress, &block, &diagnostics)?;
                         }
                     }
-                    Ok(false) => {}
+                    Ok(false) => document.cancelled = true,
                     Err(error) => {
-                        failed += 1;
-                        if stepping.is_none() {
-                            eprintln!("  FAIL {label}: {error:#}");
+                        if cancellation::signal().is_some() {
+                            document.cancelled = true;
+                            if let Some(progress) = progress {
+                                presenter.block_cancel(
+                                    progress,
+                                    &file,
+                                    &block,
+                                    &error,
+                                    &diagnostics,
+                                )?;
+                            }
+                        } else {
+                            failed += 1;
+                            document.failed += 1;
+                            document.failed_headings.push(block.heading.clone());
+                            if let Some(progress) = progress {
+                                presenter.block_fail(
+                                    progress,
+                                    &file,
+                                    &block,
+                                    &error,
+                                    &diagnostics,
+                                )?;
+                            }
                         }
                     }
                 }
@@ -1033,25 +1215,45 @@ fn run(options: Options) -> Result<bool> {
         if let Some(session) = stepping.as_mut()
             && let Err(error) = session.suspend()
         {
-            eprintln!("  FAIL terminal{location}: {error:#}");
+            document.errors += 1;
+            presenter.document_error(&file, "Terminal", &error)?;
             failed += 1;
         }
         if setup_result.is_ok() {
-            run_deferred(&setup.deferred, &fixture, verbose, &mut passed, &mut failed);
+            let before_failed = document.failed;
+            run_deferred(
+                &setup.deferred,
+                &fixture,
+                verbose,
+                &mut document,
+                &mut presenter,
+            )?;
+            failed += document.failed - before_failed;
         }
         if let Err(error) = fixture.close() {
-            eprintln!("  FAIL cleanup{location}: {error:#}");
+            document.errors += 1;
+            presenter.document_error(&file, "Fixture cleanup", &error)?;
             failed += 1;
         }
-        cancellation::check()?;
+        document.cancelled |= cancellation::signal().is_some()
+            || stepping.as_ref().is_some_and(step::Session::stopped);
+        document.duration = document_started.elapsed();
+        if stepping.is_none() {
+            presenter.document_finish(&document)?;
+        }
+        documents.push(document);
+        if cancellation::signal().is_some() {
+            break;
+        }
         if stepping.as_ref().is_some_and(step::Session::stopped) {
             break;
         }
     }
     if let Some(session) = stepping.as_mut() {
-        session.finish(passed, failed)?;
+        session.finish()?;
+        presenter.summary(&documents)?;
     } else if !options.list {
-        println!("\npass {passed}\nfail {failed}");
+        presenter.summary(&documents)?;
     }
     Ok(failed == 0)
 }

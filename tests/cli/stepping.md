@@ -27,8 +27,7 @@ send: {enter}
 ```
 
 ```expected-contains
-lesson.md | Block 1 of 2
-## Build output one command at a time
+▶ lesson.md | Block 1/2 — Build output one command at a time
 COMMAND 1 OF 2
 > [running] mm-test-cli echo first
 EXPECTED OUTPUT (whole block; exact, exit 0)
@@ -42,15 +41,13 @@ COMMAND 2 OF 2
 ACTUAL OUTPUT
 | first
 | second
-PASS Block matched expectations.
-lesson.md | Block 2 of 2
-## Send input to the application
+✓ PASS Block matched expectations.
+▶ lesson.md | Block 2/2 — Send input to the application
 | application input
 ACTUAL OUTPUT
 | application input
 Walkthrough finished
-Passed blocks: 2
-Failed blocks: 0
+Blocks: 2 passed, 0 failed (includes deferred)
 ```
 
 ## Keep a real Bash session alive between pauses
@@ -75,19 +72,18 @@ send: {enter}
 ```
 
 ```expected-contains
-lesson.md | Block 1 of 2
+▶ lesson.md | Block 1/2 — Expand a value prepared by setup
 COMMAND 1 OF 3
 COMMAND 2 OF 3
 | ready
 COMMAND 3 OF 3
 | shared setup is ready
-lesson.md | Block 2 of 2
+▶ lesson.md | Block 2/2 — Keep a loop together
 COMMAND 1 OF 1
 | one
 | two
 Walkthrough finished
-Passed blocks: 2
-Failed blocks: 0
+Blocks: 2 passed, 0 failed (includes deferred)
 ```
 
 ## Run to the next block, then finish the file
@@ -110,23 +106,22 @@ send: f{enter}
 ```
 
 ```expected-contains
-navigation.md | Block 1 of 3
+▶ navigation.md | Block 1/3 — First block
 > [running] mm-test-cli echo first
 > [running] mm-test-cli echo second
 ACTUAL OUTPUT
 | first
 | second
-PASS Block matched expectations.
-navigation.md | Block 2 of 3
+✓ PASS Block matched expectations.
+▶ navigation.md | Block 2/3 — Second block
 > [next] mm-test-cli echo third
 ACTUAL OUTPUT SO FAR
 | (empty)
 Ready. No commands in this block have run.
-navigation.md | Block 3 of 3
+▶ navigation.md | Block 3/3 — Last block
 | last
 Walkthrough finished
-Passed blocks: 3
-Failed blocks: 0
+Blocks: 3 passed, 0 failed (includes deferred)
 ```
 
 ## Scroll complete output without executing commands
@@ -154,17 +149,16 @@ send: {enter}
 ```
 
 ```expected-contains
-## A complete scrollable section
+▶ scrolling.md | Block 1/1 — A complete scrollable section
 Keep the command context visible, and scroll to inspect every output line.
 [done] mm-test-cli echo started
 > [next] mm-test-cli echo finished
 | output-30
-## A complete scrollable section
+▶ scrolling.md | Block 1/1 — A complete scrollable section
 | finished
-PASS Block matched expectations.
+✓ PASS Block matched expectations.
 Walkthrough finished
-Passed blocks: 1
-Failed blocks: 0
+Blocks: 1 passed, 0 failed (includes deferred)
 ```
 
 ## Cancel while running to the next block
@@ -225,8 +219,7 @@ COMMAND 1 OF 2
 ACTUAL OUTPUT SO FAR
 | first
 Walkthrough stopped
-Passed blocks: 0
-Failed blocks: 0
+Blocks: 0 passed, 0 failed (includes deferred)
 ```
 
 ## Search for a file in the picker
@@ -251,13 +244,12 @@ send: {enter}
 
 ```expected-contains
 MARKMASON WALKTHROUGH
-lesson.md | Block 1 of 2
+▶ lesson.md | Block 1/2 — Build output one command at a time
 COMMAND 1 OF 2
 COMMAND 2 OF 2
-lesson.md | Block 2 of 2
+▶ lesson.md | Block 2/2 — Send input to the application
 Walkthrough finished
-Passed blocks: 2
-Failed blocks: 0
+Blocks: 2 passed, 0 failed (includes deferred)
 ```
 
 ## Cancel the picker without running a tutorial
@@ -293,11 +285,10 @@ EXPECTED OUTPUT (exact, exit 0)
 | different
 ACTUAL OUTPUT
 | actual
-FAIL
+✗ FAIL
 | Line 1 mismatch:
 Walkthrough finished
-Passed blocks: 0
-Failed blocks: 1
+Blocks: 0 passed, 1 failed (includes deferred)
 ```
 
 ## Select a file explicitly when no terminal is available
@@ -331,17 +322,14 @@ send: {enter}
 ```
 
 ```expected-contains
-walkthrough.md | Block 1 of 2
-## Inspect the prepared application state
+▶ walkthrough.md | Block 1/2 — Inspect the prepared application state
 ACTUAL OUTPUT
 | ready
-PASS Block matched expectations.
-walkthrough.md | Block 2 of 2
-## Inspect the prepared configuration
+✓ PASS Block matched expectations.
+▶ walkthrough.md | Block 2/2 — Inspect the prepared configuration
 ACTUAL OUTPUT
 | true
-PASS Block matched expectations.
+✓ PASS Block matched expectations.
 Walkthrough finished
-Passed blocks: 2
-Failed blocks: 0
+Blocks: 2 passed, 0 failed (includes deferred)
 ```

@@ -51,6 +51,13 @@ mm --step --file-pattern '^greet\.md$'  # Skip the picker
 mm path/to/walkthrough.md --step       # Walk through one file directly
 ```
 
+Normal terminal runs show a live spinner for the current Markdown heading and
+one completion line per document. Redirected/CI output uses append-only
+`RUN`, `✓ PASS`, and `✗ FAIL` block lines. The final summary lists passing and
+failing documents separately from block totals; deferred cleanup is included in
+the block count. `--list` and `--step` use the same document paths, headings,
+positions, symbols, and colors. Set `NO_COLOR=1` to disable color.
+
 With `--step`, choose a file using the arrow keys or type to search, then press
 **Enter**. **Esc** cancels without running anything. An explicit `--file-pattern`
 (or its environment variable) or a direct Markdown file path skips the picker.

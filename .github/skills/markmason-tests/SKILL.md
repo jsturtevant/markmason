@@ -66,6 +66,9 @@ description: >-
   Prefer it over piping through `grep` or rewriting output just for an assertion.
 - Use `expected-regex` only when the match needs a pattern, such as a generated
   ID or duration. Write Rust regex escapes directly in the fence.
+- Do not replace readable expected output with a dense one-line regex. Prefer
+  exact, whole-line, or literal-substring assertions that still teach the human
+  output format. If regex is necessary, keep it focused on the dynamic fragment.
 - Treat each substring or regex block as one assertion over the full output,
   not a list of independent lines. Preserve whitespace and path separators;
   only CRLF line endings normalize. Extra output before and after is allowed.
