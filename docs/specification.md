@@ -199,6 +199,26 @@ truncated in live terminal status lines without changing diagnostics.
 `--verbose` retains its existing meaning: print captured output and comparison
 details inside the same document/block boundaries.
 
+## Fail-fast execution
+
+Use `--fail-fast` to stop scheduling documents after the first selected
+document fails. The default remains a complete suite run.
+
+- The current document reaches its normal boundary first: every deferred
+  `markmason always` block is attempted and fixture cleanup completes.
+- Setup, ordinary block, assertion, timeout, spawn, terminal, deferred cleanup,
+  and fixture cleanup failures trigger the stop. Successfully matched expected
+  nonzero exits do not.
+- Unstarted selected documents appear under yellow `NOT RUN` in the final
+  summary. They do not count as failed blocks or documents.
+- File, tag, and command filters apply before fail-fast scheduling.
+- `--fail-fast` is rejected with `--list` and `--step`, where it has no useful
+  serial-suite meaning.
+- Cancellation retains its signal exit and cancelled-document terminology;
+  it is not reported as a fail-fast failure.
+
+See the [executable running guide](../tests/cli/running.md).
+
 ## Frontmatter and setup
 
 ```yaml

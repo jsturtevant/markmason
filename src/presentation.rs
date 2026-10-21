@@ -50,6 +50,7 @@ pub struct Document {
     pub errors: usize,
     pub failed_headings: Vec<String>,
     pub cancelled: bool,
+    pub not_run: bool,
     pub duration: Duration,
 }
 
@@ -59,7 +60,7 @@ impl Document {
     }
 
     pub fn succeeded(&self) -> bool {
-        !self.failed() && !self.cancelled
+        !self.failed() && !self.cancelled && !self.not_run
     }
 }
 
@@ -314,8 +315,9 @@ impl Presenter {
         let failed_documents = documents.iter().filter(|doc| doc.failed()).count();
         let cancelled_documents = documents
             .iter()
-            .filter(|doc| doc.cancelled && !doc.failed())
+            .filter(|doc| doc.cancelled && !doc.failed() && !doc.not_run)
             .count();
+        let not_run_documents = documents.iter().filter(|doc| doc.not_run).count();
         let passed_blocks: usize = documents.iter().map(|doc| doc.passed).sum();
         let failed_blocks: usize = documents.iter().map(|doc| doc.failed).sum();
         writeln!(
@@ -328,6 +330,9 @@ impl Presenter {
         )?;
         if cancelled_documents > 0 {
             write!(self.output, ", {cancelled_documents} cancelled")?;
+        }
+        if not_run_documents > 0 {
+            write!(self.output, ", {not_run_documents} not run")?;
         }
         writeln!(self.output)?;
         if passed_documents > 0 {
@@ -382,12 +387,27 @@ impl Presenter {
             writeln!(self.output, "\n{YELLOW}CANCELLED{RESET}")?;
             for document in documents
                 .iter()
-                .filter(|doc| doc.cancelled && !doc.failed())
+                .filter(|doc| doc.cancelled && !doc.failed() && !doc.not_run)
             {
                 let line = format!(
                     "  ■ {}  {}/{} blocks",
                     document.file, document.passed, document.total
                 );
+                writeln!(
+                    self.output,
+                    "{YELLOW}{}{RESET}",
+                    if self.tty {
+                        fit(&line, terminal_width())
+                    } else {
+                        line
+                    }
+                )?;
+            }
+        }
+        if not_run_documents > 0 {
+            writeln!(self.output, "\n{YELLOW}NOT RUN{RESET}")?;
+            for document in documents.iter().filter(|doc| doc.not_run) {
+                let line = format!("  - {}  0/{} blocks", document.file, document.total);
                 writeln!(
                     self.output,
                     "{YELLOW}{}{RESET}",

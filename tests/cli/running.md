@@ -121,4 +121,24 @@ Documents: 1 passed, 0 failed
 Blocks: 1 passed, 0 failed (includes deferred)
 ```
 
+## Stop after the first failed document
+
+```markmason (exit 1)
+mm tests/fixtures/fail-fast --fail-fast
+```
+
+Fail-fast stops at a document boundary. The failed document's deferred cleanup
+still runs, and the summary lists later selected documents as not run.
+
+```expected-contains
+RUN  a-fails.md
+  ✗ FAIL  Block 1/2 — Produce the wrong value
+  RUN  Always 2/2 — Finish cleanup
+  ✓ PASS Always 2/2 — Finish cleanup
+Documents: 0 passed, 1 failed, 1 not run
+NOT RUN
+- b-not-run.md 0/1 blocks
+Blocks: 1 passed, 1 failed (includes deferred)
+```
+
 [Filter tests](filtering.md) | [Error cases](errors.md)
