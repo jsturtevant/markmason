@@ -22,7 +22,7 @@ cargo install --git https://github.com/jsturtevant/markmason --tag v0.4.1 --lock
 
 ## Write a test
 
-This README is executable. A test pairs a command block with its expected output.
+This README is testable. Run `mm README.md`.
 
 ### Show the installed version
 
