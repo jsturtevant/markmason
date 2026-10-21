@@ -38,6 +38,20 @@ mm 0.4.1
 ```
 ````
 
+To use Bash explicitly:
+
+````markdown
+## Say hello with Bash
+
+```markmason
+bash -c "echo Hello, world!"
+```
+
+```expected
+Hello, world!
+```
+````
+
 Run Markmason:
 
 ```sh
