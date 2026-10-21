@@ -45,6 +45,7 @@ mm                         # Defaults to tests/cli
 mm path/to/specs            # Another directory
 mm path/to/walkthrough.md   # One Markdown file
 mm --list                  # Discover without executing
+mm --fail-fast             # Stop after the first failed document cleans up
 mm --file-pattern greet    # Select files by regex
 mm --step                  # Pick a file and walk through it
 mm --step --file-pattern '^greet\.md$'  # Skip the picker
@@ -155,6 +156,7 @@ that prints text, shows prompts, and writes test state. Both go on `PATH`.
 | Regex search across output | `expected-regex` block; Rust regex syntax |
 | Expected failure | `markmason (exit 1)` on the opening fence |
 | Deferred cleanup | `markmason always`; run automatically after the file |
+| Stop after one failed document | `--fail-fast`; cleanup still runs |
 | Piped input | `stdin` block |
 | Interactive terminal | `pty` block with `match:` / `send:` |
 | Per-file setup | `setup: python3 setup.py` in YAML frontmatter |

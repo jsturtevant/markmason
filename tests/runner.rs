@@ -102,6 +102,141 @@ fn redirected_progress_groups_documents_blocks_and_failures_without_color() {
     assert!(!transcript.contains('\x1b'), "{transcript:?}");
 }
 
+#[test]
+fn fail_fast_stops_at_document_boundary_after_cleanup() {
+    for fail_fast in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let cleaned = dir.path().join("cleaned");
+        let later = dir.path().join("later");
+        fs::write(
+            dir.path().join("a.md"),
+            format!(
+                "```markmason\napp echo actual\n```\n```expected\nmissing\n```\n\
+                 ```markmason always\napp mark '{}'\n```\n",
+                shell_path(&cleaned)
+            ),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("b.md"),
+            format!("```markmason\napp mark '{}'\n```\n", shell_path(&later)),
+        )
+        .unwrap();
+        let mut runner = command(dir.path());
+        if fail_fast {
+            runner.arg("--fail-fast");
+        }
+        let output = runner.output().unwrap();
+        let transcript = text(&output);
+        assert_eq!(output.status.code(), Some(1), "{transcript}");
+        assert!(cleaned.exists(), "{transcript}");
+        assert_eq!(later.exists(), !fail_fast, "{transcript}");
+        if fail_fast {
+            assert!(
+                transcript.contains("Documents: 0 passed, 1 failed, 1 not run"),
+                "{transcript}"
+            );
+            assert!(transcript.contains("NOT RUN"), "{transcript}");
+            assert!(transcript.contains("- b.md  0/1 blocks"), "{transcript}");
+            assert!(!transcript.contains("RUN  b.md"), "{transcript}");
+        } else {
+            assert!(transcript.contains("RUN  b.md"), "{transcript}");
+        }
+    }
+}
+
+#[test]
+fn fail_fast_ignores_successfully_expected_failures() {
+    let dir = tempfile::tempdir().unwrap();
+    let later = dir.path().join("later");
+    fs::write(
+        dir.path().join("a.md"),
+        "```markmason (exit 2)\napp fail\n```\n```expected\nstdout\nstderr\n```\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("b.md"),
+        format!("```markmason\napp mark '{}'\n```\n", shell_path(&later)),
+    )
+    .unwrap();
+    let output = command(dir.path()).arg("--fail-fast").output().unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(later.exists(), "{}", text(&output));
+    assert!(
+        text(&output).contains("Documents: 2 passed, 0 failed"),
+        "{}",
+        text(&output)
+    );
+}
+
+#[test]
+fn fail_fast_handles_setup_spawn_timeout_terminal_and_deferred_failures() {
+    for mode in ["setup", "spawn", "timeout", "terminal", "deferred"] {
+        let dir = tempfile::tempdir().unwrap();
+        let cleaned = dir.path().join("cleaned");
+        let later = dir.path().join("later");
+        let first = match mode {
+            "setup" => "---\nsetup: app fail\n---\n```markmason\napp echo skipped\n```\n".into(),
+            "spawn" => format!(
+                "```markmason\nmissing-markmason-command\n```\n\
+                 ```markmason always\napp mark '{}'\n```\n",
+                shell_path(&cleaned)
+            ),
+            "timeout" => format!(
+                "---\ntimeout: 0.1\n---\n```markmason\napp sleep\n```\n\
+                 ```markmason always\napp mark '{}'\n```\n",
+                shell_path(&cleaned)
+            ),
+            "terminal" => format!(
+                "```markmason\napp premature\n```\n```pty\nmatch: missing\nsend: unused\n```\n\
+                 ```markmason always\napp mark '{}'\n```\n",
+                shell_path(&cleaned)
+            ),
+            "deferred" => format!(
+                "```markmason\napp echo ready\n```\n\
+                 ```markmason always\napp fail\n```\n\
+                 ```markmason always\napp mark '{}'\n```\n",
+                shell_path(&cleaned)
+            ),
+            _ => unreachable!(),
+        };
+        fs::write(dir.path().join("a.md"), first).unwrap();
+        fs::write(
+            dir.path().join("b.md"),
+            format!("```markmason\napp mark '{}'\n```\n", shell_path(&later)),
+        )
+        .unwrap();
+        let output = command(dir.path()).arg("--fail-fast").output().unwrap();
+        let transcript = text(&output);
+        assert_eq!(output.status.code(), Some(1), "{mode}: {transcript}");
+        assert!(!later.exists(), "{mode}: {transcript}");
+        assert_eq!(cleaned.exists(), mode != "setup", "{mode}: {transcript}");
+        assert!(transcript.contains("1 not run"), "{mode}: {transcript}");
+    }
+}
+
+#[test]
+fn fail_fast_is_rejected_with_nonexecuting_or_interactive_modes() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("lesson.md"),
+        "```markmason\napp echo ready\n```\n",
+    )
+    .unwrap();
+    for mode in ["--list", "--step"] {
+        let output = command(dir.path())
+            .args(["--fail-fast", mode])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+        assert!(
+            text(&output).contains("cannot be used with"),
+            "{}",
+            text(&output)
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn default_tty_progress_spins_truncates_and_restores_the_line() {

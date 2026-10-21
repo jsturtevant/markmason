@@ -54,6 +54,9 @@ struct Options {
     /// Walk through commands; pick a file unless a file path or --file-pattern is set.
     #[arg(long, conflicts_with = "list")]
     step: bool,
+    /// Stop scheduling documents after the first failed document finishes cleanup.
+    #[arg(long, conflicts_with_all = ["list", "step"])]
+    fail_fast: bool,
     #[arg(long)]
     verbose: bool,
 }
@@ -980,7 +983,17 @@ fn run(options: Options) -> Result<bool> {
         .then(|| step::Session::new(blocks))
         .transpose()?;
     let mut block_number = 0;
-    for (file, spec, indices) in specs {
+    let selected_documents: Vec<_> = specs
+        .iter()
+        .map(|(file, spec, indices)| {
+            (
+                file.clone(),
+                indices.len() + spec.cases.iter().filter(|case| case.always).count(),
+            )
+        })
+        .collect();
+    let mut stopped_after = None;
+    for (document_index, (file, spec, indices)) in specs.into_iter().enumerate() {
         if cancellation::signal().is_some() {
             break;
         }
@@ -1003,6 +1016,7 @@ fn run(options: Options) -> Result<bool> {
                 errors: 1,
                 failed_headings: Vec::new(),
                 cancelled: false,
+                not_run: false,
                 duration: Duration::ZERO,
             };
             if stepping.is_none() {
@@ -1010,6 +1024,10 @@ fn run(options: Options) -> Result<bool> {
             }
             documents.push(document);
             failed += 1;
+            if options.fail_fast {
+                stopped_after = Some(document_index);
+                break;
+            }
             continue;
         }
         if options.list {
@@ -1039,6 +1057,7 @@ fn run(options: Options) -> Result<bool> {
             errors: 0,
             failed_headings: Vec::new(),
             cancelled: false,
+            not_run: false,
             duration: Duration::ZERO,
         };
         if stepping.is_none() {
@@ -1097,6 +1116,10 @@ fn run(options: Options) -> Result<bool> {
                 documents.push(document);
                 failed += 1;
                 if cancellation::signal().is_some() {
+                    break;
+                }
+                if options.fail_fast {
+                    stopped_after = Some(document_index);
                     break;
                 }
                 continue;
@@ -1248,6 +1271,28 @@ fn run(options: Options) -> Result<bool> {
         if stepping.as_ref().is_some_and(step::Session::stopped) {
             break;
         }
+        if options.fail_fast && documents.last().is_some_and(presentation::Document::failed) {
+            stopped_after = Some(document_index);
+            break;
+        }
+    }
+    if let Some(index) = stopped_after {
+        documents.extend(
+            selected_documents
+                .into_iter()
+                .skip(index + 1)
+                .map(|(file, total)| presentation::Document {
+                    file,
+                    total,
+                    passed: 0,
+                    failed: 0,
+                    errors: 0,
+                    failed_headings: Vec::new(),
+                    cancelled: false,
+                    not_run: true,
+                    duration: Duration::ZERO,
+                }),
+        );
     }
     if let Some(session) = stepping.as_mut() {
         session.finish()?;

@@ -201,3 +201,6 @@ See [the executable guide](../../../../tests/cli/shell.md).
 - Read `E2E_FILE_PATTERN`, `E2E_FILE_EXCLUDE`, `E2E_TAGS`, and `E2E_TAGS_EXCLUDE`
   unless `--env-prefix` changes the prefix. Explicit flags take precedence.
 - Treat no matches as an error, not a successful empty run.
+- Use `--fail-fast` only for execution: it stops after the first failed
+  document finishes deferred cleanup and reports later selected files as not run.
+  Do not combine it with `--list` or `--step`.
