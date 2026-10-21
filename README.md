@@ -22,12 +22,19 @@ cargo install --git https://github.com/jsturtevant/markmason --tag v0.4.1 --lock
 
 ## Write a test
 
-Save as `tests/cli/greet.md`:
+This README is testable. Run `mm README.md`.
 
-````markdown
-# Greetings
+### Show the installed version
 
-## Say hello
+```markmason
+mm --version
+```
+
+```expected
+mm 0.4.1
+```
+
+### Say hello with Bash
 
 ```markmason
 bash -c "echo Hello, world!"
@@ -36,9 +43,8 @@ bash -c "echo Hello, world!"
 ```expected
 Hello, world!
 ```
-````
 
-With `bash` on `PATH`, run:
+Run Markmason:
 
 ```sh
 mm                         # Defaults to tests/cli
@@ -54,70 +60,6 @@ mm --step --file-pattern '^greet\.md$'  # Skip the picker
 mm path/to/walkthrough.md --step       # Walk through one file directly
 ```
 
-Normal terminal runs show a live spinner for the current Markdown heading and
-separate right-aligned elapsed timers for the current document and block.
-One completion line is printed per document. Redirected/CI output uses append-only
-`RUN`, `✓ PASS`, and `✗ FAIL` block lines. The final summary lists passing and
-failing documents separately from block totals; deferred cleanup is included in
-the block count. `--list` and `--step` use the same document paths, headings,
-positions, symbols, and colors. Set `NO_COLOR=1` to disable color.
-
-With `--step`, choose a file using the arrow keys or type to search, then press
-**Enter**. **Esc** cancels without running anything. An explicit `--file-pattern`
-(or its environment variable) or a direct Markdown file path skips the picker.
-
-During the walkthrough, a fullscreen Markdown-style view shows the section heading,
-description, full code block, and expected/actual output. The arrow points to the
-next command; completed commands retain green `[done]` prefixes.
-Nothing is collapsed or truncated: long lines wrap, and **Up/Down**,
-**PgUp/PgDn**, **Home/End**, or the **mouse wheel** scroll without running commands.
-Keep sections short so they normally fit. Actual output accumulates within the
-block and resets at the next block.
-Press **Enter** for the next command, **b then Enter** to run to the next block,
-**f then Enter** to finish the file, or **q then Enter** to quit. These shortcuts
-run commands rather than skipping them; failures always pause for inspection.
-
-To prepare a walkthrough from another Markdown document, add
-`setup: mm gettingstarted.md` in its frontmatter. The prerequisite runs
-automatically in the walkthrough's shared environment, so the state it creates
-is available to later steps. See [setup and state](tests/cli/state.md).
-
-Declare required environment values instead of supplying a long command prefix:
-
-```yaml
-inputs:
-  TUTORIAL_NAME: Name to display in the walkthrough
-  OUTPUT_FORMAT: Output format for the examples
-```
-
-With `--step`, missing inputs are prompted for before setup; existing nonempty
-environment values are reused. Unattended runs fail clearly if inputs are
-missing, and `--list` never prompts. Values are plain text, not secret prompts.
-Inputs declared by Markdown prerequisites are collected before any setup runs.
-See the [executable input examples](tests/cli/inputs.md).
-
-Add `shell: bash` when the tutorial needs shell variables, functions, pipelines,
-or `cd` changes to persist across commands and Markdown setup:
-
-````markdown
----
-shell: bash
-setup: mm sharedset.md
----
-
-```markmason
-MESSAGE="hello from Bash"
-printf '%s\n' "$MESSAGE"
-```
-```expected
-hello from Bash
-```
-````
-
-This requires Bash on `PATH`: system Bash on Linux/macOS (including macOS
-Bash 3.2), or Git Bash for native Windows. There is no automatic PowerShell,
-cmd, or WSL substitution. See the [executable shell guide](tests/cli/shell.md).
-
 ## Live examples
 
 Learn more with real examples from `mm`:
@@ -131,53 +73,27 @@ Learn more with real examples from `mm`:
 - [Stdin and pipes](tests/cli/input.md)
 - [Terminal prompts](tests/cli/interactive.md)
 - [Output matching](tests/cli/matching.md)
+- [Error cases](tests/cli/errors.md)
+- [Matching failures](tests/cli/matching-errors.md)
+- [Runtime failures and timeouts](tests/cli/runtime-errors.md)
 - [Setup and state](tests/cli/state.md)
+- [Required inputs](tests/cli/inputs.md)
+- [Repository fixtures](tests/cli/fixtures.md)
 - [Persistent Bash sessions](tests/cli/shell.md)
 - [Deferred cleanup](tests/cli/cleanup.md)
 - [Path variables](tests/cli/variables.md)
 - [Environment filters](tests/cli/environment.md)
 
-Run the same files from this checkout (see [development prerequisites](#develop-and-self-test)):
+Run the markmason on these examples from this checkout (see [development prerequisites](#develop-and-self-test)):
 
 ```sh
 just test-markdown
 ```
 
 This builds `mm` and [`mm-test-cli`](tests/support/README.md), a small app
-that prints text, shows prompts, and writes test state. Both go on `PATH`.
-`mm-test-cli` is not shipped with `mm`; your own specs run your CLI instead.
+that prints text, shows prompts, and writes test state for demonstrating Markmason features.
 
-## Markmason features
-
-| Feature | Syntax |
-|---------|--------|
-| Run a command | `markmason` block |
-| Interactive walkthrough | `--step`, combined with the usual filters |
-| Exact output | `expected` block |
-| Ordered whole-line matching | `expected-contains` block; no unmatched trailing lines |
-| Literal text anywhere in output | `expected-substring` block |
-| Regex search across output | `expected-regex` block; Rust regex syntax |
-| Expected failure | `markmason (exit 1)` on the opening fence |
-| Deferred cleanup | `markmason always`; run automatically after the file |
-| Stop after one failed document | `--fail-fast`; cleanup still runs |
-| Bounded file concurrency | `--parallel [N]`; files remain internally ordered |
-| Piped input | `stdin` block |
-| Interactive terminal | `pty` block with `match:` / `send:` |
-| Per-file setup | `setup: python3 setup.py` in YAML frontmatter |
-| Shared Markdown setup | `setup: mm sharedset.md` |
-| Persistent Bash session | `shell: bash` in YAML frontmatter |
-| Clone a fixture | `clone: owner/repo` in frontmatter; requires authenticated `gh` |
-| Tags and timeout | `tags: [smoke]`, `timeout: 30` in frontmatter |
-
-By default, commands resolve from `PATH` without a shell. `shell: bash` opts
-one file into a persistent Bash session. Each file gets an isolated home and
-configuration directory; its cases run in order and share state.
-
-Headings describe the behavior. Each `markmason` block is one test: commands run
-in order, combine their output, and stop at the first nonzero exit.
-
-See the [specification reference](docs/specification.md) for setup, matching,
-PTYs, variables, filters, and cleanup details. Use `mm --help` for CLI options.
+Use `mm --help` for CLI options.
 
 ## Develop and self-test
 
@@ -192,9 +108,6 @@ just fmt              # Format Rust source
 
 The [Markdown self-tests](tests/cli) run `mm` against small
 [fixture specs](tests/fixtures) and the [test CLI](tests/support/README.md).
-Nested fixtures call leaf commands, never the self-test suite.
-No Node, GitHub authentication, or network access is needed. Cloning, cancellation,
-and descendant cleanup remain covered by the Rust integration tests.
 
 ## Write tests with an agent
 

@@ -1,5 +1,9 @@
 # Specification reference
 
+This specification reference may help users who need exact
+behavior, but is primarily written for agents and contributors developing
+Markmason itself.  See the [docs to learn and see example usage](../tests/cli/cli.md)
+
 ## Commands and output
 
 Write descriptive headings and put commands in `markmason` fenced blocks.
