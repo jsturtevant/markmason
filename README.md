@@ -22,19 +22,19 @@ cargo install --git https://github.com/jsturtevant/markmason --tag v0.4.1 --lock
 
 ## Write a test
 
-Save as `tests/cli/greet.md`:
+Save as `tests/cli/version.md`:
 
 ````markdown
-# Greetings
+# Check Markmason
 
-## Say hello
+## Show the installed version
 
 ```markmason
-bash -c "echo Hello, world!"
+mm --version
 ```
 
 ```expected
-Hello, world!
+mm 0.4.1
 ```
 ````
 
@@ -87,8 +87,7 @@ just test-markdown
 This builds `mm` and [`mm-test-cli`](tests/support/README.md), a small app
 that prints text, shows prompts, and writes test state for demonstrating Markmason features.
 
-See the [specification reference](docs/specification.md) for setup, matching,
-PTYs, variables, filters, and cleanup details. Use `mm --help` for CLI options.
+Use `mm --help` for CLI options.
 
 ## Develop and self-test
 
@@ -103,9 +102,6 @@ just fmt              # Format Rust source
 
 The [Markdown self-tests](tests/cli) run `mm` against small
 [fixture specs](tests/fixtures) and the [test CLI](tests/support/README.md).
-Nested fixtures call leaf commands, never the self-test suite.
-No Node, GitHub authentication, or network access is needed. Cloning, cancellation,
-and descendant cleanup remain covered by the Rust integration tests.
 
 ## Write tests with an agent
 
