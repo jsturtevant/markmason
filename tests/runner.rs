@@ -4,6 +4,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Output, Stdio},
     sync::{OnceLock, mpsc},
+    thread,
     time::{Duration, Instant},
 };
 use tempfile::TempDir;
@@ -1228,7 +1229,7 @@ fn partial_output_assertions_keep_their_mode_in_walkthroughs() {
 }
 
 #[test]
-fn step_document_timer_includes_user_pause_time() {
+fn redirected_step_pause_does_not_repeat_the_block_panel() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(
         dir.path().join("lesson.md"),
@@ -1247,19 +1248,132 @@ fn step_document_timer_includes_user_pause_time() {
         transcript.contains("Enter: Finish walkthrough"),
         "{transcript}"
     );
-    let timer_deadline = Instant::now() + Duration::from_secs(3);
-    while !transcript.contains("00:01") && Instant::now() < timer_deadline {
-        if let Ok(chunk) = receive.recv_timeout(Duration::from_millis(100)) {
-            transcript.push_str(&chunk.unwrap());
-        }
+    let panels = transcript.matches("▶ lesson.md").count();
+    thread::sleep(Duration::from_millis(1200));
+    while let Ok(chunk) = receive.try_recv() {
+        transcript.push_str(&chunk.unwrap());
     }
-    assert!(transcript.contains("▶ lesson.md"), "{transcript}");
-    assert!(transcript.contains("00:01"), "{transcript}");
+    assert_eq!(
+        transcript.matches("▶ lesson.md").count(),
+        panels,
+        "{transcript}"
+    );
     stdin.write_all(b"\n").unwrap();
     drop(stdin);
     let output = child.wait_with_output().unwrap();
     transcript.extend(receive.into_iter().map(Result::unwrap));
     assert!(output.status.success(), "{transcript}\n{}", text(&output));
+}
+
+#[cfg(unix)]
+#[test]
+fn step_document_timer_refreshes_during_pauses_and_execution() {
+    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+    use std::io::Read;
+
+    for (name, frontmatter, pty) in [
+        ("process", "timeout: 30", ""),
+        (
+            "pty",
+            "timeout: 30",
+            "```pty\nmatch: before timeout\nsend: ignored\n```\n",
+        ),
+        ("shell", "shell: bash\ntimeout: 30", ""),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("lesson.md"),
+            format!("---\n{frontmatter}\n---\n## Wait here\n```markmason\napp sleep\n```\n{pty}"),
+        )
+        .unwrap();
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .unwrap();
+        let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_mm"));
+        command.arg(dir.path());
+        command.arg("--step");
+        command.arg("--file-pattern");
+        command.arg(".");
+        command.env("NO_COLOR", "1");
+        command.env("TERM", "xterm-256color");
+        command.env(
+            "PATH",
+            std::env::join_paths(
+                std::iter::once(helper().parent().unwrap().to_owned())
+                    .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+            )
+            .unwrap(),
+        );
+        let mut child = pair.slave.spawn_command(command).unwrap();
+        drop(pair.slave);
+        let mut input = pair.master.take_writer().unwrap();
+        let mut reader = pair.master.try_clone_reader().unwrap();
+        let (send, receive) = mpsc::channel();
+        thread::spawn(move || {
+            let mut buffer = [0; 4096];
+            loop {
+                match reader.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(count) => {
+                        if send.send(buffer[..count].to_vec()).is_err() {
+                            break;
+                        }
+                    }
+                    Err(error)
+                        if error.kind() == io::ErrorKind::BrokenPipe
+                            || error.raw_os_error() == Some(libc::EIO) =>
+                    {
+                        break;
+                    }
+                    Err(error) => panic!("Failed reading timer walkthrough: {error}"),
+                }
+            }
+        });
+        let mut bytes = Vec::new();
+        let pause_deadline = Instant::now() + Duration::from_secs(5);
+        while !String::from_utf8_lossy(&bytes).contains("00:01") {
+            assert!(
+                Instant::now() < pause_deadline,
+                "{name}: timer did not refresh"
+            );
+            if let Ok(chunk) = receive.recv_timeout(Duration::from_millis(50)) {
+                bytes.extend(chunk);
+            }
+        }
+        input.write_all(b"f\r").unwrap();
+        input.flush().unwrap();
+        let execution_deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            assert!(
+                Instant::now() < execution_deadline,
+                "{name}: execution timer did not refresh\n{}",
+                String::from_utf8_lossy(&bytes)
+            );
+            if let Ok(chunk) = receive.recv_timeout(Duration::from_millis(50)) {
+                bytes.extend(chunk);
+            }
+            let raw = String::from_utf8_lossy(&bytes);
+            let frame =
+                dialoguer::console::strip_ansi_codes(raw.rsplit("\x1b[H\x1b[2J").next().unwrap());
+            if frame.contains("Running command") && frame.contains("00:02") {
+                break;
+            }
+        }
+        input.write_all(b"\x03").unwrap();
+        input.flush().unwrap();
+        let status = child.wait().unwrap();
+        assert_eq!(
+            status.exit_code(),
+            130,
+            "{name}: {}",
+            String::from_utf8_lossy(&bytes)
+        );
+    }
 }
 
 #[test]

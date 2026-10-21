@@ -290,8 +290,11 @@ impl Session {
         }
     }
 
-    fn refresh_timer(&mut self) -> Result<()> {
-        if self.frame.is_some() && self.timer_rendered.elapsed() >= Duration::from_secs(1) {
+    pub fn refresh_timer(&mut self) -> Result<()> {
+        if self.screen_active
+            && self.frame.is_some()
+            && self.timer_rendered.elapsed() >= Duration::from_secs(1)
+        {
             self.timer_rendered = Instant::now();
             self.render()?;
         }
@@ -503,6 +506,7 @@ impl Session {
         self.document_file = file.to_owned();
         self.document_started = Some(Instant::now());
         self.block_started = None;
+        self.frame = None;
         self.timer_rendered = Instant::now();
     }
 

@@ -388,13 +388,20 @@ fn execute(
             session.preview(index + 1)?;
         }
         let result = (|| -> Result<process::Output> {
+            let mut progress = || {
+                if let Some(session) = stepping.as_deref_mut() {
+                    session.refresh_timer()?;
+                }
+                Ok(())
+            };
             if let Some(shell) = fixture.shell.borrow_mut().as_mut() {
-                shell.run(
+                shell.run_with_progress(
                     &command,
                     stdin.take(),
                     shell_block.as_mut(),
                     timeout,
                     index + 1 == commands.len(),
+                    &mut progress,
                 )
             } else if let Some(steps) = &case.pty {
                 let (result, completed) = process::pty(
@@ -403,8 +410,11 @@ fn execute(
                     &fixture.env,
                     &steps[step_index..],
                     timeout,
-                    &fixture.processes,
-                    index + 1 == commands.len(),
+                    process::PtyExecution {
+                        scope: &fixture.processes,
+                        final_command: index + 1 == commands.len(),
+                        progress: &mut progress,
+                    },
                 )?;
                 step_index += completed;
                 Ok(result)
@@ -416,13 +426,14 @@ fn execute(
                 let mut input = stdin.take();
                 let mut output = None;
                 for stage in stages {
-                    let result = process::run(
+                    let result = process::run_with_progress(
                         &resolve(&stage, dir)?,
                         &fixture.cwd,
                         &fixture.env,
                         input,
                         timeout,
                         &fixture.processes,
+                        &mut progress,
                     )?;
                     if result.code != 0 {
                         output = Some(result);

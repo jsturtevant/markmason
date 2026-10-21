@@ -265,7 +265,26 @@ impl Session {
         timeout: Duration,
         final_command: bool,
     ) -> Result<process::Output> {
-        let result = self.execute(command, input, block, timeout, final_command);
+        self.run_with_progress(
+            command,
+            input,
+            block,
+            timeout,
+            final_command,
+            &mut || Ok(()),
+        )
+    }
+
+    pub fn run_with_progress(
+        &mut self,
+        command: &str,
+        input: Option<Vec<u8>>,
+        block: Option<&mut Block<'_>>,
+        timeout: Duration,
+        final_command: bool,
+        progress: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<process::Output> {
+        let result = self.execute(command, input, block, timeout, final_command, progress);
         if result.is_err()
             && !(self.cleanup_enabled && self.ready)
             && let Some(terminal) = self.terminal.take()
@@ -284,6 +303,7 @@ impl Session {
         mut block: Option<&mut Block<'_>>,
         timeout: Duration,
         final_command: bool,
+        progress: &mut dyn FnMut() -> Result<()>,
     ) -> Result<process::Output> {
         let terminal = self.terminal.as_mut().context("Bash session is closed")?;
         let directory = self
@@ -326,6 +346,7 @@ impl Session {
         let mut cleanup = None;
         let mut recovery_write = None;
         loop {
+            progress()?;
             match terminal.rx.recv_timeout(Duration::from_millis(10)) {
                 Ok(chunk) => bytes.extend(chunk.context("Failed reading Bash terminal")?),
                 Err(mpsc::RecvTimeoutError::Disconnected) => {}

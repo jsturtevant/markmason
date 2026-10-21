@@ -244,6 +244,18 @@ pub fn run(
     timeout: Duration,
     scope: &Scope,
 ) -> Result<Output> {
+    run_with_progress(args, cwd, env, input, timeout, scope, &mut || Ok(()))
+}
+
+pub fn run_with_progress(
+    args: &[String],
+    cwd: &Path,
+    env: &Environment,
+    input: Option<Vec<u8>>,
+    timeout: Duration,
+    scope: &Scope,
+    progress: &mut dyn FnMut() -> Result<()>,
+) -> Result<Output> {
     #[cfg(not(windows))]
     let _ = scope;
     cancellation::check()?;
@@ -318,6 +330,7 @@ pub fn run(
         let start = Instant::now();
         let status = loop {
             cancellation::check()?;
+            progress()?;
             if let Some(status) = child.try_wait()? {
                 break status;
             }
@@ -344,9 +357,10 @@ pub fn run(
         };
         #[cfg(windows)]
         tree.check_started()?;
-        let collect = |rx: Receiver<std::io::Result<Vec<u8>>>| -> Result<Vec<u8>> {
+        let mut collect = |rx: Receiver<std::io::Result<Vec<u8>>>| -> Result<Vec<u8>> {
             loop {
                 cancellation::check()?;
+                progress()?;
                 match rx.recv_timeout(Duration::from_millis(10)) {
                     Ok(result) => return Ok(result?),
                     Err(mpsc::RecvTimeoutError::Timeout) if start.elapsed() < timeout => {}
@@ -360,6 +374,7 @@ pub fn run(
         let stderr = collect(stderr)?;
         let input_result = loop {
             cancellation::check()?;
+            progress()?;
             match input_rx.recv_timeout(Duration::from_millis(10)) {
                 Ok(result) => break result,
                 Err(mpsc::RecvTimeoutError::Timeout) if start.elapsed() < timeout => {}
@@ -670,15 +685,25 @@ impl<'a> Interaction<'a> {
     }
 }
 
+pub struct PtyExecution<'a> {
+    pub scope: &'a Scope,
+    pub final_command: bool,
+    pub progress: &'a mut dyn FnMut() -> Result<()>,
+}
+
 pub fn pty(
     args: &[String],
     cwd: &Path,
     env: &Environment,
     steps: &[spec::Step],
     timeout: Duration,
-    scope: &Scope,
-    final_command: bool,
+    execution: PtyExecution<'_>,
 ) -> Result<(Output, usize)> {
+    let PtyExecution {
+        scope,
+        final_command,
+        progress,
+    } = execution;
     #[cfg(not(windows))]
     let _ = scope;
     let mut terminal = Terminal::new(args, cwd, env)?;
@@ -699,6 +724,7 @@ pub fn pty(
         let mut eof = false;
         loop {
             cancellation::check()?;
+            progress()?;
             match rx.recv_timeout(Duration::from_millis(10)) {
                 Ok(chunk) => bytes.extend(chunk.context("Failed reading PTY output")?),
                 Err(mpsc::RecvTimeoutError::Disconnected) => eof = true,
