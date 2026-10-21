@@ -1334,6 +1334,15 @@ fn step_document_timer_refreshes_during_pauses_and_execution() {
     use portable_pty::{CommandBuilder, PtySize, native_pty_system};
     use std::io::Read;
 
+    fn elapsed_seconds(line: &str) -> Option<u64> {
+        let elapsed = line.split_whitespace().next_back()?;
+        if elapsed == "<1s" {
+            return Some(0);
+        }
+        let (minutes, seconds) = elapsed.split_once(':')?;
+        Some(minutes.parse::<u64>().ok()? * 60 + seconds.parse::<u64>().ok()?)
+    }
+
     for (name, frontmatter, pty) in [
         ("process", "timeout: 30", ""),
         (
@@ -1417,7 +1426,9 @@ fn step_document_timer_refreshes_during_pauses_and_execution() {
             let setup_output = raw.split("\x1b[?1049h").next().unwrap();
             if setup_output
                 .split(['\r', '\n'])
-                .any(|line| line.contains("▶ lesson.md") && line.contains("00:01"))
+                .filter(|line| line.contains("▶ lesson.md"))
+                .filter_map(elapsed_seconds)
+                .any(|elapsed| elapsed >= 1)
                 && {
                     let setup_text = dialoguer::console::strip_ansi_codes(setup_output);
                     setup_text.contains("Setup (app pause-output):")
@@ -1428,7 +1439,8 @@ fn step_document_timer_refreshes_during_pauses_and_execution() {
             }
         }
         let pause_deadline = Instant::now() + Duration::from_secs(5);
-        loop {
+        let mut pause_started = None;
+        let pause_elapsed = loop {
             assert!(
                 Instant::now() < pause_deadline,
                 "{name}: paused document timer did not refresh\n{}",
@@ -1442,15 +1454,20 @@ fn step_document_timer_refreshes_during_pauses_and_execution() {
                 dialoguer::console::strip_ansi_codes(raw.rsplit("\x1b[H\x1b[2J").next().unwrap());
             let document_line = frame.lines().find(|line| line.starts_with("▶ lesson.md"));
             if frame.contains("Enter: Next command")
-                && document_line.is_some_and(|line| line.contains("00:02"))
+                && let Some(elapsed) = document_line.and_then(elapsed_seconds)
             {
-                break;
+                match pause_started {
+                    Some(started) if elapsed > started => break elapsed,
+                    None => pause_started = Some(elapsed),
+                    _ => {}
+                }
             }
-        }
+        };
         input.write_all(b"f\r").unwrap();
         input.flush().unwrap();
         let execution_deadline = Instant::now() + Duration::from_secs(5);
-        loop {
+        let mut execution_started = None;
+        let execution_elapsed = loop {
             assert!(
                 Instant::now() < execution_deadline,
                 "{name}: execution timer did not refresh\n{}",
@@ -1464,11 +1481,20 @@ fn step_document_timer_refreshes_during_pauses_and_execution() {
                 dialoguer::console::strip_ansi_codes(raw.rsplit("\x1b[H\x1b[2J").next().unwrap());
             let document_line = frame.lines().find(|line| line.starts_with("▶ lesson.md"));
             if frame.contains("Running command")
-                && document_line.is_some_and(|line| line.contains("00:03"))
+                && let Some(elapsed) = document_line.and_then(elapsed_seconds)
             {
-                break;
+                match execution_started {
+                    Some(started) if elapsed > started => break elapsed,
+                    None => execution_started = Some(elapsed),
+                    _ => {}
+                }
             }
-        }
+        };
+        assert!(
+            execution_elapsed > pause_elapsed,
+            "{name}: {}",
+            String::from_utf8_lossy(&bytes)
+        );
         input.write_all(b"\x03").unwrap();
         input.flush().unwrap();
         let status = child.wait().unwrap();
@@ -1493,16 +1519,12 @@ fn step_document_timer_refreshes_during_pauses_and_execution() {
             .lines()
             .find(|line| line.contains("■ CANCELLED  lesson.md"))
             .unwrap_or_else(|| panic!("{name}: {transcript}"));
-        let elapsed = final_line
-            .split_whitespace()
-            .next_back()
-            .unwrap_or_else(|| panic!("{name}: {final_line}"));
-        let (minutes, seconds) = elapsed
-            .split_once(':')
-            .unwrap_or_else(|| panic!("{name}: {final_line}"));
-        let elapsed_seconds =
-            minutes.parse::<u64>().unwrap() * 60 + seconds.parse::<u64>().unwrap();
-        assert!(elapsed_seconds >= 3, "{name}: {final_line}");
+        let final_elapsed =
+            elapsed_seconds(final_line).unwrap_or_else(|| panic!("{name}: {final_line}"));
+        assert!(
+            final_elapsed >= 3 && final_elapsed >= execution_elapsed,
+            "{name}: {final_line}"
+        );
     }
 }
 
