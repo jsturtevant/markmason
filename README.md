@@ -38,7 +38,7 @@ Hello, world!
 ```
 ````
 
-With `bash` on `PATH`, run:
+Run Markmason:
 
 ```sh
 mm                         # Defaults to tests/cli
