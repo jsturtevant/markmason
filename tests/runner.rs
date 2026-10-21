@@ -399,6 +399,33 @@ fn parallel_rejects_invalid_values_and_interactive_mode() {
 }
 
 #[test]
+fn parallel_listing_rejects_documents_without_ordinary_blocks() {
+    for parallel in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("prose.md"), "# No commands\n").unwrap();
+        fs::write(
+            dir.path().join("always.md"),
+            "```markmason always\napp echo cleanup\n```\n",
+        )
+        .unwrap();
+        let mut runner = command(dir.path());
+        runner.arg("--list");
+        if parallel {
+            runner.args(["--parallel", "2"]);
+        }
+        let output = runner.output().unwrap();
+        let transcript = text(&output);
+        assert_eq!(output.status.code(), Some(1), "{transcript}");
+        assert_eq!(
+            transcript.matches("No test cases found").count(),
+            2,
+            "{transcript}"
+        );
+        assert!(!transcript.contains("app echo cleanup"), "{transcript}");
+    }
+}
+
+#[test]
 fn parallel_failure_output_is_grouped_in_file_order() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(
@@ -475,6 +502,62 @@ fn parallel_cancellation_allows_inflight_cleanup_and_stops_scheduling() {
     assert!(!c_ran.exists(), "{transcript}");
     assert!(transcript.contains("CANCELLED"), "{transcript}");
     assert!(transcript.contains("1 not run"), "{transcript}");
+}
+
+#[cfg(unix)]
+#[test]
+fn parallel_cancellation_after_serial_barrier_or_single_worker_marks_queue_not_run() {
+    for (parallel, serial) in [("1", false), ("2", true)] {
+        let dir = tempfile::tempdir().unwrap();
+        let started = dir.path().join("started");
+        let cleaned = dir.path().join("cleaned");
+        let later = dir.path().join("later");
+        fs::write(
+            dir.path().join("a.md"),
+            format!(
+                "{}\n```markmason\napp tree '{}'\n```\n\
+                 ```markmason always\napp mark '{}'\n```\n",
+                if serial {
+                    "---\nparallel: false\n---"
+                } else {
+                    ""
+                },
+                shell_path(&started),
+                shell_path(&cleaned)
+            ),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("b.md"),
+            format!("```markmason\napp mark '{}'\n```\n", shell_path(&later)),
+        )
+        .unwrap();
+        let mut child = command(dir.path())
+            .args(["--parallel", parallel])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !started.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if !started.exists() {
+            child.kill().unwrap();
+            panic!(
+                "Command did not start: {}",
+                text(&child.wait_with_output().unwrap())
+            );
+        }
+        assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGINT) }, 0);
+        let output = child.wait_with_output().unwrap();
+        let transcript = text(&output);
+        assert_eq!(output.status.code(), Some(130), "{parallel}: {transcript}");
+        assert!(cleaned.exists(), "{parallel}: {transcript}");
+        assert!(!later.exists(), "{parallel}: {transcript}");
+        assert!(transcript.contains("1 not run"), "{parallel}: {transcript}");
+        assert!(transcript.contains("- b.md"), "{parallel}: {transcript}");
+    }
 }
 
 #[cfg(unix)]

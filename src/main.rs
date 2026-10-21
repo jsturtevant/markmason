@@ -1092,6 +1092,10 @@ fn run_parallel_documents(
             stop_scheduling = true;
         }
         while !stop_scheduling && active < workers {
+            if cancellation::signal().is_some() {
+                stop_scheduling = true;
+                break;
+            }
             let Some((index, (_, spec, _))) = queued.front() else {
                 break;
             };
@@ -1408,8 +1412,20 @@ fn run(options: Options) -> Result<bool> {
     }
     if options.list {
         let mut presenter = presentation::Presenter::new();
+        let mut valid = true;
         for (file, spec, indices) in &specs {
             let listed_total = indices.len() + spec.cases.iter().filter(|case| case.always).count();
+            if indices.is_empty() {
+                presenter.document_start(file)?;
+                presenter.setup_fail(
+                    file,
+                    &anyhow::anyhow!(
+                        "No test cases found. Expected a fenced markmason command block without always"
+                    ),
+                )?;
+                valid = false;
+                continue;
+            }
             let mut listed = Vec::new();
             for (position, index) in indices.iter().copied().enumerate() {
                 let case = &spec.cases[index];
@@ -1426,7 +1442,7 @@ fn run(options: Options) -> Result<bool> {
             }
             presenter.list_document(file, &listed)?;
         }
-        return Ok(true);
+        return Ok(valid);
     }
     // Resolve authentication before replacing XDG_CONFIG_HOME in each fixture.
     let gh_config = Some(gh_config_dir()?);
@@ -1442,7 +1458,7 @@ fn run(options: Options) -> Result<bool> {
                     .max(1);
                 run_parallel_documents(&options, &root, gh_config, specs, verbose, workers)
             }
-            Some(Parallelism::Jobs(workers)) if workers > 1 => {
+            Some(Parallelism::Jobs(workers)) => {
                 run_parallel_documents(&options, &root, gh_config, specs, verbose, workers)
             }
             _ => run_serial_documents(&options, &root, gh_config, specs, verbose),
