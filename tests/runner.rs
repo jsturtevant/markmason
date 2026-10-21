@@ -1344,14 +1344,12 @@ fn step_document_timer_refreshes_during_pauses_and_execution() {
         ("shell", "shell: bash\ntimeout: 30", ""),
     ] {
         let dir = tempfile::tempdir().unwrap();
-        let setup_timeline = dir.path().join("setup-timeline");
         fs::write(
             dir.path().join("lesson.md"),
             format!(
-                "---\n{frontmatter}\nsetup: app timeline '{}' 1300\n---\n\
+                "---\n{frontmatter}\nsetup: app pause-output\n---\n\
                  ## Wait here\n```markmason\n\
-                 app echo ready\napp sleep\n```\n{pty}",
-                shell_path(&setup_timeline)
+                 app echo ready\napp sleep\n```\n{pty}"
             ),
         )
         .unwrap();
@@ -1368,6 +1366,7 @@ fn step_document_timer_refreshes_during_pauses_and_execution() {
         command.arg("--step");
         command.arg("--file-pattern");
         command.arg(".");
+        command.arg("--verbose");
         command.env("NO_COLOR", "1");
         command.env("TERM", "xterm-256color");
         command.env(
@@ -1419,6 +1418,11 @@ fn step_document_timer_refreshes_during_pauses_and_execution() {
             if setup_output
                 .split(['\r', '\n'])
                 .any(|line| line.contains("▶ lesson.md") && line.contains("00:01"))
+                && {
+                    let setup_text = dialoguer::console::strip_ansi_codes(setup_output);
+                    setup_text.contains("Setup (app pause-output):")
+                        && setup_text.contains("setup-ready")
+                }
             {
                 break;
             }
@@ -1485,13 +1489,20 @@ fn step_document_timer_refreshes_during_pauses_and_execution() {
         let raw = String::from_utf8_lossy(&bytes);
         let transcript = dialoguer::console::strip_ansi_codes(&raw);
         assert_eq!(status.exit_code(), 130, "{name}: {transcript}");
-        assert!(
-            transcript.contains("■ CANCELLED  lesson.md")
-                && transcript.lines().any(|line| {
-                    line.contains("■ CANCELLED  lesson.md") && line.contains("00:0")
-                }),
-            "{name}: {transcript}"
-        );
+        let final_line = transcript
+            .lines()
+            .find(|line| line.contains("■ CANCELLED  lesson.md"))
+            .unwrap_or_else(|| panic!("{name}: {transcript}"));
+        let elapsed = final_line
+            .split_whitespace()
+            .next_back()
+            .unwrap_or_else(|| panic!("{name}: {final_line}"));
+        let (minutes, seconds) = elapsed
+            .split_once(':')
+            .unwrap_or_else(|| panic!("{name}: {final_line}"));
+        let elapsed_seconds =
+            minutes.parse::<u64>().unwrap() * 60 + seconds.parse::<u64>().unwrap();
+        assert!(elapsed_seconds >= 3, "{name}: {final_line}");
     }
 }
 

@@ -1711,15 +1711,17 @@ fn run(options: Options) -> Result<bool> {
             chain: vec![root.join(&file)],
             deferred: Vec::new(),
         };
+        let mut setup_diagnostics = String::new();
         let setup_result = run_setup(
             &spec,
             &dir,
             &fixture,
             &options.cwd,
             timeout,
-            (verbose, None),
+            (verbose, Some(&mut setup_diagnostics)),
             &mut setup,
         );
+        presenter.details(&setup_diagnostics)?;
         if stepping.is_some() && setup_result.is_ok() {
             presenter.end_document_progress()?;
         }
