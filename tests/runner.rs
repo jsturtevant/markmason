@@ -1346,7 +1346,10 @@ fn step_document_timer_refreshes_during_pauses_and_execution() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(
             dir.path().join("lesson.md"),
-            format!("---\n{frontmatter}\n---\n## Wait here\n```markmason\napp sleep\n```\n{pty}"),
+            format!(
+                "---\n{frontmatter}\n---\n## Wait here\n```markmason\n\
+                 app echo ready\napp sleep\n```\n{pty}"
+            ),
         )
         .unwrap();
         let pair = native_pty_system()
@@ -1399,13 +1402,23 @@ fn step_document_timer_refreshes_during_pauses_and_execution() {
         });
         let mut bytes = Vec::new();
         let pause_deadline = Instant::now() + Duration::from_secs(5);
-        while !String::from_utf8_lossy(&bytes).contains("00:01") {
+        loop {
             assert!(
                 Instant::now() < pause_deadline,
-                "{name}: timer did not refresh"
+                "{name}: paused document timer did not refresh\n{}",
+                String::from_utf8_lossy(&bytes)
             );
             if let Ok(chunk) = receive.recv_timeout(Duration::from_millis(50)) {
                 bytes.extend(chunk);
+            }
+            let raw = String::from_utf8_lossy(&bytes);
+            let frame =
+                dialoguer::console::strip_ansi_codes(raw.rsplit("\x1b[H\x1b[2J").next().unwrap());
+            let document_line = frame.lines().find(|line| line.starts_with("▶ lesson.md"));
+            if frame.contains("Enter: Next command")
+                && document_line.is_some_and(|line| line.contains("00:01"))
+            {
+                break;
             }
         }
         input.write_all(b"f\r").unwrap();
@@ -1423,18 +1436,28 @@ fn step_document_timer_refreshes_during_pauses_and_execution() {
             let raw = String::from_utf8_lossy(&bytes);
             let frame =
                 dialoguer::console::strip_ansi_codes(raw.rsplit("\x1b[H\x1b[2J").next().unwrap());
-            if frame.contains("Running command") && frame.contains("00:02") {
+            let document_line = frame.lines().find(|line| line.starts_with("▶ lesson.md"));
+            if frame.contains("Running command")
+                && document_line.is_some_and(|line| line.contains("00:02"))
+            {
                 break;
             }
         }
         input.write_all(b"\x03").unwrap();
         input.flush().unwrap();
         let status = child.wait().unwrap();
-        assert_eq!(
-            status.exit_code(),
-            130,
-            "{name}: {}",
-            String::from_utf8_lossy(&bytes)
+        while let Ok(chunk) = receive.try_recv() {
+            bytes.extend(chunk);
+        }
+        let raw = String::from_utf8_lossy(&bytes);
+        let transcript = dialoguer::console::strip_ansi_codes(&raw);
+        assert_eq!(status.exit_code(), 130, "{name}: {transcript}");
+        assert!(
+            transcript.contains("■ CANCELLED  lesson.md")
+                && transcript.lines().any(|line| {
+                    line.contains("■ CANCELLED  lesson.md") && line.contains("00:0")
+                }),
+            "{name}: {transcript}"
         );
     }
 }

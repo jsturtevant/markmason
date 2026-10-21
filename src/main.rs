@@ -1602,9 +1602,7 @@ fn run(options: Options) -> Result<bool> {
                 not_run: false,
                 duration: Duration::ZERO,
             };
-            if stepping.is_none() {
-                presenter.document_finish(&document)?;
-            }
+            presenter.document_finish(&document)?;
             documents.push(document);
             failed += 1;
             if options.fail_fast {
@@ -1680,9 +1678,7 @@ fn run(options: Options) -> Result<bool> {
             Ok(None) => {
                 document.cancelled = true;
                 document.duration = document_started.elapsed();
-                if stepping.is_none() {
-                    presenter.document_finish(&document)?;
-                }
+                presenter.document_finish(&document)?;
                 documents.push(document);
                 break;
             }
@@ -1695,9 +1691,7 @@ fn run(options: Options) -> Result<bool> {
                     document.errors += 1;
                     presenter.setup_fail(&file, &error)?;
                 }
-                if stepping.is_none() {
-                    presenter.document_finish(&document)?;
-                }
+                presenter.document_finish(&document)?;
                 documents.push(document);
                 failed += 1;
                 if cancellation::signal().is_some() {
@@ -1853,9 +1847,7 @@ fn run(options: Options) -> Result<bool> {
         document.cancelled |= cancellation::signal().is_some()
             || stepping.as_ref().is_some_and(step::Session::stopped);
         document.duration = document_started.elapsed();
-        if stepping.is_none() {
-            presenter.document_finish(&document)?;
-        }
+        presenter.document_finish(&document)?;
         documents.push(document);
         if cancellation::signal().is_some() {
             break;
