@@ -319,6 +319,74 @@ fn parallel_false_is_a_serial_barrier() {
 }
 
 #[test]
+fn parallel_files_isolate_bash_setup_home_config_and_deferred_cleanup() {
+    let dir = tempfile::tempdir().unwrap();
+    let sync = dir.path().join("sync");
+    fs::create_dir(&sync).unwrap();
+    fs::write(
+        dir.path().join("setup.md"),
+        "---\nshell: bash\n---\n\
+         ```markmason\nSETUP_VALUE=ready\n```\n\
+         ```markmason always\n\
+         test \"$SETUP_VALUE\" = ready\n\
+         printf '%s\\n' \"$FILE_ID\" > \"$MARKMASON_SYNC_DIR/$FILE_ID.setup-clean\"\n\
+         ```\n",
+    )
+    .unwrap();
+    for (id, other) in [("a", "b"), ("b", "a")] {
+        fs::write(
+            dir.path().join(format!("{id}.md")),
+            format!(
+                "---\nshell: bash\nsetup: mm setup.md\ntimeout: 5\n---\n\
+                 ```markmason\n\
+                 FILE_ID={id}\n\
+                 printf '%s\\n%s\\n' \"$TEST_HOME\" \"$XDG_CONFIG_HOME\" > \"$MARKMASON_SYNC_DIR/{id}.env\"\n\
+                 : > \"$MARKMASON_SYNC_DIR/{id}.ready\"\n\
+                 while test ! -f \"$MARKMASON_SYNC_DIR/{other}.ready\"; do sleep 0.01; done\n\
+                 IFS= read -r OTHER_HOME < \"$MARKMASON_SYNC_DIR/{other}.env\"\n\
+                 OTHER_CONFIG=$(sed -n '2p' \"$MARKMASON_SYNC_DIR/{other}.env\")\n\
+                 test \"$TEST_HOME\" != \"$OTHER_HOME\"\n\
+                 test \"$XDG_CONFIG_HOME\" != \"$OTHER_CONFIG\"\n\
+                 test \"$SETUP_VALUE\" = ready\n\
+                 ```\n\
+                 ```markmason always\n\
+                 test \"$FILE_ID\" = {id}\n\
+                 printf '%s\\n' \"$FILE_ID\" > \"$MARKMASON_SYNC_DIR/{id}.caller-clean\"\n\
+                 ```\n"
+            ),
+        )
+        .unwrap();
+    }
+    let output = command(dir.path())
+        .args(["--parallel", "2", "--file-pattern", "^[ab]\\.md$"])
+        .env("MARKMASON_SYNC_DIR", shell_path(&sync))
+        .output()
+        .unwrap();
+    let transcript = text(&output);
+    assert!(output.status.success(), "{transcript}");
+    let a: Vec<_> = fs::read_to_string(sync.join("a.env"))
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    let b: Vec<_> = fs::read_to_string(sync.join("b.env"))
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert_ne!(a[0], b[0], "{transcript}");
+    assert_ne!(a[1], b[1], "{transcript}");
+    for marker in [
+        "a.setup-clean",
+        "a.caller-clean",
+        "b.setup-clean",
+        "b.caller-clean",
+    ] {
+        assert!(sync.join(marker).exists(), "{marker}: {transcript}");
+    }
+}
+
+#[test]
 fn parallel_fail_fast_stops_scheduling_and_finishes_inflight_cleanup() {
     let dir = tempfile::tempdir().unwrap();
     let a_clean = dir.path().join("a-clean");
