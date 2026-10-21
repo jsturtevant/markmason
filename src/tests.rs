@@ -870,3 +870,22 @@ fn filters_and_timeout_validation() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn panicking_parallel_worker_reports_a_result() {
+    let (send, receive) = std::sync::mpsc::channel();
+    let worker = spawn_worker(send, 7, || -> Result<()> {
+        panic!("deliberate worker panic");
+    });
+    let (index, result) = receive
+        .recv_timeout(Duration::from_secs(1))
+        .expect("panicking worker did not report completion");
+    worker.join().unwrap();
+    assert_eq!(index, 7);
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("deliberate worker panic")
+    );
+}

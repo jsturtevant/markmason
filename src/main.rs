@@ -16,6 +16,7 @@ use std::{
     collections::{BTreeMap, VecDeque},
     env, fs,
     io::{self, Write},
+    panic::{self, AssertUnwindSafe},
     path::{Path, PathBuf},
     sync::{Arc, mpsc},
     thread,
@@ -1060,6 +1061,30 @@ fn failed_file_run(file: String, total: usize, error: anyhow::Error) -> Result<F
     })
 }
 
+fn spawn_worker<T, F>(
+    completed: mpsc::Sender<(usize, Result<T>)>,
+    index: usize,
+    work: F,
+) -> thread::JoinHandle<()>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    thread::spawn(move || {
+        let result = panic::catch_unwind(AssertUnwindSafe(work))
+            .map_err(|payload| {
+                let message = payload
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                    .unwrap_or("unknown panic");
+                anyhow::anyhow!("Parallel document worker panicked: {message}")
+            })
+            .and_then(|result| result);
+        let _ = completed.send((index, result));
+    })
+}
+
 fn run_parallel_documents(
     options: &Options,
     root: &Path,
@@ -1127,9 +1152,8 @@ fn run_parallel_documents(
             let gh_config = Arc::clone(&gh_config);
             let completed = completed.clone();
             active += 1;
-            thread::spawn(move || {
-                let total = indices.len() + spec.cases.iter().filter(|case| case.always).count();
-                let result = run_unattended_document(
+            spawn_worker(completed, index, move || {
+                run_unattended_document(
                     &options,
                     &root,
                     &gh_config,
@@ -1137,8 +1161,7 @@ fn run_parallel_documents(
                     verbose,
                     true,
                 )
-                .or_else(|error| failed_file_run(file, total, error));
-                let _ = completed.send((index, result));
+                .with_context(|| format!("Parallel document {file} failed"))
             });
         }
         if active == 0 {
@@ -1151,7 +1174,13 @@ fn run_parallel_documents(
             .recv()
             .context("Parallel document worker stopped without reporting a result")?;
         active -= 1;
-        let run = run?;
+        let run = match run {
+            Ok(run) => run,
+            Err(error) => {
+                let (file, total) = &selected[index];
+                failed_file_run(file.clone(), *total, error)?
+            }
+        };
         if options.fail_fast && run.document.failed() {
             stop_scheduling = true;
         }
@@ -1166,7 +1195,14 @@ fn run_parallel_documents(
             .recv()
             .context("Parallel document worker stopped without reporting a result")?;
         active -= 1;
-        runs.insert(index, run?);
+        let run = match run {
+            Ok(run) => run,
+            Err(error) => {
+                let (file, total) = &selected[index];
+                failed_file_run(file.clone(), *total, error)?
+            }
+        };
+        runs.insert(index, run);
     }
 
     let mut documents = Vec::new();
