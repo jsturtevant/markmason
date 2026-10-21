@@ -219,6 +219,37 @@ document fails. The default remains a complete suite run.
 
 See the [executable running guide](../tests/cli/running.md).
 
+## Bounded file parallelism
+
+Use `--parallel` to run independent Markdown files concurrently. Bare
+`--parallel` uses `std::thread::available_parallelism()` with a fallback of one;
+`--parallel N` uses a positive explicit limit up to 256. Without the flag,
+execution remains serial.
+
+- Only files are parallelized. Setup, commands, blocks, PTY steps, and deferred
+  cleanup inside one file remain strictly ordered.
+- Every file keeps its own fixture, application home, configuration, clone,
+  Bash session, timeout, setup chain, and cleanup lifecycle.
+- File output is buffered and printed in selected path order after workers
+  finish, so diagnostics never interleave. The final summary uses the same
+  deterministic order.
+- `parallel: false` in frontmatter makes a file a serial barrier: active files
+  finish first, the serial file runs alone, and later files start afterward.
+- `--parallel` is rejected with `--step`. `--list` remains non-executing and
+  accepts the flag without creating workers.
+- With `--fail-fast`, no new files are scheduled after the first observed
+  failed document. Files already running reach their normal boundary, including
+  deferred cleanup. If several in-flight files fail, all failures are reported
+  in path order; files never started are listed as not run.
+- Cancellation stops scheduling, lets active files process the shared signal
+  and cleanup safely, and leaves queued files not run.
+- Authors remain responsible for unique ports, external paths, database names,
+  namespaces, accounts, and other resources outside Markmason's isolated
+  fixture directories.
+
+Zero, negative, malformed, and explicit values above 256 are rejected.
+See the [executable running guide](../tests/cli/running.md).
+
 ## Frontmatter and setup
 
 ```yaml

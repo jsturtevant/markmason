@@ -141,4 +141,25 @@ NOT RUN
 Blocks: 1 passed, 1 failed (includes deferred)
 ```
 
+## Run independent files concurrently
+
+```markmason
+mm tests/fixtures/parallel --parallel 2
+```
+
+Parallelism is bounded by the requested worker count. Output is buffered and
+printed in file order. A file with `parallel: false` waits for active files,
+runs alone, and forms a barrier before later files start.
+
+```expected-contains
+RUN  a.md
+  ✓ PASS Block 1/1 — Wait in the first worker
+RUN  b.md
+  ✓ PASS Block 1/1 — Wait in the second worker
+RUN  c-serial.md
+  ✓ PASS Block 1/1 — Run after the parallel files
+Documents: 3 passed, 0 failed
+Blocks: 3 passed, 0 failed (includes deferred)
+```
+
 [Filter tests](filtering.md) | [Error cases](errors.md)

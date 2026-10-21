@@ -14,6 +14,7 @@ predictable output, prompts, and state.
 | [passing](passing) | Exit 0 | Valid specs run and report the right totals |
 | [always](always/lesson.md) | Exit 0 | Deferred cleanup shares Bash state and runs after ordinary commands |
 | [fail-fast](fail-fast) | Exit 1 with `--fail-fast` | Cleanup finishes and later documents are reported as not run |
+| [parallel](parallel) | Exit 0 with `--parallel 2` | File output stays ordered and `parallel: false` acts as a barrier |
 | [matching-order](matching-order/output.md) | Exit 1 | Output in the wrong order is rejected |
 | [substring-mismatch](substring-mismatch/output.md) | Exit 1 | Missing literal text reports the substring and actual output |
 | [regex-mismatch](regex-mismatch/output.md) | Exit 1 | A missing regex match reports the pattern and actual output |

@@ -87,6 +87,9 @@ description: >-
 - Keep fixtures small and deterministic. Reuse existing helpers for stdin,
   interactive terminals, timeouts, and stateful behavior rather than adding a
   runtime dependency merely to generate test output.
+- When documenting `--parallel`, keep each file's external resources unique.
+  Use `parallel: false` for timing-sensitive or shared-resource files that must
+  form a serial barrier.
 - Use `markmason always` for cleanup that must run after ordinary blocks,
   including failure or walkthrough cancellation. Keep it safe for partial work.
   Put an expected exit after the modifier: `markmason always (exit N)`.

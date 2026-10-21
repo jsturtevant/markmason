@@ -13,13 +13,18 @@ use clap::Parser;
 use regex::Regex;
 use std::{
     cell::RefCell,
+    collections::{BTreeMap, VecDeque},
     env, fs,
+    io::{self, Write},
+    panic::{self, AssertUnwindSafe},
     path::{Path, PathBuf},
+    sync::{Arc, mpsc},
+    thread,
     time::Duration,
 };
 use tempfile::{Builder, TempDir};
 
-#[derive(Debug, Parser)]
+#[derive(Debug, Clone, Parser)]
 #[command(name = "mm", version, about)]
 struct Options {
     /// Markdown specification file, or directory searched recursively.
@@ -57,8 +62,39 @@ struct Options {
     /// Stop scheduling documents after the first failed document finishes cleanup.
     #[arg(long, conflicts_with_all = ["list", "step"])]
     fail_fast: bool,
+    /// Run Markdown files concurrently; omit N to use available logical CPUs.
+    #[arg(
+        long,
+        num_args = 0..=1,
+        default_missing_value = "auto",
+        value_parser = parallelism,
+        conflicts_with = "step"
+    )]
+    parallel: Option<Parallelism>,
     #[arg(long)]
     verbose: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Parallelism {
+    Auto,
+    Jobs(usize),
+}
+
+fn parallelism(text: &str) -> std::result::Result<Parallelism, String> {
+    if text == "auto" {
+        return Ok(Parallelism::Auto);
+    }
+    let jobs = text
+        .parse::<usize>()
+        .map_err(|_| "parallel workers must be 'auto' or a positive integer".to_owned())?;
+    if jobs == 0 {
+        return Err("parallel workers must be greater than zero".to_owned());
+    }
+    if jobs > 256 {
+        return Err("parallel workers must not exceed 256".to_owned());
+    }
+    Ok(Parallelism::Jobs(jobs))
 }
 
 fn positive_seconds(text: &str) -> std::result::Result<f64, String> {
@@ -539,9 +575,10 @@ fn run_setup(
     fixture: &Fixture,
     setup_cwd: &Path,
     timeout: Duration,
-    verbose: bool,
+    output: (bool, Option<&mut String>),
     state: &mut Setup,
 ) -> Result<()> {
+    let (verbose, mut diagnostics) = output;
     let Some(setup) = &spec.setup else {
         return Ok(());
     };
@@ -595,13 +632,22 @@ fn run_setup(
             fixture,
             &fixture.cwd,
             timeout,
-            verbose,
+            (verbose, diagnostics.as_deref_mut()),
             state,
         )
         .with_context(|| format!("Markdown setup {} failed", path.display()))?;
         for case in setup_spec.cases.iter().filter(|case| !case.always) {
             cancellation::check()?;
-            execute(case, fixture, dir, timeout, verbose, None, None).with_context(|| {
+            execute(
+                case,
+                fixture,
+                dir,
+                timeout,
+                verbose,
+                diagnostics.as_deref_mut(),
+                None,
+            )
+            .with_context(|| {
                 format!("Markdown setup {} failed: {}", path.display(), case.command)
             })?;
         }
@@ -644,7 +690,10 @@ fn run_setup(
             bail!("Setup command failed: {setup}\n{}", result.text);
         }
         if verbose {
-            println!("Setup ({setup}):\n{}", result.text);
+            emit_diagnostic(
+                &mut diagnostics,
+                &format!("Setup ({setup}):\n{}\n", result.text),
+            );
         }
     }
     Ok(())
@@ -733,6 +782,481 @@ fn run_deferred(
         }
     }
     Ok(())
+}
+
+struct FileRun {
+    document: presentation::Document,
+    output: String,
+}
+
+fn run_unattended_document(
+    options: &Options,
+    root: &Path,
+    gh_config: &Path,
+    selected: (String, spec::Spec, Vec<usize>),
+    verbose: bool,
+    buffered: bool,
+) -> Result<FileRun> {
+    let (file, spec, indices) = selected;
+    let mut presenter = if buffered {
+        presentation::Presenter::buffered()
+    } else {
+        presentation::Presenter::new()
+    };
+    let listed_total = indices.len() + spec.cases.iter().filter(|case| case.always).count();
+    presenter.document_start(&file)?;
+    if indices.is_empty() {
+        let error = anyhow::anyhow!(
+            "No test cases found. Expected a fenced markmason command block without always"
+        );
+        presenter.setup_fail(&file, &error)?;
+        let document = presentation::Document {
+            file,
+            total: listed_total,
+            passed: 0,
+            failed: 0,
+            errors: 1,
+            failed_headings: Vec::new(),
+            cancelled: false,
+            not_run: false,
+            duration: Duration::ZERO,
+        };
+        presenter.document_finish(&document)?;
+        return Ok(FileRun {
+            document,
+            output: presenter.into_buffer(),
+        });
+    }
+    let started = std::time::Instant::now();
+    let mut document = presentation::Document {
+        file: file.clone(),
+        total: listed_total,
+        passed: 0,
+        failed: 0,
+        errors: 0,
+        failed_headings: Vec::new(),
+        cancelled: false,
+        not_run: false,
+        duration: Duration::ZERO,
+    };
+    let timeout = spec
+        .timeout
+        .unwrap_or(Duration::from_secs_f64(options.timeout));
+    let dir = root
+        .join(&file)
+        .parent()
+        .context("Spec has no parent directory")?
+        .to_owned();
+    let fixture = (|| -> Result<Fixture> {
+        let mut inputs = Vec::new();
+        collect_inputs(&spec, &dir, &mut vec![root.join(&file)], &mut inputs)?;
+        let env = input_environment(&inputs, &options.home_env, &file, None)?
+            .context("Unattended input collection unexpectedly stopped")?;
+        cancellation::check()?;
+        Fixture::new(options, &spec, gh_config, env)
+    })();
+    let fixture = match fixture {
+        Ok(fixture) => fixture,
+        Err(error) => {
+            document.cancelled = cancellation::signal().is_some();
+            document.duration = started.elapsed();
+            if document.cancelled {
+                presenter.document_cancel(&file, "Setup", &error)?;
+            } else {
+                document.errors += 1;
+                presenter.setup_fail(&file, &error)?;
+            }
+            presenter.document_finish(&document)?;
+            return Ok(FileRun {
+                document,
+                output: presenter.into_buffer(),
+            });
+        }
+    };
+    let mut setup = Setup {
+        chain: vec![root.join(&file)],
+        deferred: Vec::new(),
+    };
+    let mut setup_diagnostics = String::new();
+    let setup_result = run_setup(
+        &spec,
+        &dir,
+        &fixture,
+        &options.cwd,
+        timeout,
+        (verbose, Some(&mut setup_diagnostics)),
+        &mut setup,
+    );
+    presenter.details(&setup_diagnostics)?;
+    if let Err(error) = &setup_result {
+        if cancellation::signal().is_some() {
+            document.cancelled = true;
+            presenter.document_cancel(&file, "Setup", error)?;
+        } else {
+            document.errors += 1;
+            presenter.setup_fail(&file, error)?;
+        }
+    } else {
+        defer(
+            &spec,
+            &dir,
+            timeout,
+            &file,
+            indices.len(),
+            &mut setup.deferred,
+        );
+        document.total = indices.len() + setup.deferred.len();
+        for (offset, index) in indices.iter().copied().enumerate() {
+            if cancellation::signal().is_some() {
+                document.cancelled = true;
+                break;
+            }
+            let case = &spec.cases[index];
+            let block = presented_block(case, offset + 1, listed_total);
+            let progress = presenter.block_start(&block)?;
+            let mut diagnostics = String::new();
+            let result = execute(
+                case,
+                &fixture,
+                &dir,
+                timeout,
+                verbose,
+                Some(&mut diagnostics),
+                None,
+            );
+            let stop_file = spec.shell.is_some() && result.is_err();
+            match result {
+                Ok(true) => {
+                    document.passed += 1;
+                    presenter.block_pass(progress, &block, &diagnostics)?;
+                }
+                Ok(false) => document.cancelled = true,
+                Err(error) if cancellation::signal().is_some() => {
+                    document.cancelled = true;
+                    presenter.block_cancel(progress, &file, &block, &error, &diagnostics)?;
+                }
+                Err(error) => {
+                    document.failed += 1;
+                    document.failed_headings.push(block.heading.clone());
+                    presenter.block_fail(progress, &file, &block, &error, &diagnostics)?;
+                }
+            }
+            if stop_file {
+                break;
+            }
+        }
+    }
+    if setup_result.is_ok() {
+        run_deferred(
+            &setup.deferred,
+            &fixture,
+            verbose,
+            &mut document,
+            &mut presenter,
+        )?;
+    }
+    if let Err(error) = fixture.close() {
+        document.errors += 1;
+        presenter.document_error(&file, "Fixture cleanup", &error)?;
+    }
+    document.cancelled |= cancellation::signal().is_some();
+    document.duration = started.elapsed();
+    presenter.document_finish(&document)?;
+    Ok(FileRun {
+        document,
+        output: presenter.into_buffer(),
+    })
+}
+
+fn not_run_document(file: String, total: usize) -> presentation::Document {
+    presentation::Document {
+        file,
+        total,
+        passed: 0,
+        failed: 0,
+        errors: 0,
+        failed_headings: Vec::new(),
+        cancelled: false,
+        not_run: true,
+        duration: Duration::ZERO,
+    }
+}
+
+fn print_file_run(run: &FileRun) -> Result<()> {
+    print!("{}", run.output);
+    io::stdout().flush()?;
+    Ok(())
+}
+
+fn run_serial_documents(
+    options: &Options,
+    root: &Path,
+    gh_config: &Path,
+    specs: Vec<(String, spec::Spec, Vec<usize>)>,
+    verbose: bool,
+) -> Result<bool> {
+    let selected: Vec<_> = specs
+        .iter()
+        .map(|(file, spec, indices)| {
+            (
+                file.clone(),
+                indices.len() + spec.cases.iter().filter(|case| case.always).count(),
+            )
+        })
+        .collect();
+    let mut presenter = presentation::Presenter::new();
+    let mut documents = Vec::new();
+    let mut stopped = None;
+    for (index, (file, spec, indices)) in specs.into_iter().enumerate() {
+        if cancellation::signal().is_some() {
+            break;
+        }
+        let run = run_unattended_document(
+            options,
+            root,
+            gh_config,
+            (file, spec, indices),
+            verbose,
+            false,
+        )?;
+        print_file_run(&run)?;
+        let failed = run.document.failed();
+        documents.push(run.document);
+        if options.fail_fast && failed {
+            stopped = Some(index);
+            break;
+        }
+    }
+    if let Some(index) = stopped {
+        documents.extend(
+            selected
+                .into_iter()
+                .skip(index + 1)
+                .map(|(file, total)| not_run_document(file, total)),
+        );
+    }
+    presenter.summary(&documents)?;
+    Ok(documents.iter().all(|document| !document.failed()))
+}
+
+fn failed_file_run(file: String, total: usize, error: anyhow::Error) -> Result<FileRun> {
+    let mut presenter = presentation::Presenter::buffered();
+    presenter.document_start(&file)?;
+    presenter.setup_fail(&file, &error)?;
+    let document = presentation::Document {
+        file,
+        total,
+        passed: 0,
+        failed: 0,
+        errors: 1,
+        failed_headings: Vec::new(),
+        cancelled: false,
+        not_run: false,
+        duration: Duration::ZERO,
+    };
+    presenter.document_finish(&document)?;
+    Ok(FileRun {
+        document,
+        output: presenter.into_buffer(),
+    })
+}
+
+fn start_worker<T, F, S>(
+    spawn: S,
+    completed: mpsc::Sender<(usize, Result<T>)>,
+    index: usize,
+    work: F,
+) -> io::Result<()>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+    S: FnOnce(Box<dyn FnOnce() + Send>) -> io::Result<()>,
+{
+    spawn(Box::new(move || {
+        let result = panic::catch_unwind(AssertUnwindSafe(work))
+            .map_err(|payload| {
+                let message = payload
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                    .unwrap_or("unknown panic");
+                anyhow::anyhow!("Parallel document worker panicked: {message}")
+            })
+            .and_then(|result| result);
+        let _ = completed.send((index, result));
+    }))
+}
+
+fn spawn_worker<T, F>(
+    completed: mpsc::Sender<(usize, Result<T>)>,
+    index: usize,
+    work: F,
+) -> io::Result<()>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    start_worker(
+        |task| {
+            thread::Builder::new()
+                .name(format!("markmason-file-{index}"))
+                .spawn(task)
+                .map(|_| ())
+        },
+        completed,
+        index,
+        work,
+    )
+}
+
+fn run_parallel_documents(
+    options: &Options,
+    root: &Path,
+    gh_config: &Path,
+    specs: Vec<(String, spec::Spec, Vec<usize>)>,
+    verbose: bool,
+    workers: usize,
+) -> Result<bool> {
+    let selected: Vec<_> = specs
+        .iter()
+        .map(|(file, spec, indices)| {
+            (
+                file.clone(),
+                indices.len() + spec.cases.iter().filter(|case| case.always).count(),
+            )
+        })
+        .collect();
+    let options = Arc::new(options.clone());
+    let root = Arc::new(root.to_owned());
+    let gh_config = Arc::new(gh_config.to_owned());
+    let (completed, results) = mpsc::channel();
+    let mut queued: VecDeque<_> = specs.into_iter().enumerate().collect();
+    let mut active = 0usize;
+    let mut stop_scheduling = false;
+    let mut runs = BTreeMap::new();
+    let mut presenter = presentation::Presenter::new();
+
+    while !queued.is_empty() || active > 0 {
+        if cancellation::signal().is_some() {
+            stop_scheduling = true;
+        }
+        while !stop_scheduling && active < workers {
+            if cancellation::signal().is_some() {
+                stop_scheduling = true;
+                break;
+            }
+            let Some((index, (_, spec, _))) = queued.front() else {
+                break;
+            };
+            if !spec.parallel && active > 0 {
+                break;
+            }
+            let index = *index;
+            let (file, spec, indices) = queued.pop_front().unwrap().1;
+            if !spec.parallel {
+                let total = indices.len() + spec.cases.iter().filter(|case| case.always).count();
+                let run = run_unattended_document(
+                    &options,
+                    &root,
+                    &gh_config,
+                    (file.clone(), spec, indices),
+                    verbose,
+                    true,
+                )
+                .or_else(|error| failed_file_run(file, total, error))?;
+                let failed = run.document.failed();
+                runs.insert(index, run);
+                if options.fail_fast && failed {
+                    stop_scheduling = true;
+                }
+                continue;
+            }
+            let worker_options = Arc::clone(&options);
+            let root = Arc::clone(&root);
+            let gh_config = Arc::clone(&gh_config);
+            let completed = completed.clone();
+            let failed_file = file.clone();
+            let total = indices.len() + spec.cases.iter().filter(|case| case.always).count();
+            let started = spawn_worker(completed, index, move || {
+                run_unattended_document(
+                    &worker_options,
+                    &root,
+                    &gh_config,
+                    (file.clone(), spec, indices),
+                    verbose,
+                    true,
+                )
+                .with_context(|| format!("Parallel document {file} failed"))
+            });
+            match started {
+                Ok(()) => active += 1,
+                Err(error) => {
+                    let run = failed_file_run(
+                        failed_file,
+                        total,
+                        anyhow::Error::new(error)
+                            .context("Failed to start parallel document worker"),
+                    )?;
+                    let failed = run.document.failed();
+                    runs.insert(index, run);
+                    if options.fail_fast && failed {
+                        stop_scheduling = true;
+                    }
+                }
+            }
+        }
+        if active == 0 {
+            if stop_scheduling || queued.is_empty() {
+                break;
+            }
+            continue;
+        }
+        let (index, run) = results
+            .recv()
+            .context("Parallel document worker stopped without reporting a result")?;
+        active -= 1;
+        let run = match run {
+            Ok(run) => run,
+            Err(error) => {
+                let (file, total) = &selected[index];
+                failed_file_run(file.clone(), *total, error)?
+            }
+        };
+        if options.fail_fast && run.document.failed() {
+            stop_scheduling = true;
+        }
+        if cancellation::signal().is_some() {
+            stop_scheduling = true;
+        }
+        runs.insert(index, run);
+    }
+
+    while active > 0 {
+        let (index, run) = results
+            .recv()
+            .context("Parallel document worker stopped without reporting a result")?;
+        active -= 1;
+        let run = match run {
+            Ok(run) => run,
+            Err(error) => {
+                let (file, total) = &selected[index];
+                failed_file_run(file.clone(), *total, error)?
+            }
+        };
+        runs.insert(index, run);
+    }
+
+    let mut documents = Vec::new();
+    for (index, (file, total)) in selected.into_iter().enumerate() {
+        if let Some(run) = runs.remove(&index) {
+            print_file_run(&run)?;
+            documents.push(run.document);
+        } else {
+            documents.push(not_run_document(file, total));
+        }
+    }
+    presenter.summary(&documents)?;
+    Ok(documents.iter().all(|document| !document.failed()))
 }
 
 fn collect_inputs(
@@ -963,12 +1487,60 @@ fn run(options: Options) -> Result<bool> {
         };
         specs = vec![specs.swap_remove(index)];
     }
+    if options.list {
+        let mut presenter = presentation::Presenter::new();
+        let mut valid = true;
+        for (file, spec, indices) in &specs {
+            let listed_total = indices.len() + spec.cases.iter().filter(|case| case.always).count();
+            if indices.is_empty() {
+                presenter.document_start(file)?;
+                presenter.setup_fail(
+                    file,
+                    &anyhow::anyhow!(
+                        "No test cases found. Expected a fenced markmason command block without always"
+                    ),
+                )?;
+                valid = false;
+                continue;
+            }
+            let mut listed = Vec::new();
+            for (position, index) in indices.iter().copied().enumerate() {
+                let case = &spec.cases[index];
+                listed.push((
+                    presented_block(case, position + 1, listed_total),
+                    case.command.clone(),
+                ));
+            }
+            for (offset, case) in spec.cases.iter().filter(|case| case.always).enumerate() {
+                listed.push((
+                    presented_block(case, indices.len() + offset + 1, listed_total),
+                    case.command.clone(),
+                ));
+            }
+            presenter.list_document(file, &listed)?;
+        }
+        return Ok(valid);
+    }
     // Resolve authentication before replacing XDG_CONFIG_HOME in each fixture.
-    let gh_config = if options.list {
-        None
-    } else {
-        Some(gh_config_dir()?)
-    };
+    let gh_config = Some(gh_config_dir()?);
+    if !options.step {
+        let gh_config = gh_config
+            .as_deref()
+            .context("Missing fixture configuration")?;
+        return match options.parallel {
+            Some(Parallelism::Auto) => {
+                let workers = thread::available_parallelism()
+                    .map(usize::from)
+                    .unwrap_or(1)
+                    .max(1);
+                run_parallel_documents(&options, &root, gh_config, specs, verbose, workers)
+            }
+            Some(Parallelism::Jobs(workers)) => {
+                run_parallel_documents(&options, &root, gh_config, specs, verbose, workers)
+            }
+            _ => run_serial_documents(&options, &root, gh_config, specs, verbose),
+        };
+    }
     let mut failed = 0;
     let mut presenter = presentation::Presenter::new();
     let mut documents = Vec::new();
@@ -1135,7 +1707,7 @@ fn run(options: Options) -> Result<bool> {
             &fixture,
             &options.cwd,
             timeout,
-            verbose,
+            (verbose, None),
             &mut setup,
         );
         if let Err(error) = &setup_result {

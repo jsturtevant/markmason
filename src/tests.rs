@@ -137,12 +137,13 @@ fn environment_overrides_follow_platform_case_rules() {
 #[test]
 fn frontmatter_and_tags() -> Result<()> {
     let spec = spec::parse(
-        "---\r\nclone: owner/repo\r\nsetup: node setup.js\r\ntags: [Dispatch, SLOW, slow]\r\ntimeout: '0.5'\r\n---\r\n```markmason (exit 2)\r\ncmd\r\n```\r\n",
+        "---\r\nclone: owner/repo\r\nsetup: node setup.js\r\ntags: [Dispatch, SLOW, slow]\r\ntimeout: '0.5'\r\nparallel: false\r\n---\r\n```markmason (exit 2)\r\ncmd\r\n```\r\n",
     )?;
     assert_eq!(spec.clone.as_deref(), Some("owner/repo"));
     assert_eq!(spec.setup.as_deref(), Some("node setup.js"));
     assert_eq!(spec.tags, ["dispatch", "slow"]);
     assert_eq!(spec.timeout, Some(Duration::from_millis(500)));
+    assert!(!spec.parallel);
     assert_eq!(spec.cases[0].command, "cmd");
     assert_eq!(spec.cases[0].exit_code, 2);
     for invalid in [
@@ -160,6 +161,8 @@ fn frontmatter_and_tags() -> Result<()> {
         "setup: ''",
         "setup: '   '",
         "setup: '\"\"'",
+        "parallel: nope",
+        "parallel: 1",
     ] {
         assert!(
             spec::parse(&format!("---\n{invalid}\n---\n")).is_err(),
@@ -167,6 +170,7 @@ fn frontmatter_and_tags() -> Result<()> {
         );
     }
     assert!(spec::parse("---\n\n---\n")?.cases.is_empty());
+    assert!(spec::parse("# Title")?.parallel);
     assert!(spec::parse("# Title")?.tags.is_empty());
     Ok(())
 }
@@ -859,5 +863,43 @@ fn filters_and_timeout_validation() -> Result<()> {
         assert!(positive_seconds(invalid).is_err());
     }
     assert_eq!(positive_seconds("0.1").unwrap(), 0.1);
+    assert!(matches!(parallelism("auto").unwrap(), Parallelism::Auto));
+    assert!(matches!(parallelism("8").unwrap(), Parallelism::Jobs(8)));
+    for invalid in ["0", "-1", "nope", "257"] {
+        assert!(parallelism(invalid).is_err(), "{invalid}");
+    }
     Ok(())
+}
+
+#[test]
+fn panicking_parallel_worker_reports_a_result() {
+    let (send, receive) = std::sync::mpsc::channel();
+    spawn_worker(send, 7, || -> Result<()> {
+        panic!("deliberate worker panic");
+    })
+    .unwrap();
+    let (index, result) = receive
+        .recv_timeout(Duration::from_secs(1))
+        .expect("panicking worker did not report completion");
+    assert_eq!(index, 7);
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("deliberate worker panic")
+    );
+}
+
+#[test]
+fn worker_creation_failure_is_reported_without_starting_work() {
+    let (send, receive) = std::sync::mpsc::channel::<(usize, Result<()>)>();
+    let error = start_worker(
+        |_| Err(io::Error::other("thread creation denied")),
+        send,
+        3,
+        || Ok(()),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("thread creation denied"));
+    assert!(receive.recv_timeout(Duration::from_millis(10)).is_err());
 }

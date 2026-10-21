@@ -12,6 +12,7 @@ pub struct Spec {
     pub setup: Option<String>,
     pub tags: Vec<String>,
     pub timeout: Option<Duration>,
+    pub parallel: bool,
     pub cases: Vec<Case>,
 }
 
@@ -133,6 +134,7 @@ pub fn parse(content: &str) -> Result<Spec> {
 pub fn parse_with_shell(content: &str, shell: Option<Shell>) -> Result<Spec> {
     let mut spec = Spec {
         shell,
+        parallel: true,
         ..Spec::default()
     };
     let frontmatter = Regex::new(r"\A---\r?\n([\s\S]*?)\r?\n---\r?\n").unwrap();
@@ -218,6 +220,11 @@ pub fn parse_with_shell(content: &str, shell: Option<Shell>) -> Result<Spec> {
                     Duration::try_from_secs_f64(seconds)
                         .context("Invalid timeout: out of range")?,
                 );
+            }
+            if let Some(value) = map.get(Value::from("parallel")).filter(|v| !v.is_null()) {
+                spec.parallel = value
+                    .as_bool()
+                    .context("Frontmatter parallel must be true or false")?;
             }
         }
         &content[caps.get(0).unwrap().end()..]

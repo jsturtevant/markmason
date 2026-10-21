@@ -7,7 +7,7 @@ use std::{
     path::Path,
     process::Command,
     thread,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 #[cfg(windows)]
@@ -162,6 +162,18 @@ fn main() {
             thread::sleep(Duration::from_secs(10));
         }
         "pause" => thread::sleep(Duration::from_millis(350)),
+        "timeline" => {
+            let now = || {
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+                    .to_string()
+            };
+            fs::write(format!("{}.start", args[2]), now()).unwrap();
+            thread::sleep(Duration::from_millis(args[3].parse().unwrap()));
+            fs::write(format!("{}.end", args[2]), now()).unwrap();
+        }
         "background" | "background-pty" => {
             let mut command = Command::new(env::current_exe().unwrap());
             command
