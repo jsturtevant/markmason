@@ -1344,11 +1344,14 @@ fn step_document_timer_refreshes_during_pauses_and_execution() {
         ("shell", "shell: bash\ntimeout: 30", ""),
     ] {
         let dir = tempfile::tempdir().unwrap();
+        let setup_timeline = dir.path().join("setup-timeline");
         fs::write(
             dir.path().join("lesson.md"),
             format!(
-                "---\n{frontmatter}\n---\n## Wait here\n```markmason\n\
-                 app echo ready\napp sleep\n```\n{pty}"
+                "---\n{frontmatter}\nsetup: app timeline '{}' 1300\n---\n\
+                 ## Wait here\n```markmason\n\
+                 app echo ready\napp sleep\n```\n{pty}",
+                shell_path(&setup_timeline)
             ),
         )
         .unwrap();
@@ -1401,6 +1404,25 @@ fn step_document_timer_refreshes_during_pauses_and_execution() {
             }
         });
         let mut bytes = Vec::new();
+        let setup_deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            assert!(
+                Instant::now() < setup_deadline,
+                "{name}: setup document timer did not refresh\n{}",
+                String::from_utf8_lossy(&bytes)
+            );
+            if let Ok(chunk) = receive.recv_timeout(Duration::from_millis(50)) {
+                bytes.extend(chunk);
+            }
+            let raw = String::from_utf8_lossy(&bytes);
+            let setup_output = raw.split("\x1b[?1049h").next().unwrap();
+            if setup_output
+                .split(['\r', '\n'])
+                .any(|line| line.contains("▶ lesson.md") && line.contains("00:01"))
+            {
+                break;
+            }
+        }
         let pause_deadline = Instant::now() + Duration::from_secs(5);
         loop {
             assert!(
@@ -1416,7 +1438,7 @@ fn step_document_timer_refreshes_during_pauses_and_execution() {
                 dialoguer::console::strip_ansi_codes(raw.rsplit("\x1b[H\x1b[2J").next().unwrap());
             let document_line = frame.lines().find(|line| line.starts_with("▶ lesson.md"));
             if frame.contains("Enter: Next command")
-                && document_line.is_some_and(|line| line.contains("00:01"))
+                && document_line.is_some_and(|line| line.contains("00:02"))
             {
                 break;
             }
@@ -1438,7 +1460,7 @@ fn step_document_timer_refreshes_during_pauses_and_execution() {
                 dialoguer::console::strip_ansi_codes(raw.rsplit("\x1b[H\x1b[2J").next().unwrap());
             let document_line = frame.lines().find(|line| line.starts_with("▶ lesson.md"));
             if frame.contains("Running command")
-                && document_line.is_some_and(|line| line.contains("00:02"))
+                && document_line.is_some_and(|line| line.contains("00:03"))
             {
                 break;
             }
@@ -1446,8 +1468,19 @@ fn step_document_timer_refreshes_during_pauses_and_execution() {
         input.write_all(b"\x03").unwrap();
         input.flush().unwrap();
         let status = child.wait().unwrap();
-        while let Ok(chunk) = receive.try_recv() {
-            bytes.extend(chunk);
+        let drain_deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match receive.recv_timeout(Duration::from_millis(50)) {
+                Ok(chunk) => bytes.extend(chunk),
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    assert!(
+                        Instant::now() < drain_deadline,
+                        "{name}: PTY reader did not finish\n{}",
+                        String::from_utf8_lossy(&bytes)
+                    );
+                }
+            }
         }
         let raw = String::from_utf8_lossy(&bytes);
         let transcript = dialoguer::console::strip_ansi_codes(&raw);

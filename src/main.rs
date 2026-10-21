@@ -1662,6 +1662,9 @@ fn run(options: Options) -> Result<bool> {
             else {
                 return Ok(None);
             };
+            if stepping.is_some() {
+                presenter.resume_document(&file, document_started)?;
+            }
             cancellation::check()?;
             Fixture::new(
                 &options,
@@ -1717,6 +1720,9 @@ fn run(options: Options) -> Result<bool> {
             (verbose, None),
             &mut setup,
         );
+        if stepping.is_some() && setup_result.is_ok() {
+            presenter.end_document_progress()?;
+        }
         if let Err(error) = &setup_result {
             if cancellation::signal().is_some() {
                 document.cancelled = true;
