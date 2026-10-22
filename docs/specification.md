@@ -83,6 +83,11 @@ also removed from their contents.
 Bubblewrap on Linux, ProcessContainer on Windows, and Seatbelt on macOS. Native
 execution remains the default. A document can opt in with scalar frontmatter:
 
+Process containment is used instead of MXC Hyperlight or HLUK because ordinary
+Markmason blocks run arbitrary host CLIs, PTYs, and persistent real Bash
+sessions. Hyperlight/HLUK guest runtimes do not transparently preserve those
+host-command semantics.
+
 ```yaml
 sandbox: mxc
 ```

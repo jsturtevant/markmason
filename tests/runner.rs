@@ -959,10 +959,11 @@ fn later_always_blocks_run_even_after_cleanup_failures() {
     for shell in ["", "shell: bash\n"] {
         let dir = tempfile::tempdir().unwrap();
         let marker = dir.path().join("last-cleanup");
+        let timeout = if cfg!(windows) { 2.0 } else { 0.5 };
         fs::write(
             dir.path().join("lesson.md"),
             format!(
-                "---\n{shell}timeout: 0.5\n---\n\
+                "---\n{shell}timeout: {timeout}\n---\n\
                  ```markmason\napp echo ready\n```\n\
                  ```markmason always\napp echo actual\n```\n```expected\nmissing\n```\n\
                  ```markmason always\napp sleep\n```\n\

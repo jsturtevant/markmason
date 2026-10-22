@@ -60,6 +60,16 @@ mm tests/network \
   --sandbox-net-allow api.example.com:443
 ```
 
+Malformed grants fail before the command runs:
+
+```markmason (exit 1)
+mm tests/fixtures/passing --sandbox mxc --sandbox-net-allow '[::1]443'
+```
+
+```expected-substring
+Invalid sandbox network destination [::1]443: expected ':' after ']'
+```
+
 Denied connections retain the application's error and include
 `--sandbox-net-allow HOST[:PORT]` guidance when the backend cannot report a more
 specific destination. The opt-in Rust integration test exercises both denied and
