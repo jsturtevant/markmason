@@ -39,6 +39,12 @@ pub fn set_env(env: &mut Environment, key: &str, value: impl Into<OsString>) {
     env.insert(key.into(), value.into());
 }
 
+fn executable_not_found() -> anyhow::Error {
+    anyhow::anyhow!(
+        "executable not found on PATH. Install or build it, then add its directory to PATH"
+    )
+}
+
 #[derive(Debug)]
 pub struct Output {
     pub text: String,
@@ -81,7 +87,7 @@ fn executable(program: &str, cwd: &Path, env: &Environment) -> Result<std::path:
             }
         }
     }
-    bail!("Executable not found on PATH: {program}");
+    Err(executable_not_found())
 }
 
 #[cfg(windows)]
@@ -262,7 +268,7 @@ pub fn run_with_progress(
     let program = args.first().context("Empty command in pipeline stage")?;
     #[cfg(windows)]
     let program =
-        executable(program, cwd, env).with_context(|| format!("Failed to start {program}"))?;
+        executable(program, cwd, env).with_context(|| format!("Failed to start {program:?}"))?;
     #[cfg(windows)]
     let tree = crate::windows::ProcessTree::new()?;
     #[cfg(windows)]
@@ -291,9 +297,16 @@ pub fn run_with_progress(
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    let mut child = command
-        .spawn()
-        .with_context(|| format!("Failed to start {program:?}"))?;
+    let mut child = command.spawn().map_err(|error| {
+        let error = if error.kind() == std::io::ErrorKind::NotFound
+            && Path::new(program).components().count() == 1
+        {
+            executable_not_found()
+        } else {
+            error.into()
+        };
+        error.context(format!("Failed to start {program:?}"))
+    })?;
     #[cfg(windows)]
     if let Err(error) = tree.start(child.id()) {
         child

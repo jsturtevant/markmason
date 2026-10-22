@@ -3499,10 +3499,13 @@ fn command_blocks_stop_on_failure_and_check_the_combined_output_and_exit() {
     .unwrap();
     let output = command(dir.path()).output().unwrap();
     assert!(!output.status.success(), "{}", text(&output));
+    let result = text(&output);
     assert!(
-        text(&output).contains("Failed to start"),
-        "{}",
-        text(&output)
+        result.contains(
+            "Failed to start \"missing-executable-markmason\": executable not found on PATH. \
+             Install or build it, then add its directory to PATH"
+        ),
+        "{result}"
     );
     assert!(!marker.exists(), "Commands continued after a startup error");
 }
