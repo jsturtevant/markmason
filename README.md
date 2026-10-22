@@ -10,6 +10,7 @@ verify the archive against `SHA256SUMS`, and put `mm` (`mm.exe` on Windows) on `
 | Platform | Target |
 |----------|--------|
 | Linux x64, glibc 2.35+ | `x86_64-unknown-linux-gnu` |
+| Linux x64, static musl | `x86_64-unknown-linux-musl` |
 | Windows x64 | `x86_64-pc-windows-msvc` |
 | macOS Intel | `x86_64-apple-darwin` |
 | macOS Apple Silicon | `aarch64-apple-darwin` |
