@@ -1,10 +1,10 @@
 # Use paths without hardcoding them
 
 Path variables work in commands and expected output.
-The runner creates a separate `E2E_HOME` and configuration directory for each
-Markdown document.
+Each Markdown document gets a fresh temporary state directory, exposed as
+`E2E_HOME` by default and removed when the document finishes.
 
-## Locate isolated home and configuration directories
+## Locate isolated state and configuration directories
 
 ````markdown markmason
 ```markmason
@@ -58,5 +58,23 @@ Quote path variables when passing them as arguments.
 
 ```expected
 $REPO_ROOT $PROJECT_NAME
+```
+````
+
+## Use an application's state-directory variable
+
+````markdown markmason
+```markmason
+mm tests/fixtures/custom-state-dir --state-dir-env MYCLI_HOME
+```
+
+`MYCLI_HOME` now points to the managed temporary state directory.
+The flag changes the variable name, not the directory's lifecycle.
+
+```expected-contains
+RUN  state.md
+  RUN  Block 1/1 — Report the custom state directory
+  ✓ PASS Block 1/1 — Report the custom state directory
+Blocks: 1 passed, 0 failed (includes deferred)
 ```
 ````

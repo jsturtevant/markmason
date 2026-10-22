@@ -3644,6 +3644,21 @@ fn home_env_flag_is_no_longer_supported() {
 }
 
 #[test]
+fn state_dir_env_names_the_managed_temporary_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("state.md"),
+        "```markmason\napp env MYAPP_HOME\n```\n```expected\n$MYAPP_HOME\n```\n",
+    )
+    .unwrap();
+    let output = command(dir.path())
+        .args(["--state-dir-env", "MYAPP_HOME"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+}
+
+#[test]
 fn setup_executes_directly_without_a_node_interpreter() {
     let dir = tempfile::Builder::new()
         .prefix("markdown e2e ")

@@ -30,8 +30,8 @@ just test-markdown
 ```
 
 That builds both programs, puts them on `PATH`, and runs `tests/cli`.
-The runner creates an isolated `E2E_HOME` for each document; state commands use
-that directory rather than your real home.
+The runner creates an isolated `E2E_HOME` for each document by default; state
+commands use that directory rather than your real home.
 
 ## Commands used in the guides
 

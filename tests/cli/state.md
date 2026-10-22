@@ -4,7 +4,8 @@ setup: mm-test-cli setup ../fixtures/setup.fixture
 
 # Set up and share state
 
-Setup runs once per file; its cases then run in order and share a temporary home.
+Setup runs once per file; its cases then run in order and share a temporary
+state directory.
 The [test CLI](../support/README.md) uses `E2E_HOME`, set by `just test-markdown`.
 
 ## Read the state created by setup
@@ -29,7 +30,7 @@ mm-test-cli mark "$E2E_HOME/state"
 ```
 ````
 
-Overwrite that state using the runner-provided home variable.
+Overwrite that state using the runner-provided state-directory variable.
 
 ## Read the changed state
 

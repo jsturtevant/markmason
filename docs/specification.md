@@ -250,7 +250,7 @@ execution remains serial.
 
 - Only files are parallelized. Setup, commands, blocks, PTY steps, and deferred
   cleanup inside one file remain strictly ordered.
-- Every file keeps its own fixture, application home, configuration, clone,
+- Every file keeps its own fixture, application state directory, configuration, clone,
   Bash session, timeout, setup chain, and cleanup lifecycle.
 - File output is buffered and printed in selected path order after workers
   finish, so diagnostics never interleave. The final summary uses the same
@@ -425,6 +425,11 @@ See the [executable shell guide](../tests/cli/shell.md) and the
 
 ## Variables
 
+Each document gets a fresh temporary state directory. It is exposed as
+`E2E_HOME` by default and removed when the document finishes.
+`--state-dir-env NAME` changes only the environment variable name, for
+applications that expect a name such as `RALLY_HOME`.
+
 In direct-execution mode, command blocks and expected blocks substitute:
 
 | Variable | Value |
@@ -432,7 +437,7 @@ In direct-execution mode, command blocks and expected blocks substitute:
 | `$REPO_ROOT` | Spec's working directory |
 | `$PROJECT_NAME` | Working directory's final path component |
 | `$XDG_CONFIG_HOME` | Isolated configuration directory |
-| `$E2E_HOME` | Isolated application home |
+| `$E2E_HOME` | Isolated application state directory; rename with `--state-dir-env` |
 
 Stdin and PTY directives remain literal.
 In Bash mode these values are environment variables in commands; only expected
@@ -537,7 +542,7 @@ inputs:
   commands. The existing fixture placeholders keep their original behavior.
 - `--list` does not prompt or require values. Runner-managed environment names
   such as `REPO_ROOT`, `PROJECT_NAME`, `XDG_CONFIG_HOME`, `GH_CONFIG_DIR`, and the
-  configured application home are rejected rather than silently overridden.
+  configured state-directory variable are rejected rather than silently overridden.
   `BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `TERM`, and the reserved
   `__markmason_` prefix are also protected.
 - On Windows, input declarations that differ only in capitalization are rejected

@@ -13,8 +13,8 @@ inputs:
 ```
 
 Inputs are plain text, not secret/password prompts. Do not use them for secrets.
-Runner-managed variables such as `E2E_HOME`, `REPO_ROOT`, and `XDG_CONFIG_HOME`
-cannot be declared as inputs.
+Runner-managed variables such as `REPO_ROOT`, `XDG_CONFIG_HOME`, and the chosen
+`--state-dir-env` variable cannot be declared as inputs.
 
 ## Prompt before shared setup
 
