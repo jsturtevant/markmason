@@ -22,10 +22,10 @@ error: unknown option --not-an-option
 ```
 ````
 
-Use an outer `markdown markmason` fence when rendered documentation should show
-the inner Markdown source while still executing it. This is an optional
-authoring form; direct `markmason` fences remain the normal form. Put `always`
-and `(exit N)` on the inner command fence.
+Direct `markmason` fences are the recommended form for normal executable
+documentation. Use an outer `markdown markmason` fence only when documentation
+about Markmason itself should show the inner Markdown source while still
+executing it. Put `always` and `(exit N)` on the inner command fence.
 
 ````markdown markmason
 ```markmason

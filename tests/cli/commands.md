@@ -3,10 +3,11 @@
 Each `markmason` block is one test. Put commands on separate lines to run them
 in order and check their combined output.
 
-## Use a direct command fence
+## Use the direct form by default
 
-Without an outer wrapper, GitHub renders the command and expected output but
-does not show the Markmason fence syntax. This remains the normal authoring form.
+**This is the recommended form for normal executable documentation.** GitHub
+renders the command and expected output without showing the Markmason fence
+syntax, keeping the guide focused on the CLI being taught.
 
 ```markmason
 mm-test-cli echo direct
@@ -20,7 +21,8 @@ direct
 
 Pipelines work on individual lines. Blank lines separate commands visually
 without starting another test. The outer `markdown markmason` fence makes the
-inner executable Markdown visible when this page is rendered.
+inner executable Markdown visible when this page is rendered. Use that wrapper
+only when documenting Markmason itself and showing its syntax is the point.
 
 ````markdown markmason
 ```markmason

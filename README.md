@@ -24,6 +24,10 @@ cargo install --git https://github.com/jsturtevant/markmason --tag v0.4.1 --lock
 
 This README is testable. Run `mm README.md`.
 
+Use direct `markmason` fences for normal executable documentation. The examples
+below use the optional `markdown markmason` wrapper only because this README
+teaches Markmason and needs to show the inner fence syntax on GitHub.
+
 ### Show the installed version
 
 ````markdown markmason
