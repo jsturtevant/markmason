@@ -1874,6 +1874,31 @@ fn mxc_sandbox_output_drain_remains_bounded() {
     assert!(started.exists(), "{}", text(&output));
 }
 
+#[cfg(unix)]
+#[test]
+fn mxc_bash_capture_paths_cannot_redirect_host_reads() {
+    let specs = tempfile::tempdir().unwrap();
+    let private = tempfile::tempdir().unwrap();
+    let secret = private.path().join("secret.txt");
+    fs::write(&secret, "must-not-leak-from-host").unwrap();
+    fs::write(
+        specs.path().join("symlink.md"),
+        format!(
+            "---\nshell: bash\nsandbox: mxc\n---\n## Replace the visible capture path\n\
+             ```markmason\nrm -f \"$__markmason_root/stdout\" && ln -s '{}' \"$__markmason_root/stdout\"\n```\n",
+            shell_path(&secret)
+        ),
+    )
+    .unwrap();
+    let output = command(specs.path()).arg("--verbose").output().unwrap();
+    let transcript = text(&output);
+    assert!(output.status.success(), "{transcript}");
+    assert!(
+        !transcript.contains("must-not-leak-from-host"),
+        "{transcript}"
+    );
+}
+
 fn step_process(
     specs: &Path,
     args: &[&str],

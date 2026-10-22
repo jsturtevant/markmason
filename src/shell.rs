@@ -2,6 +2,7 @@ use crate::{cancellation, matching::pty_text, process, spec};
 use anyhow::{Context, Result, bail};
 use regex::bytes::Regex;
 use std::{
+    cell::RefCell,
     fs,
     io::{Read, Seek, SeekFrom},
     path::Path,
@@ -169,12 +170,26 @@ fn boundary_frame(bytes: &[u8], boundary: &str, allow_eof: bool) -> Option<(usiz
     None
 }
 
-fn read_capture(path: &Path, offset: u64) -> Result<Vec<u8>> {
-    let mut file = fs::File::open(path)?;
+fn protocol_file(path: &Path) -> Result<fs::File> {
+    Ok(fs::OpenOptions::new()
+        .create_new(true)
+        .read(true)
+        .write(true)
+        .open(path)?)
+}
+
+fn read_capture(file: &mut fs::File, offset: u64) -> Result<Vec<u8>> {
     file.seek(SeekFrom::Start(offset))?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)?;
     Ok(bytes)
+}
+
+fn read_protocol_text(file: &mut fs::File) -> Result<String> {
+    file.seek(SeekFrom::Start(0))?;
+    let mut text = String::new();
+    file.read_to_string(&mut text)?;
+    Ok(text)
 }
 
 pub(crate) fn recovery_needs_interrupt(status: Option<i32>, frame_end: Option<usize>) -> bool {
@@ -186,6 +201,8 @@ pub struct Session {
     directory: TempDir,
     sequence: usize,
     pending: Vec<u8>,
+    stdout: RefCell<fs::File>,
+    stderr: RefCell<fs::File>,
     stdout_position: u64,
     stderr_position: u64,
     cleanup_enabled: bool,
@@ -204,8 +221,8 @@ impl Session {
             .tempdir()?;
         let bootstrap = directory.path().join("session.sh");
         fs::write(&bootstrap, BOOTSTRAP)?;
-        fs::write(directory.path().join("stdout"), "")?;
-        fs::write(directory.path().join("stderr"), "")?;
+        let stdout = protocol_file(&directory.path().join("stdout"))?;
+        let stderr = protocol_file(&directory.path().join("stderr"))?;
         let mut env = env.clone();
         for name in ["BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS"] {
             process::set_env(&mut env, name, "");
@@ -227,6 +244,8 @@ impl Session {
             directory,
             sequence: 0,
             pending: Vec::new(),
+            stdout: RefCell::new(stdout),
+            stderr: RefCell::new(stderr),
             stdout_position: 0,
             stderr_position: 0,
             cleanup_enabled: false,
@@ -326,7 +345,7 @@ impl Session {
             ),
         )?;
         fs::write(directory.join("input"), input.unwrap_or_default())?;
-        fs::write(directory.join("status"), "")?;
+        let mut status_file = protocol_file(&directory.join("status"))?;
         if block.is_some() {
             fs::write(directory.join("pty"), "")?;
         }
@@ -357,14 +376,13 @@ impl Session {
                 Err(mpsc::RecvTimeoutError::Disconnected) => {}
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
-            let status = match fs::read_to_string(directory.join("status")) {
+            let status = match read_protocol_text(&mut status_file) {
                 Ok(text) if text.ends_with('\n') => Some(
                     text.trim()
                         .parse::<i32>()
                         .context("Invalid Bash command status")?,
                 ),
                 Ok(_) => None,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
                 Err(error) => return Err(error).context("Failed reading Bash command status"),
             };
             let allow_eof = recovering
@@ -386,10 +404,8 @@ impl Session {
                 )?;
             }
             let output = |code| -> Result<(process::Output, u64, u64)> {
-                let stdout =
-                    read_capture(&self.directory.path().join("stdout"), self.stdout_position)?;
-                let stderr =
-                    read_capture(&self.directory.path().join("stderr"), self.stderr_position)?;
+                let stdout = read_capture(&mut self.stdout.borrow_mut(), self.stdout_position)?;
+                let stderr = read_capture(&mut self.stderr.borrow_mut(), self.stderr_position)?;
                 let mut text = clean.to_owned();
                 text.push_str(&String::from_utf8_lossy(&stdout));
                 if code != 0 {
