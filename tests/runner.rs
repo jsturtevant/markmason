@@ -3539,6 +3539,29 @@ fn missing_shebang_interpreter_preserves_the_os_startup_error() {
     assert!(!result.contains("executable not found on PATH"), "{result}");
 }
 
+#[cfg(unix)]
+#[test]
+fn explicit_missing_paths_preserve_the_os_startup_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let spec = dir.path().join("commands.md");
+    for program in ["missing-tool/", "missing-tool/."] {
+        fs::write(&spec, format!("```markmason\n{program}\n```\n")).unwrap();
+        let output = command(dir.path()).output().unwrap();
+        let result = text(&output);
+        assert!(!output.status.success(), "{program}: {result}");
+        assert!(
+            result.contains(&format!(
+                "Failed to start {program:?}: No such file or directory"
+            )),
+            "{program}: {result}"
+        );
+        assert!(
+            !result.contains("executable not found on PATH"),
+            "{program}: {result}"
+        );
+    }
+}
+
 #[test]
 fn command_blocks_share_terminal_steps_across_processes() {
     let dir = tempfile::tempdir().unwrap();

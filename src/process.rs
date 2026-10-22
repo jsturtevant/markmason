@@ -49,7 +49,7 @@ fn executable_not_found() -> anyhow::Error {
 
 #[cfg(not(windows))]
 fn executable_missing_from_path(program: &str, cwd: &Path, env: &Environment) -> bool {
-    if Path::new(program).components().count() != 1 || fs::metadata(cwd).is_err() {
+    if program.contains('/') || fs::metadata(cwd).is_err() {
         return false;
     }
     let Some(path) = env.get(std::ffi::OsStr::new("PATH")) else {
