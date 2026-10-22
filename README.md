@@ -86,7 +86,7 @@ Learn more with real examples from `mm`:
 - [Runtime failures and timeouts](tests/cli/runtime-errors.md)
 - [Setup and state](tests/cli/state.md)
 - [Required inputs](tests/cli/inputs.md)
-- [Sandboxed execution](tests/cli/sandbox.md)
+- [Sandboxed execution](tests/sandbox-cli/sandbox.md)
 - [Repository fixtures](tests/cli/fixtures.md)
 - [Persistent Bash sessions](tests/cli/shell.md)
 - [Deferred cleanup](tests/cli/cleanup.md)

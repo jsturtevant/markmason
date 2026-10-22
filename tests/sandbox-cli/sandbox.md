@@ -22,6 +22,19 @@ Blocks: 3 passed, 0 failed (includes deferred)
 
 ## Expose only an approved read path
 
+First run without a grant. The command fails because the working directory is
+hidden and the fixture path is not mounted.
+
+```markmason (exit 1)
+mm tests/fixtures/sandbox-guide --sandbox mxc --sandbox-workdir none
+```
+
+```expected-substring
+Sandbox filesystem access may be denied; grant the path with --sandbox-read PATH or --sandbox-write PATH.
+```
+
+Now add the repository as an explicit read-only mount.
+
 ```markmason
 mm tests/fixtures/sandbox-guide --sandbox mxc --sandbox-workdir none --sandbox-read .
 ```
@@ -34,4 +47,25 @@ Additional `--sandbox-read` and `--sandbox-write` paths are operator-controlled.
 RUN  read.md
   ✓ PASS Block 1/1 — Read an approved file
 Blocks: 1 passed, 0 failed (includes deferred)
+```
+
+## Allow one network destination
+
+Network access is denied by default. Grant outbound TCP access with a host or IP
+and optional port:
+
+```sh
+mm tests/network \
+  --sandbox mxc \
+  --sandbox-net-allow api.example.com:443
+```
+
+Denied connections retain the application's error and include
+`--sandbox-net-allow HOST[:PORT]` guidance when the backend cannot report a more
+specific destination. The opt-in Rust integration test exercises both denied and
+allowed live connections without making the default test suite depend on public
+network access:
+
+```sh
+cargo test --test runner mxc_sandbox_denies_and_allows_network_access -- --ignored
 ```

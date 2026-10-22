@@ -22,7 +22,7 @@ clap = { version = "4", features = ["derive"] }
 crossterm = { version = "0.29", default-features = false, features = ["events", "windows"] }
 dialoguer = { version = "0.12", default-features = false, features = ["fuzzy-select"] }
 dunce = "1"
-mxc-sdk = { version = "1.0.1", default-features = false, optional = true }
+mxc-sdk = { version = "1.0.1", default-features = false }
 portable-pty = "0.9"
 pulldown-cmark = { version = "0.13", default-features = false }
 regex = "1"
@@ -38,7 +38,3 @@ signal-hook = "0.3"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Security", "Win32_System_Console", "Win32_System_JobObjects", "Win32_System_Threading"] }
-
-[features]
-default = ["sandbox-mxc"]
-sandbox-mxc = ["dep:mxc-sdk"]

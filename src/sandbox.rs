@@ -1,7 +1,6 @@
 use crate::{process, spec};
 use anyhow::{Context, Result, bail};
 use clap::ValueEnum;
-#[cfg(feature = "sandbox-mxc")]
 use std::{
     ffi::OsString,
     io::{Read, Write},
@@ -57,14 +56,11 @@ pub struct Policy {
     workdir: WorkdirAccess,
     readonly: Vec<PathBuf>,
     readwrite: Vec<PathBuf>,
-    #[cfg(feature = "sandbox-mxc")]
     network_allow: Vec<String>,
 }
 
 impl Policy {
     pub fn resolve(cli: &CliPolicy, document: Option<&spec::Sandbox>) -> Result<Self> {
-        #[cfg(not(feature = "sandbox-mxc"))]
-        let _ = &cli.network_allow;
         let requested = document.map(|sandbox| sandbox.backend);
         if cli.backend == Backend::Mxc && requested == Some(Backend::None) {
             bail!("document requested sandbox 'none', but the CLI requires 'mxc'");
@@ -86,7 +82,6 @@ impl Policy {
             workdir: requested_workdir.unwrap_or(cli.workdir),
             readonly: cli.readonly.clone(),
             readwrite: cli.readwrite.clone(),
-            #[cfg(feature = "sandbox-mxc")]
             network_allow: cli.network_allow.clone(),
         })
     }
@@ -105,7 +100,6 @@ impl WorkdirAccess {
 #[derive(Clone)]
 pub struct Executor {
     policy: Policy,
-    #[cfg(feature = "sandbox-mxc")]
     fallback_cwd: PathBuf,
     readonly: Vec<PathBuf>,
     readwrite: Vec<PathBuf>,
@@ -150,7 +144,6 @@ impl Executor {
         normalize_mounts(&mut readonly, &mut readwrite)?;
         Ok(Self {
             policy,
-            #[cfg(feature = "sandbox-mxc")]
             fallback_cwd,
             readonly,
             readwrite,
@@ -164,39 +157,53 @@ impl Executor {
         Ok(executor)
     }
 
+    pub fn validate_prerequisite(&self, document: Option<&spec::Sandbox>) -> Result<()> {
+        let Some(document) = document else {
+            return Ok(());
+        };
+        if document.backend != self.policy.backend {
+            bail!(
+                "Markdown setup requests sandbox '{}', but its caller uses '{}'",
+                document.backend.name(),
+                self.policy.backend.name()
+            );
+        }
+        if let Some(workdir) = document.workdir
+            && workdir != self.policy.workdir
+        {
+            bail!(
+                "Markdown setup requests sandbox workdir '{}', but its shared fixture uses '{}'",
+                workdir.name(),
+                self.policy.workdir.name()
+            );
+        }
+        Ok(())
+    }
+
     pub fn terminal(
         &self,
         args: &[String],
         cwd: &Path,
         env: &process::Environment,
-        timeout: Duration,
     ) -> Result<process::Terminal> {
         match self.policy.backend {
             Backend::None => process::Terminal::new(args, cwd, env),
             Backend::Mxc => {
-                #[cfg(feature = "sandbox-mxc")]
-                {
-                    use mxc_sdk::v1::{self, MxcPtySize, SpawnWithPtyOptions};
-                    let terminal = v1::spawn_with_pty(
-                        self.request(args, cwd, env, timeout)?,
-                        SpawnWithPtyOptions {
-                            telemetry: None,
-                            size: MxcPtySize {
-                                rows: 30,
-                                cols: 120,
-                                pixel_width: 0,
-                                pixel_height: 0,
-                            },
+                use mxc_sdk::v1::{self, MxcPtySize, SpawnWithPtyOptions};
+                let terminal = v1::spawn_with_pty(
+                    self.request(args, cwd, env, None)?,
+                    SpawnWithPtyOptions {
+                        telemetry: None,
+                        size: MxcPtySize {
+                            rows: 30,
+                            cols: 120,
+                            pixel_width: 0,
+                            pixel_height: 0,
                         },
-                    )
-                    .map_err(mxc_error)?;
-                    process::Terminal::from_mxc(terminal)
-                }
-                #[cfg(not(feature = "sandbox-mxc"))]
-                {
-                    let _ = (args, cwd, env, timeout);
-                    bail!("MXC sandbox support is not compiled into this Markmason binary")
-                }
+                    },
+                )
+                .map_err(mxc_error)?;
+                process::Terminal::from_mxc(terminal)
             }
         }
     }
@@ -212,17 +219,7 @@ impl Executor {
                 request.scope,
                 request.progress,
             ),
-            Backend::Mxc => {
-                #[cfg(feature = "sandbox-mxc")]
-                {
-                    self.run_mxc(request)
-                }
-                #[cfg(not(feature = "sandbox-mxc"))]
-                {
-                    let _ = request;
-                    bail!("MXC sandbox support is not compiled into this Markmason binary")
-                }
-            }
+            Backend::Mxc => self.run_mxc(request),
         }
     }
 
@@ -240,17 +237,16 @@ impl Executor {
                     progress: request.progress,
                 },
             ),
-            Backend::Mxc => {
-                #[cfg(feature = "sandbox-mxc")]
-                {
-                    self.pty_mxc(request)
-                }
-                #[cfg(not(feature = "sandbox-mxc"))]
-                {
-                    let _ = request;
-                    bail!("MXC sandbox support is not compiled into this Markmason binary")
-                }
-            }
+            Backend::Mxc => self.pty_mxc(request),
+        }
+    }
+}
+
+impl Backend {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Mxc => "mxc",
         }
     }
 }
@@ -284,14 +280,13 @@ fn normalize_mounts(readonly: &mut Vec<PathBuf>, readwrite: &mut Vec<PathBuf>) -
     Ok(())
 }
 
-#[cfg(feature = "sandbox-mxc")]
 impl Executor {
     fn request(
         &self,
         args: &[String],
         cwd: &Path,
         env: &process::Environment,
-        timeout: Duration,
+        timeout: Option<Duration>,
     ) -> Result<mxc_sdk::v1::ContainerRequest> {
         use mxc_sdk::v1::policy::{
             FilesystemPolicy,
@@ -299,8 +294,12 @@ impl Executor {
         };
         use mxc_sdk::v1::{ContainerRequest, Containment};
 
-        let timeout_ms = u32::try_from(timeout.as_millis())
-            .context("Sandbox timeout exceeds MXC's supported range")?;
+        let timeout_ms = timeout
+            .map(|timeout| {
+                u32::try_from(timeout.as_millis())
+                    .context("Sandbox timeout exceeds MXC's supported range")
+            })
+            .transpose()?;
         let environment = env
             .iter()
             .map(|(name, value)| {
@@ -332,20 +331,31 @@ impl Executor {
                 ..Default::default()
             }),
             network: Some(Self::network_policy(&self.policy.network_allow)?),
-            timeout_ms: Some(timeout_ms),
-            working_directory: Some(
-                if self.policy.workdir == WorkdirAccess::None {
-                    &self.fallback_cwd
-                } else {
-                    cwd
-                }
-                .to_string_lossy()
-                .into_owned(),
-            ),
+            timeout_ms,
+            working_directory: Some(self.command_cwd(cwd)?.to_string_lossy().into_owned()),
             environment: Some(environment),
             inherit_default_environment: Some(false),
             ..ContainerRequest::new(command_line(args)?)
         })
+    }
+
+    fn command_cwd(&self, cwd: &Path) -> Result<PathBuf> {
+        if self.policy.workdir != WorkdirAccess::None {
+            return Ok(cwd.to_owned());
+        }
+        let cwd = dunce::canonicalize(cwd).with_context(|| {
+            format!("Cannot resolve command working directory {}", cwd.display())
+        })?;
+        if self
+            .readonly
+            .iter()
+            .chain(&self.readwrite)
+            .any(|mount| cwd.starts_with(mount))
+        {
+            Ok(cwd)
+        } else {
+            Ok(self.fallback_cwd.clone())
+        }
     }
 
     fn network_policy(entries: &[String]) -> Result<mxc_sdk::v1::policy::NetworkPolicy> {
@@ -399,11 +409,13 @@ impl Executor {
         if let Some(host) = entry.strip_prefix('[')
             && let Some((host, suffix)) = host.split_once(']')
         {
-            let port = suffix
-                .strip_prefix(':')
-                .map(str::parse)
-                .transpose()
-                .context("Invalid sandbox network port")?;
+            let port = if suffix.is_empty() {
+                None
+            } else if let Some(port) = suffix.strip_prefix(':') {
+                Some(port.parse().context("Invalid sandbox network port")?)
+            } else {
+                bail!("Invalid sandbox network destination {entry}: expected ':' after ']'");
+            };
             return Ok((host.to_owned(), port));
         }
         if let Some((host, port)) = entry.rsplit_once(':')
@@ -437,8 +449,11 @@ impl Executor {
             progress,
         } = request;
         crate::cancellation::check()?;
-        let mut child = v1::spawn(self.request(args, cwd, env, timeout)?, Default::default())
-            .map_err(mxc_error)?;
+        let mut child = v1::spawn(
+            self.request(args, cwd, env, Some(timeout))?,
+            Default::default(),
+        )
+        .map_err(mxc_error)?;
         let stdout = read_stream(child.take_stdout());
         let stderr = read_stream(child.take_stderr());
         let mut stdin = child.take_stdin();
@@ -517,7 +532,6 @@ impl Executor {
                 text.push('\n');
             }
 
-            #[cfg(feature = "sandbox-mxc")]
             fn policy_guidance(stderr: &str) -> Option<&'static str> {
                 let lower = stderr.to_lowercase();
                 if [
@@ -537,6 +551,7 @@ impl Executor {
                 }
                 if [
                     "permission denied",
+                    "operation not permitted",
                     "read-only file system",
                     "no such file",
                     "cannot find the path",
@@ -570,7 +585,7 @@ impl Executor {
         } = request;
         crate::cancellation::check()?;
         let terminal = v1::spawn_with_pty(
-            self.request(args, cwd, env, timeout)?,
+            self.request(args, cwd, env, Some(timeout))?,
             SpawnWithPtyOptions {
                 telemetry: None,
                 size: MxcPtySize {
@@ -582,18 +597,21 @@ impl Executor {
             },
         )
         .map_err(mxc_error)?;
-        process::pty_terminal(
+        let (mut output, completed) = process::pty_terminal(
             process::Terminal::from_mxc(terminal)?,
             steps,
             timeout,
             scope,
             final_command,
             progress,
-        )
+        )?;
+        if output.code == -1 && output.text.contains("^C") {
+            output.code = 130;
+        }
+        Ok((output, completed))
     }
 }
 
-#[cfg(feature = "sandbox-mxc")]
 fn read_stream(
     stream: Option<Box<dyn Read + Send>>,
 ) -> thread::JoinHandle<std::io::Result<Vec<u8>>> {
@@ -606,7 +624,6 @@ fn read_stream(
     })
 }
 
-#[cfg(feature = "sandbox-mxc")]
 fn collect_stream(stream: thread::JoinHandle<std::io::Result<Vec<u8>>>) -> Result<Vec<u8>> {
     stream
         .join()
@@ -614,7 +631,6 @@ fn collect_stream(stream: thread::JoinHandle<std::io::Result<Vec<u8>>>) -> Resul
         .context("Failed reading sandbox output")
 }
 
-#[cfg(feature = "sandbox-mxc")]
 fn command_line(args: &[String]) -> Result<String> {
     if args.is_empty() {
         bail!("Empty sandbox command");
@@ -637,7 +653,7 @@ fn command_line(args: &[String]) -> Result<String> {
     }
 }
 
-#[cfg(all(feature = "sandbox-mxc", windows))]
+#[cfg(windows)]
 fn windows_quote(argument: &str) -> String {
     if !argument.is_empty() && !argument.chars().any(|ch| ch.is_whitespace() || ch == '"') {
         return argument.to_owned();
@@ -662,7 +678,6 @@ fn windows_quote(argument: &str) -> String {
     quoted
 }
 
-#[cfg(feature = "sandbox-mxc")]
 fn os_string(value: &OsString, label: &str) -> Result<String> {
     value
         .to_str()
@@ -670,7 +685,6 @@ fn os_string(value: &OsString, label: &str) -> Result<String> {
         .with_context(|| format!("Sandbox {label} is not valid Unicode"))
 }
 
-#[cfg(feature = "sandbox-mxc")]
 fn display_paths(paths: &[PathBuf]) -> Vec<String> {
     paths
         .iter()
@@ -678,7 +692,6 @@ fn display_paths(paths: &[PathBuf]) -> Vec<String> {
         .collect()
 }
 
-#[cfg(feature = "sandbox-mxc")]
 fn mxc_error(error: mxc_sdk::v1::Error) -> anyhow::Error {
     let mut message = format!("MXC sandbox error: {}", error.message);
     if let Some(operation) = error.operation {
@@ -719,5 +732,14 @@ mod tests {
         let mut readonly = vec![root.join("fixtures")];
         let mut readwrite = vec![root];
         assert!(normalize_mounts(&mut readonly, &mut readwrite).is_err());
+    }
+
+    #[test]
+    fn malformed_ipv6_network_suffix_is_rejected() {
+        assert!(Executor::split_destination("[::1]443").is_err());
+        assert_eq!(
+            Executor::split_destination("[::1]:443").unwrap(),
+            ("::1".to_owned(), Some(443))
+        );
     }
 }

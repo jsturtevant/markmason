@@ -417,7 +417,6 @@ enum TerminalBackend {
         #[cfg(windows)]
         tree: Option<crate::windows::ProcessTree>,
     },
-    #[cfg(feature = "sandbox-mxc")]
     Mxc(mxc_sdk::v1::MxcPtyProcess),
 }
 
@@ -434,8 +433,6 @@ pub struct TerminalInput {
 #[derive(Clone)]
 enum TerminalInputKind {
     Native(mpsc::Sender<WriteRequest>),
-    #[cfg(feature = "sandbox-mxc")]
-    Mxc(Arc<Mutex<Box<dyn Write + Send>>>),
 }
 
 impl TerminalInput {
@@ -445,20 +442,27 @@ impl TerminalInput {
             TerminalInputKind::Native(send) => send
                 .send(WriteRequest { input, completed })
                 .context("PTY input writer stopped")?,
-            #[cfg(feature = "sandbox-mxc")]
-            TerminalInputKind::Mxc(writer) => {
-                let mut writer = writer.lock().unwrap();
-                let result = writer.write_all(&input).and_then(|()| writer.flush());
-                let _ = completed.send(result);
-            }
         }
         Ok(result)
     }
 
-    #[cfg(feature = "sandbox-mxc")]
     pub fn from_writer(writer: Box<dyn Write + Send>) -> Self {
+        let (send, receive) = mpsc::channel::<WriteRequest>();
+        thread::spawn(move || {
+            let writer = Arc::new(Mutex::new(writer));
+            for request in receive {
+                let mut writer = writer.lock().unwrap();
+                let result = writer
+                    .write_all(&request.input)
+                    .and_then(|()| writer.flush());
+                let failed = result.is_err();
+                if request.completed.send(result).is_err() || failed {
+                    break;
+                }
+            }
+        });
         Self {
-            inner: TerminalInputKind::Mxc(Arc::new(Mutex::new(writer))),
+            inner: TerminalInputKind::Native(send),
         }
     }
 }
@@ -583,7 +587,6 @@ impl Terminal {
         })
     }
 
-    #[cfg(feature = "sandbox-mxc")]
     pub fn from_mxc(process: mxc_sdk::v1::MxcPtyProcess) -> Result<Self> {
         let mut reader = process.try_clone_reader()?;
         let input = TerminalInput::from_writer(process.take_writer()?);
@@ -618,7 +621,6 @@ impl Terminal {
             TerminalBackend::Native { child, .. } => {
                 Ok(child.try_wait()?.map(|status| status.exit_code() as i32))
             }
-            #[cfg(feature = "sandbox-mxc")]
             TerminalBackend::Mxc(process) => Ok(process.try_wait()?),
         }
     }
@@ -635,14 +637,12 @@ impl Terminal {
                 tree.as_ref().context("Missing PTY job")?.check_started()?;
                 drop(master.take());
             }
-            #[cfg(feature = "sandbox-mxc")]
             TerminalBackend::Mxc(process) => {
                 if matches!(process.wait()?, mxc_sdk::v1::WaitResult::TimedOut) {
                     bail!("Sandbox PTY command timed out");
                 }
             }
         }
-        self.finished = true;
         Ok(())
     }
 
@@ -685,12 +685,18 @@ impl Terminal {
                 child.wait().context("Failed to reap PTY command")?;
                 drop(master.take());
             }
-            #[cfg(feature = "sandbox-mxc")]
             TerminalBackend::Mxc(process) => {
-                if process.try_wait()?.is_none() {
-                    process.kill()?;
+                match process.try_wait() {
+                    Ok(None) => process.kill()?,
+                    Ok(Some(_)) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {}
+                    Err(error) => return Err(error.into()),
                 }
-                let _ = process.wait()?;
+                match process.wait() {
+                    Ok(_) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {}
+                    Err(error) => return Err(error.into()),
+                }
             }
         }
         self.finished = true;
@@ -883,6 +889,7 @@ pub fn pty_terminal(
                 && !interaction.sending()
             {
                 interaction.check_complete(final_command, code, &clean)?;
+                terminal.finished = true;
                 return Ok((Output { text: clean, code }, interaction.completed()));
             }
         }

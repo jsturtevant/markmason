@@ -649,6 +649,10 @@ fn run_setup(
         if setup_spec.shell.is_some() && inherited_shell.is_none() {
             bail!("Markdown setup uses shell: bash; specify shell: bash in the calling file");
         }
+        fixture
+            .executor
+            .validate_prerequisite(setup_spec.sandbox.as_ref())
+            .with_context(|| format!("Incompatible Markdown setup {}", path.display()))?;
         if setup_spec.clone.is_some() {
             bail!(
                 "Markdown setup {} cannot use clone; put clone in the calling file",

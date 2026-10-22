@@ -19,6 +19,9 @@ lint:
 # Run Rust regression tests and the Markdown self-test suite.
 test: test-rust test-markdown
 
+# Run the full Rust and Markdown suites with Markdown commands contained by MXC.
+test-sandbox: test-rust test-markdown-sandbox
+
 # Run parser, matching, and standalone process tests.
 test-rust:
     cargo test --locked
@@ -36,6 +39,13 @@ test-markdown: build-test-cli
     # Inherited PWD can contain a Windows drive-letter colon; use Bash's physical path.
     root="$(pwd -P)" && PATH="$root/target/debug:$root/target/debug/examples:$PATH" cargo run --quiet --locked -- README.md --home-env TEST_HOME
     root="$(pwd -P)" && PATH="$root/target/debug:$root/target/debug/examples:$PATH" cargo run --quiet --locked -- tests/cli --home-env TEST_HOME
+
+# Test every executable Markdown guide through the MXC backend.
+test-markdown-sandbox: build-test-cli
+    # Inherited PWD can contain a Windows drive-letter colon; use Bash's physical path.
+    root="$(pwd -P)" && PATH="$root/target/debug:$root/target/debug/examples:$PATH" cargo run --quiet --locked -- README.md --home-env TEST_HOME --sandbox mxc
+    root="$(pwd -P)" && PATH="$root/target/debug:$root/target/debug/examples:$PATH" cargo run --quiet --locked -- tests/cli --home-env TEST_HOME --sandbox mxc
+    root="$(pwd -P)" && PATH="$root/target/debug:$root/target/debug/examples:$PATH" cargo run --quiet --locked -- tests/sandbox-cli --home-env TEST_HOME
 
 # Run the same checks as CI.
 check: fmt-check lint test

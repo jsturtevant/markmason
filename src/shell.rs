@@ -220,7 +220,6 @@ impl Session {
             ],
             cwd,
             &env,
-            timeout,
         )
         .context("shell: bash requires Bash on PATH; on native Windows install Git Bash, not a WSL launcher")?;
         let mut session = Self {

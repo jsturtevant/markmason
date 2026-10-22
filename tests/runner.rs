@@ -1,4 +1,4 @@
-#[cfg(feature = "sandbox-mxc")]
+#[cfg(target_os = "linux")]
 use std::net::ToSocketAddrs;
 use std::{
     fs,
@@ -1552,7 +1552,7 @@ fn invalid_regex_fails_before_running_commands() {
     assert!(!marker.exists());
 }
 
-#[cfg(feature = "sandbox-mxc")]
+#[cfg(target_os = "linux")]
 #[test]
 fn mxc_sandbox_denies_and_allows_file_access() {
     let specs = tempfile::tempdir().unwrap();
@@ -1591,8 +1591,9 @@ fn mxc_sandbox_denies_and_allows_file_access() {
     assert!(allowed_text.contains("Blocks: 1 passed"), "{allowed_text}");
 }
 
-#[cfg(feature = "sandbox-mxc")]
+#[cfg(target_os = "linux")]
 #[test]
+#[ignore = "requires public network access"]
 fn mxc_sandbox_denies_and_allows_network_access() {
     let specs = tempfile::tempdir().unwrap();
     let address = ("example.com", 80)
@@ -1632,7 +1633,7 @@ fn mxc_sandbox_denies_and_allows_network_access() {
     assert!(allowed_text.contains("Blocks: 1 passed"), "{allowed_text}");
 }
 
-#[cfg(feature = "sandbox-mxc")]
+#[cfg(not(windows))]
 #[test]
 fn mxc_sandbox_runs_pty_and_persistent_bash() {
     let specs = tempfile::tempdir().unwrap();
@@ -1645,7 +1646,10 @@ fn mxc_sandbox_runs_pty_and_persistent_bash() {
     .unwrap();
     fs::write(
         specs.path().join("shell.md"),
-        "---\nshell: bash\n---\n## Set shell state\n```markmason\nMESSAGE=hello\n```\n\
+        "---\nshell: bash\ntimeout: 1\n---\n\
+         ## Keep the session beyond one command timeout\n```markmason\n\
+         app pause\napp pause\napp pause\napp pause\n```\n\
+         ## Set shell state\n```markmason\nMESSAGE=hello\n```\n\
          ## Reuse shell state\n```markmason\nprintf '%s\\n' \"$MESSAGE\"\n```\n\
          ```expected\nhello\n```\n",
     )
@@ -1657,10 +1661,10 @@ fn mxc_sandbox_runs_pty_and_persistent_bash() {
     let transcript = text(&output);
     assert!(output.status.success(), "{transcript}");
     assert!(transcript.contains("Documents: 2 passed"), "{transcript}");
-    assert!(transcript.contains("Blocks: 3 passed"), "{transcript}");
+    assert!(transcript.contains("Blocks: 4 passed"), "{transcript}");
 }
 
-#[cfg(feature = "sandbox-mxc")]
+#[cfg(not(windows))]
 #[test]
 fn mxc_sandbox_frontmatter_cannot_relax_the_cli() {
     let specs = tempfile::tempdir().unwrap();
@@ -1697,7 +1701,43 @@ fn mxc_sandbox_frontmatter_cannot_relax_the_cli() {
     assert!(!marker.exists(), "{transcript}");
 }
 
-#[cfg(feature = "sandbox-mxc")]
+#[test]
+fn markdown_setup_cannot_change_the_callers_sandbox_policy() {
+    for (caller, prerequisite, args) in [
+        ("none", "mxc", Vec::<&str>::new()),
+        ("mxc", "none", vec!["--sandbox", "mxc"]),
+    ] {
+        let specs = tempfile::tempdir().unwrap();
+        fs::write(
+            specs.path().join("setup.md"),
+            format!(
+                "---\nsandbox: {prerequisite}\n---\n\
+                 ```markmason\napp echo setup\n```\n"
+            ),
+        )
+        .unwrap();
+        fs::write(
+            specs.path().join("lesson.md"),
+            format!(
+                "---\nsandbox: {caller}\nsetup: mm setup.md\n---\n\
+                 ```markmason\napp echo must-not-run\n```\n"
+            ),
+        )
+        .unwrap();
+        let output = command(&specs.path().join("lesson.md"))
+            .args(args)
+            .output()
+            .unwrap();
+        let transcript = text(&output);
+        assert_eq!(output.status.code(), Some(1), "{transcript}");
+        assert!(
+            transcript.contains("Incompatible Markdown setup"),
+            "{transcript}"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
 #[test]
 fn mxc_sandbox_workdir_access_can_be_restricted_and_regranted() {
     let specs = tempfile::tempdir().unwrap();
@@ -1728,6 +1768,12 @@ fn mxc_sandbox_workdir_access_can_be_restricted_and_regranted() {
         );
     }
 
+    fs::write(
+        specs.path().join("workdir.md"),
+        "## Write relative to the selected working directory\n\
+         ```markmason\napp write-file created.txt ready\n```\n",
+    )
+    .unwrap();
     let allowed = command(specs.path())
         .args([
             "--sandbox",
@@ -1746,7 +1792,7 @@ fn mxc_sandbox_workdir_access_can_be_restricted_and_regranted() {
     assert_eq!(fs::read_to_string(&marker).unwrap(), "ready");
 }
 
-#[cfg(feature = "sandbox-mxc")]
+#[cfg(not(windows))]
 #[test]
 fn mxc_sandbox_runs_setup_and_deferred_cleanup() {
     let specs = tempfile::tempdir().unwrap();
@@ -1771,7 +1817,7 @@ fn mxc_sandbox_runs_setup_and_deferred_cleanup() {
     assert!(transcript.contains("Always 2/2"), "{transcript}");
 }
 
-#[cfg(feature = "sandbox-mxc")]
+#[cfg(not(windows))]
 #[test]
 fn mxc_sandbox_timeout_still_runs_deferred_cleanup() {
     let specs = tempfile::tempdir().unwrap();
@@ -4172,7 +4218,12 @@ fn clone_fixture_is_isolated_and_removed() {
             .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
     )
     .unwrap();
-    for sandboxed in [false, true] {
+    let sandbox_modes: &[bool] = if cfg!(windows) {
+        &[false]
+    } else {
+        &[false, true]
+    };
+    for &sandboxed in sandbox_modes {
         let mut runner = command(dir.path());
         runner.env("PATH", &path).arg("--verbose");
         if sandboxed {
@@ -4899,7 +4950,11 @@ fn interrupts_reap_commands_stop_descendants_and_clean_up_fixtures() {
 #[cfg(unix)]
 #[test]
 fn oversized_pty_input_cannot_block_timeout_or_cancellation() {
-    for signal in [None, Some(libc::SIGINT), Some(libc::SIGTERM)] {
+    for (sandboxed, signal) in [false, true].into_iter().flat_map(|sandboxed| {
+        [None, Some(libc::SIGINT), Some(libc::SIGTERM)]
+            .into_iter()
+            .map(move |signal| (sandboxed, signal))
+    }) {
         let dir = tempfile::tempdir().unwrap();
         let started = dir.path().join("started");
         fs::write(
@@ -4908,7 +4963,13 @@ fn oversized_pty_input_cannot_block_timeout_or_cancellation() {
                 if signal.is_some() { 30 } else { 1 },
                 started.display(), "x".repeat(2 * 1024 * 1024)),
         ).unwrap();
-        let mut runner = command(dir.path())
+        let mut command = command(dir.path());
+        if sandboxed {
+            command
+                .args(["--sandbox", "mxc", "--sandbox-write"])
+                .arg(dir.path());
+        }
+        let mut runner = command
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
@@ -4940,7 +5001,11 @@ fn oversized_pty_input_cannot_block_timeout_or_cancellation() {
             );
         }
         let output = runner.wait_with_output().unwrap();
-        assert!(!output.status.success(), "{}", text(&output));
+        assert!(
+            !output.status.success(),
+            "sandboxed={sandboxed}: {}",
+            text(&output)
+        );
         if let Some(signal) = signal {
             assert_eq!(
                 output.status.code(),
@@ -4949,11 +5014,7 @@ fn oversized_pty_input_cannot_block_timeout_or_cancellation() {
                 text(&output)
             );
         } else {
-            assert!(
-                text(&output).contains("PTY command timed out"),
-                "{}",
-                text(&output)
-            );
+            assert!(text(&output).contains("timed out"), "{}", text(&output));
         }
         let info = fs::read_to_string(started).unwrap();
         let mut info = info.lines();
