@@ -22,6 +22,17 @@ error: unknown option --not-an-option
 ```
 ````
 
+Direct `markmason` fences are the recommended form for normal executable
+documentation. Use an outer `markdown markmason` fence only when documentation
+about Markmason itself should show the inner Markdown source while still
+executing it. Put `always` and `(exit N)` on the inner command fence.
+
+````markdown markmason
+```markmason
+mm --version
+```
+````
+
 Each block is one test. By default, put one command on each line; blank lines are ignored.
 Commands run in order and their output is concatenated for the following
 expected block. The first nonzero exit stops the block and becomes its exit

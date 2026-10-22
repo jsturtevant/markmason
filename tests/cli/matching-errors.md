@@ -6,6 +6,7 @@ assertions instead fail when their text or pattern cannot be found.
 
 ## Reject partial-line matches
 
+````markdown markmason
 ```markmason (exit 1)
 mm tests/fixtures/matching-substring
 ```
@@ -20,9 +21,11 @@ Contains matching is not a substring search.
     Expected line 1 not found in output:
       expected: "first"
 ```
+````
 
 ## Reject lines in the wrong order
 
+````markdown markmason
 ```markmason (exit 1)
 mm tests/fixtures/matching-order
 ```
@@ -36,9 +39,11 @@ mm tests/fixtures/matching-order
     Expected line 2 not found in output:
       expected: "second"
 ```
+````
 
 ## Reject unmatched trailing output
 
+````markdown markmason
 ```markmason (exit 1)
 mm tests/fixtures/matching-trailing
 ```
@@ -52,12 +57,14 @@ mm tests/fixtures/matching-trailing
     Actual output has 1 unmatched trailing line(s):
     trailing
 ```
+````
 
 ## Report a missing substring
 
 The [missing-phrase spec](../fixtures/substring-mismatch/output.md) reports the
 literal text it wanted alongside the full output.
 
+````markdown markmason
 ```markmason (exit 1)
 mm tests/fixtures/substring-mismatch
 ```
@@ -69,12 +76,14 @@ mm tests/fixtures/substring-mismatch
     prefix first
     second trailing
 ```
+````
 
 ## Report a missing regex match
 
 The [numeric-ID spec](../fixtures/regex-mismatch/output.md) receives a word
 instead. Diagnostics quote the pattern, so a literal backslash displays as `\\`.
 
+````markdown markmason
 ```markmason (exit 1)
 mm tests/fixtures/regex-mismatch
 ```
@@ -86,12 +95,14 @@ mm tests/fixtures/regex-mismatch
     id: unknown
     request complete
 ```
+````
 
 ## Reject malformed patterns before execution
 
 The [invalid-regex spec](../fixtures/invalid-regex/output.md) has an unclosed
 character class. Its command never runs.
 
+````markdown markmason
 ```markmason (exit 1)
 mm tests/fixtures/invalid-regex
 ```
@@ -102,12 +113,14 @@ Invalid expected-regex pattern: regex parse error:
     ^
 error: unclosed character class
 ```
+````
 
 ## Match stderr from an expected failure
 
 For a failing command, matching includes stdout followed by stderr. Declaring the
 exit code is still required; finding the phrase alone does not excuse a failure.
 
+````markdown markmason
 ```markmason (exit 2)
 mm-test-cli fail
 ```
@@ -115,3 +128,4 @@ mm-test-cli fail
 ```expected-regex
 (?s)stdout.*stderr
 ```
+````

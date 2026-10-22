@@ -42,6 +42,9 @@ description: >-
   Group related commands in one block, one per line. The block is one test:
   output is combined and the first nonzero exit stops it.
   Put assertions and input blocks after the command, before the next heading.
+- Use direct `markmason` fences for normal CLI guides. Only use an outer
+  `markdown markmason` fence when the document is specifically teaching
+  Markmason and needs to show the inner fence syntax in rendered Markdown.
 - Keep every Markdown file in the scanned spec directory executable.
   Put indexes, references, and templates elsewhere; a case-free README there fails.
 

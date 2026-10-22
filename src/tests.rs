@@ -302,6 +302,88 @@ literal-output
 }
 
 #[test]
+fn markdown_markmason_fences_execute_nested_markdown() -> Result<()> {
+    let spec = spec::parse(
+        r#"---
+shell: bash
+---
+## Show the source
+
+Keep the executable syntax visible in rendered documentation.
+
+````markdown markmason
+```markmason (exit 2)
+if true; then
+  app fail
+fi
+```
+
+```expected-substring
+stderr
+```
+````
+"#,
+    )?;
+    assert_eq!(spec.cases.len(), 1);
+    let case = &spec.cases[0];
+    assert_eq!(case.title.as_deref(), Some("Show the source"));
+    assert_eq!(
+        case.description,
+        "Keep the executable syntax visible in rendered documentation."
+    );
+    assert_eq!(case.command, "if true; then\n  app fail\nfi");
+    assert_eq!(case.exit_code, 2);
+    assert_eq!(case.expected.as_deref(), Some("stderr"));
+    assert_eq!(case.matching, matching::Mode::Substring);
+
+    for invalid in [
+        "````markdown markmason always\n```markmason\ncmd\n```\n````\n",
+        "````markdown markmason (exit 2)\n```markmason\ncmd\n```\n````\n",
+        "```markdown markmason\nplain text\n```\n",
+    ] {
+        assert!(spec::parse(invalid).is_err(), "{invalid}");
+    }
+    Ok(())
+}
+
+#[test]
+fn markdown_markmason_fences_preserve_nested_heading_boundaries() -> Result<()> {
+    let spec = spec::parse(
+        r#"````markdown markmason
+```markmason
+cmd
+```
+
+```expected
+inside
+```
+
+## Finished
+````
+
+```expected
+outside
+```
+
+```stdin
+unrelated input
+```
+
+```pty
+match: prompt
+send: unrelated
+```
+"#,
+    )?;
+    assert_eq!(spec.cases.len(), 1);
+    let case = &spec.cases[0];
+    assert_eq!(case.expected.as_deref(), Some("inside"));
+    assert!(case.stdin.is_none());
+    assert!(case.pty.is_none());
+    Ok(())
+}
+
+#[test]
 fn fenced_cases_bind_blocks_until_the_next_command_or_heading() -> Result<()> {
     let spec = spec::parse(
         "```markmason\nfirst\n```\n```expected\none\n```\n\

@@ -5,6 +5,7 @@ Sends do not add a newline; use `{enter}` to submit an answer.
 
 ## Answer repeated prompts
 
+````markdown markmason
 ```markmason
 mm-test-cli interactive
 ```
@@ -22,9 +23,11 @@ send: ready{enter}
 accepted Ada Lovelace
 done ready
 ```
+````
 
 ## Wait for raw terminal sequences
 
+````markdown markmason
 ```markmason
 mm-test-cli interactive
 ```
@@ -44,5 +47,6 @@ send: no{enter}
 accepted yes
 done no
 ```
+````
 
 See [runtime errors](runtime-errors.md) for missing prompts and timeouts.

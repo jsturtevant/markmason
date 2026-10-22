@@ -7,6 +7,7 @@ For normal usage, start with [running tests](running.md) or [filtering](filterin
 
 ## Reject unknown options
 
+````markdown markmason
 ```markmason (exit 2)
 mm --not-an-option
 ```
@@ -17,9 +18,11 @@ Unknown options exit with code 2. No tests run.
 error: unexpected argument '--not-an-option' found
 For more information, try '--help'.
 ```
+````
 
 ## Reject a zero timeout
 
+````markdown markmason
 ```markmason (exit 2)
 mm --timeout 0
 ```
@@ -30,9 +33,11 @@ Timeouts are in seconds and must be greater than zero.
 error: invalid value '0' for '--timeout <TIMEOUT>': timeout must be positive, finite seconds
 For more information, try '--help'.
 ```
+````
 
 ## Stop a pipeline on failure
 
+````markdown markmason
 ```markmason (exit 2)
 mm --not-an-option | mm --help
 ```
@@ -43,9 +48,11 @@ A pipeline stops at the first failing command. The second command must not run.
 error: unexpected argument '--not-an-option' found
 For more information, try '--help'.
 ```
+````
 
 ## Report an output mismatch
 
+````markdown markmason
 ```markmason (exit 1)
 mm tests/fixtures/mismatch
 ```
@@ -61,9 +68,11 @@ The command succeeds, but the assertion fails and `mm` exits with code 1.
       expected: "not the help output"
       actual:   "Standalone Markdown-driven CLI end-to-end test runner"
 ```
+````
 
 ## Reject invalid frontmatter
 
+````markdown markmason
 ```markmason (exit 1)
 mm tests/fixtures/invalid
 ```
@@ -74,9 +83,11 @@ Tags must be a YAML array, such as `[smoke, cli]`.
 ```expected
 Error: Invalid spec invalid.md: Frontmatter tags must be an array of strings
 ```
+````
 
 ## Skip cases after setup fails
 
+````markdown markmason
 ```markmason (exit 1)
 mm tests/fixtures/setup-failure
 ```
@@ -89,9 +100,11 @@ Setup runs before a file's cases. If it fails, those cases are skipped.
     Setup command failed: mm --not-an-option
     error: unexpected argument '--not-an-option' found
 ```
+````
 
 ## List cases without running setup
 
+````markdown markmason
 ```markmason
 mm tests/fixtures/setup-failure --cwd tests/fixtures/nonexistent --list
 ```
@@ -103,9 +116,11 @@ setup.md
   Block 1/1 — List a command that setup prevents from running
     mm --version
 ```
+````
 
 ## Report filters with no matches
 
+````markdown markmason
 ```markmason (exit 1)
 mm tests/fixtures/passing --tags missing
 ```
@@ -115,11 +130,13 @@ No matches is an error, not an empty successful run.
 ```expected
 Error: No markdown test specs matched in $REPO_ROOT/tests/fixtures/passing
 ```
+````
 
 `$REPO_ROOT` is replaced with the working directory.
 
 ## Compare stdout and stderr for failures
 
+````markdown markmason
 ```markmason (exit 2)
 mm-test-cli fail
 ```
@@ -131,12 +148,14 @@ Successful commands compare [stdout only](matching.md).
 stdout
 stderr
 ```
+````
 
 ## Stop a command block on failure
 
 The first nonzero exit stops the block. Output from earlier commands is kept,
 including stdout and stderr from the failed command.
 
+````markdown markmason
 ```markmason (exit 2)
 mm-test-cli echo before
 mm-test-cli fail
@@ -148,6 +167,7 @@ before
 stdout
 stderr
 ```
+````
 
 See [matching errors](matching-errors.md) and [runtime errors](runtime-errors.md)
 for failed assertions, timeouts, and incomplete terminal scripts.

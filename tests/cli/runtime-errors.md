@@ -5,6 +5,7 @@ An execution error still fails a case that expects a nonzero exit.
 
 ## Fail on timeout despite an expected error exit
 
+````markdown markmason
 ```markmason (exit 1)
 mm tests/fixtures/command-timeout --timeout 1
 ```
@@ -20,9 +21,11 @@ into a pass. The limit is in seconds.
     Output so far:
     before timeout
 ```
+````
 
 ## Use the per-file timeout
 
+````markdown markmason
 ```markmason (exit 1)
 mm tests/fixtures/file-timeout --timeout 5
 ```
@@ -38,9 +41,11 @@ overriding the five-second CLI default.
     Output so far:
     before timeout
 ```
+````
 
 ## Report a missing terminal prompt
 
+````markdown markmason
 ```markmason (exit 1)
 mm tests/fixtures/pty-timeout
 ```
@@ -57,9 +62,11 @@ waiting for, along with output captured so far.
     Output so far:
     before timeout
 ```
+````
 
 ## Require every terminal step to finish
 
+````markdown markmason
 ```markmason (exit 1)
 mm tests/fixtures/pty-incomplete
 ```
@@ -75,3 +82,4 @@ every terminal step must finish.
     Output:
     done
 ```
+````

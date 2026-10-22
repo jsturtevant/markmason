@@ -35,6 +35,7 @@ terminal and scripted keypresses.
 
 A short command gives you one expected result to compare with the real output.
 
+````markdown markmason
 ```markmason
 mm-test-cli echo "Hello, Markmason!"
 ```
@@ -42,6 +43,7 @@ mm-test-cli echo "Hello, Markmason!"
 ```expected
 Hello, Markmason!
 ```
+````
 
 ## Build output one command at a time
 
@@ -49,6 +51,7 @@ There is a pause after each line, even inside one block. After the first command
 the walkthrough shows `first` as actual output so far, without checking the
 whole-block assertion yet. After the second command, both lines are checked.
 
+````markdown markmason
 ```markmason
 mm-test-cli echo first
 mm-test-cli echo second
@@ -58,12 +61,14 @@ mm-test-cli echo second
 first
 second
 ```
+````
 
 ## Keep application input separate from tutorial controls
 
 The `stdin` block goes to the application. Your Enter and quit controls go to
 Markmason instead, so answering the walkthrough cannot change the test's input.
 
+````markdown markmason
 ```markmason
 mm-test-cli cat
 ```
@@ -75,3 +80,4 @@ input for the application
 ```expected
 input for the application
 ```
+````

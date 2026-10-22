@@ -5,6 +5,7 @@ Environment variables select the same [sample specs](filtering.md) as CLI flags.
 
 ## Include paths from the environment
 
+````markdown markmason
 ```markmason
 mm-test-cli with-env E2E_FILE_PATTERN basic -- mm tests/fixtures/passing
 ```
@@ -19,9 +20,11 @@ RUN  basic.md
   ✓ PASS Block 2/2 — Show the installed version
 Blocks: 2 passed, 0 failed (includes deferred)
 ```
+````
 
 ## Exclude paths from the environment
 
+````markdown markmason
 ```markmason
 mm-test-cli with-env E2E_FILE_EXCLUDE basic -- mm tests/fixtures/passing
 ```
@@ -34,9 +37,11 @@ RUN  extra.md
   ✓ PASS Block 1/1 — Show the installed version
 Blocks: 1 passed, 0 failed (includes deferred)
 ```
+````
 
 ## Require tags from the environment
 
+````markdown markmason
 ```markmason
 mm-test-cli with-env E2E_TAGS SMOKE,cli -- mm tests/fixtures/passing
 ```
@@ -51,9 +56,11 @@ RUN  basic.md
   ✓ PASS Block 2/2 — Show the installed version
 Blocks: 2 passed, 0 failed (includes deferred)
 ```
+````
 
 ## Exclude tags from the environment
 
+````markdown markmason
 ```markmason
 mm-test-cli with-env E2E_TAGS_EXCLUDE smoke -- mm tests/fixtures/passing
 ```
@@ -66,9 +73,11 @@ RUN  extra.md
   ✓ PASS Block 1/1 — Show the installed version
 Blocks: 1 passed, 0 failed (includes deferred)
 ```
+````
 
 ## Choose a different variable prefix
 
+````markdown markmason
 ```markmason
 mm-test-cli with-env E2E_TAGS extra DOC_TAGS smoke -- mm tests/fixtures/passing --env-prefix DOC_
 ```
@@ -83,9 +92,11 @@ RUN  basic.md
   ✓ PASS Block 2/2 — Show the installed version
 Blocks: 2 passed, 0 failed (includes deferred)
 ```
+````
 
 ## Override the include pattern
 
+````markdown markmason
 ```markmason
 mm-test-cli with-env E2E_FILE_PATTERN extra -- mm tests/fixtures/passing --file-pattern basic
 ```
@@ -100,9 +111,11 @@ RUN  basic.md
   ✓ PASS Block 2/2 — Show the installed version
 Blocks: 2 passed, 0 failed (includes deferred)
 ```
+````
 
 ## Override the exclude pattern
 
+````markdown markmason
 ```markmason
 mm-test-cli with-env E2E_FILE_EXCLUDE basic -- mm tests/fixtures/passing --file-exclude extra
 ```
@@ -117,9 +130,11 @@ RUN  basic.md
   ✓ PASS Block 2/2 — Show the installed version
 Blocks: 2 passed, 0 failed (includes deferred)
 ```
+````
 
 ## Override required tags
 
+````markdown markmason
 ```markmason
 mm-test-cli with-env E2E_TAGS extra -- mm tests/fixtures/passing --tags smoke
 ```
@@ -134,9 +149,11 @@ RUN  basic.md
   ✓ PASS Block 2/2 — Show the installed version
 Blocks: 2 passed, 0 failed (includes deferred)
 ```
+````
 
 ## Override excluded tags
 
+````markdown markmason
 ```markmason
 mm-test-cli with-env E2E_TAGS_EXCLUDE smoke -- mm tests/fixtures/passing --tags-exclude extra
 ```
@@ -151,9 +168,11 @@ RUN  basic.md
   ✓ PASS Block 2/2 — Show the installed version
 Blocks: 2 passed, 0 failed (includes deferred)
 ```
+````
 
 ## Enable verbose output from the environment
 
+````markdown markmason
 ```markmason
 mm-test-cli with-env VERBOSE " YES " -- mm tests/fixtures/diagnostics
 ```
@@ -171,3 +190,4 @@ hello
 Documents: 1 passed, 0 failed
 Blocks: 1 passed, 0 failed (includes deferred)
 ```
+````
