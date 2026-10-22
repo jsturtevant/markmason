@@ -347,6 +347,43 @@ stderr
 }
 
 #[test]
+fn markdown_markmason_fences_preserve_nested_heading_boundaries() -> Result<()> {
+    let spec = spec::parse(
+        r#"````markdown markmason
+```markmason
+cmd
+```
+
+```expected
+inside
+```
+
+## Finished
+````
+
+```expected
+outside
+```
+
+```stdin
+unrelated input
+```
+
+```pty
+match: prompt
+send: unrelated
+```
+"#,
+    )?;
+    assert_eq!(spec.cases.len(), 1);
+    let case = &spec.cases[0];
+    assert_eq!(case.expected.as_deref(), Some("inside"));
+    assert!(case.stdin.is_none());
+    assert!(case.pty.is_none());
+    Ok(())
+}
+
+#[test]
 fn fenced_cases_bind_blocks_until_the_next_command_or_heading() -> Result<()> {
     let spec = spec::parse(
         "```markmason\nfirst\n```\n```expected\none\n```\n\

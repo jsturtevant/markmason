@@ -27,17 +27,11 @@ the inner Markdown source while still executing it. This is an optional
 authoring form; direct `markmason` fences remain the normal form. Put `always`
 and `(exit N)` on the inner command fence.
 
-`````markdown
 ````markdown markmason
 ```markmason
-mycli --version
-```
-
-```expected
-mycli 1.2.3
+mm --version
 ```
 ````
-`````
 
 Each block is one test. By default, put one command on each line; blank lines are ignored.
 Commands run in order and their output is concatenated for the following

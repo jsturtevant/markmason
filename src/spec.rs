@@ -240,7 +240,7 @@ fn parse_cases(
     spec: &mut Spec,
     inherited_title: Option<String>,
     inherited_description: String,
-) -> Result<()> {
+) -> Result<Option<usize>> {
     let command_info =
         Regex::new(r"^markmason(?:\s+(?P<always>always))?(?:\s+\(exit\s+(?P<exit>\d+)\))?$")
             .unwrap();
@@ -336,14 +336,15 @@ fn parse_cases(
                         );
                     }
                     let first_nested = spec.cases.len();
-                    parse_cases(block, spec, title.clone(), description.clone())
-                        .context("Invalid executable Markdown")?;
+                    let nested_current =
+                        parse_cases(block, spec, title.clone(), description.clone())
+                            .context("Invalid executable Markdown")?;
                     if spec.cases.len() == first_nested {
                         bail!(
                             "A markdown markmason block must contain a fenced markmason command block"
                         );
                     }
-                    current = Some(spec.cases.len() - 1);
+                    current = nested_current;
                     continue;
                 }
                 let command_ranges = if spec.shell.is_some() {
@@ -419,7 +420,7 @@ fn parse_cases(
             }
         }
     }
-    Ok(())
+    Ok(current)
 }
 
 // Deliberately not shell parsing: backslashes are literal, and empty quoted arguments survive.
