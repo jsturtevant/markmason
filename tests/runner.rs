@@ -1580,7 +1580,10 @@ fn mxc_sandbox_denies_and_allows_file_access() {
         denied_text.contains("No such file") || denied_text.contains("cannot find"),
         "{denied_text}"
     );
-    assert!(denied_text.contains("--sandbox-read PATH"), "{denied_text}");
+    assert!(
+        denied_text.contains("permit the path with --sandbox-read PATH"),
+        "{denied_text}"
+    );
 
     let allowed = command(specs.path())
         .args(["--sandbox", "mxc", "--sandbox-read"])
@@ -1841,6 +1844,34 @@ fn mxc_sandbox_timeout_still_runs_deferred_cleanup() {
         fs::read_to_string(specs.path().join("cleanup.txt")).unwrap(),
         "done"
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn mxc_sandbox_output_drain_remains_bounded() {
+    let specs = tempfile::tempdir().unwrap();
+    let started = specs.path().join("started");
+    fs::write(
+        specs.path().join("drain.md"),
+        format!(
+            "---\ntimeout: 1\n---\n## Leave output open in a descendant\n\
+             ```markmason\napp drain '{}'\n```\n",
+            shell_path(&started)
+        ),
+    )
+    .unwrap();
+    let began = Instant::now();
+    let output = command(specs.path())
+        .args(["--sandbox", "mxc", "--sandbox-write"])
+        .arg(specs.path())
+        .output()
+        .unwrap();
+    assert!(
+        began.elapsed() < Duration::from_secs(5),
+        "{}",
+        text(&output)
+    );
+    assert!(started.exists(), "{}", text(&output));
 }
 
 fn step_process(
@@ -4212,7 +4243,7 @@ fn clone_fixture_is_isolated_and_removed() {
         .path()
         .join(format!("gh{}", std::env::consts::EXE_SUFFIX));
     fs::hard_link(helper(), &gh).unwrap();
-    fs::write(dir.path().join("clone.md"), "---\nclone: owner/repo\n---\n```markmason\napp cloned\n```\n```expected\nyes\n```\n```markmason\napp echo $REPO_ROOT\n```\n").unwrap();
+    fs::write(dir.path().join("clone.md"), "---\nclone: owner/repo\nsetup: app mark host-setup\n---\n```markmason\napp cloned\n```\n```expected\nyes\n```\n```markmason\napp echo $REPO_ROOT\n```\n").unwrap();
     let path = std::env::join_paths(
         [dir.path().to_owned(), helper().parent().unwrap().to_owned()]
             .into_iter()
@@ -4225,13 +4256,20 @@ fn clone_fixture_is_isolated_and_removed() {
         &[false, true]
     };
     for &sandboxed in sandbox_modes {
+        let setup_marker = dir.path().join("host-setup");
+        let _ = fs::remove_file(&setup_marker);
         let mut runner = command(dir.path());
-        runner.env("PATH", &path).arg("--verbose");
+        runner
+            .env("PATH", &path)
+            .arg("--verbose")
+            .arg("--cwd")
+            .arg(dir.path());
         if sandboxed {
             runner.args(["--sandbox", "mxc"]);
         }
         let output = runner.output().unwrap();
         assert!(output.status.success(), "{}", text(&output));
+        assert!(setup_marker.exists(), "{}", text(&output));
         let text = text(&output);
         let cloned = text
             .lines()

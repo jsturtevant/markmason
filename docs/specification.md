@@ -105,11 +105,11 @@ sandbox:
 `--cwd` selects the effective working directory. `--sandbox-workdir rw|ro|none`
 controls its sandbox mount and defaults to `rw`. The isolated application home
 and configuration directory remain writable. Repeated `--sandbox-read PATH` and
-`--sandbox-write PATH` grants append canonical host mounts; conflicting
+`--sandbox-write PATH` permissions append canonical host mounts; conflicting
 read-only/read-write overlaps are rejected before setup.
 
 Network egress and ingress are denied by default. Repeated
-`--sandbox-net-allow HOST[:PORT]` entries grant outbound TCP destinations.
+`--sandbox-net-allow HOST[:PORT]` entries permit outbound TCP destinations.
 Frontmatter cannot add filesystem or network privileges.
 
 Setup, ordinary commands, pipeline stages, PTY commands, persistent Bash, and

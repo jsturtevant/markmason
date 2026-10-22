@@ -309,9 +309,24 @@ impl Executor {
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
+        let command_cwd = self.command_cwd(cwd)?;
+        let mut readonly = self.readonly.clone();
+        let mut readwrite = self.readwrite.clone();
+        if !readonly
+            .iter()
+            .chain(&readwrite)
+            .any(|mount| command_cwd.starts_with(mount))
+        {
+            match self.policy.workdir {
+                WorkdirAccess::None => {}
+                WorkdirAccess::ReadOnly => readonly.push(command_cwd.clone()),
+                WorkdirAccess::ReadWrite => readwrite.push(command_cwd.clone()),
+            }
+        }
+        normalize_mounts(&mut readonly, &mut readwrite)?;
         let tools = available_tools_policy(Some(&environment), ToolsPolicyOptions::default());
-        let readwrite_paths = display_paths(&self.readwrite);
-        let mut readonly_paths = display_paths(&self.readonly);
+        let readwrite_paths = display_paths(&readwrite);
+        let mut readonly_paths = display_paths(&readonly);
         readonly_paths.extend(tools.readonly_paths.into_iter().filter(|tool| {
             !readwrite_paths
                 .iter()
@@ -332,7 +347,7 @@ impl Executor {
             }),
             network: Some(Self::network_policy(&self.policy.network_allow)?),
             timeout_ms,
-            working_directory: Some(self.command_cwd(cwd)?.to_string_lossy().into_owned()),
+            working_directory: Some(command_cwd.to_string_lossy().into_owned()),
             environment: Some(environment),
             inherit_default_environment: Some(false),
             ..ContainerRequest::new(command_line(args)?)
@@ -340,12 +355,12 @@ impl Executor {
     }
 
     fn command_cwd(&self, cwd: &Path) -> Result<PathBuf> {
-        if self.policy.workdir != WorkdirAccess::None {
-            return Ok(cwd.to_owned());
-        }
         let cwd = dunce::canonicalize(cwd).with_context(|| {
             format!("Cannot resolve command working directory {}", cwd.display())
         })?;
+        if self.policy.workdir != WorkdirAccess::None {
+            return Ok(cwd);
+        }
         if self
             .readonly
             .iter()
@@ -382,13 +397,11 @@ impl Executor {
                         .map(|address| NetworkPeerPolicy::new(Self::host_cidr(address)))
                         .collect(),
                 ),
-                ports: port.map(|port| {
-                    vec![NetworkPortPolicy {
-                        protocol: Some(NetworkProtocol::Tcp),
-                        port: Some(port),
-                        end_port: None,
-                    }]
-                }),
+                ports: Some(vec![NetworkPortPolicy {
+                    protocol: Some(NetworkProtocol::Tcp),
+                    port,
+                    end_port: None,
+                }]),
             });
         }
         Ok(mxc_sdk::v1::policy::NetworkPolicy {
@@ -454,6 +467,8 @@ impl Executor {
             Default::default(),
         )
         .map_err(mxc_error)?;
+        let stdout_closer = child.stdout_closer();
+        let stderr_closer = child.stderr_closer();
         let stdout = read_stream(child.take_stdout());
         let stderr = read_stream(child.take_stderr());
         let mut stdin = child.take_stdin();
@@ -486,8 +501,25 @@ impl Executor {
         };
         let waited = child.wait()?;
         let warnings = child.warnings();
-        let stdout = collect_stream(stdout)?;
-        let stderr = collect_stream(stderr)?;
+        if matches!(outcome, WaitResult::TimedOut) || cancelled.is_some() {
+            if let Some(closer) = &stdout_closer {
+                closer.close();
+            }
+            if let Some(closer) = &stderr_closer {
+                closer.close();
+            }
+        }
+        let stdout =
+            match collect_stream(stdout, stdout_closer, started, timeout, progress, "stdout") {
+                Ok(stdout) => stdout,
+                Err(error) => {
+                    if let Some(closer) = stderr_closer {
+                        closer.close();
+                    }
+                    return Err(error);
+                }
+            };
+        let stderr = collect_stream(stderr, stderr_closer, started, timeout, progress, "stderr")?;
         if let Ok(result) = input_rx.recv_timeout(Duration::from_secs(1))
             && let Err(error) = result
             && error.kind() != std::io::ErrorKind::BrokenPipe
@@ -545,7 +577,7 @@ impl Executor {
                 .any(|message| lower.contains(message))
                 {
                     return Some(
-                        "Sandbox network access may be denied; grant the destination with \
+                        "Sandbox network access may be denied; permit the destination with \
                          --sandbox-net-allow HOST[:PORT].",
                     );
                 }
@@ -560,7 +592,7 @@ impl Executor {
                 .any(|message| lower.contains(message))
                 {
                     return Some(
-                        "Sandbox filesystem access may be denied; grant the path with \
+                        "Sandbox filesystem access may be denied; permit the path with \
                          --sandbox-read PATH or --sandbox-write PATH.",
                     );
                 }
@@ -612,23 +644,48 @@ impl Executor {
     }
 }
 
-fn read_stream(
-    stream: Option<Box<dyn Read + Send>>,
-) -> thread::JoinHandle<std::io::Result<Vec<u8>>> {
+fn read_stream(stream: Option<Box<dyn Read + Send>>) -> mpsc::Receiver<std::io::Result<Vec<u8>>> {
+    let (send, receive) = mpsc::channel();
     thread::spawn(move || {
         let mut bytes = Vec::new();
-        if let Some(mut stream) = stream {
-            stream.read_to_end(&mut bytes)?;
-        }
-        Ok(bytes)
-    })
+        let result = if let Some(mut stream) = stream {
+            stream.read_to_end(&mut bytes).map(|_| bytes)
+        } else {
+            Ok(bytes)
+        };
+        let _ = send.send(result);
+    });
+    receive
 }
 
-fn collect_stream(stream: thread::JoinHandle<std::io::Result<Vec<u8>>>) -> Result<Vec<u8>> {
-    stream
-        .join()
-        .map_err(|_| anyhow::anyhow!("Sandbox output reader panicked"))?
-        .context("Failed reading sandbox output")
+fn collect_stream(
+    stream: mpsc::Receiver<std::io::Result<Vec<u8>>>,
+    closer: Option<mxc_sdk::v1::StreamCloser>,
+    started: Instant,
+    timeout: Duration,
+    progress: &mut dyn FnMut() -> Result<()>,
+    label: &str,
+) -> Result<Vec<u8>> {
+    loop {
+        if let Err(error) = crate::cancellation::check() {
+            if let Some(closer) = closer {
+                closer.close();
+            }
+            return Err(error);
+        }
+        progress()?;
+        match stream.recv_timeout(Duration::from_millis(10)) {
+            Ok(result) => return result.context("Failed reading sandbox output"),
+            Err(mpsc::RecvTimeoutError::Timeout) if started.elapsed() < timeout => {}
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if let Some(closer) = closer {
+                    closer.close();
+                }
+                bail!("Timed out draining sandbox {label}");
+            }
+            Err(error) => bail!("Sandbox {label} reader stopped: {error}"),
+        }
+    }
 }
 
 fn command_line(args: &[String]) -> Result<String> {
@@ -741,5 +798,19 @@ mod tests {
             Executor::split_destination("[::1]:443").unwrap(),
             ("::1".to_owned(), Some(443))
         );
+    }
+
+    #[test]
+    fn network_permissions_are_always_tcp_scoped() {
+        use mxc_sdk::v1::policy::NetworkProtocol;
+
+        for (entry, expected_port) in [("127.0.0.1", None), ("127.0.0.1:443", Some(443))] {
+            let policy = Executor::network_policy(&[entry.to_owned()]).unwrap();
+            let egress = policy.egress.unwrap();
+            let allow = egress.allow.unwrap();
+            let port = &allow[0].ports.as_ref().unwrap()[0];
+            assert_eq!(port.protocol, Some(NetworkProtocol::Tcp));
+            assert_eq!(port.port, expected_port);
+        }
     }
 }

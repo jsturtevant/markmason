@@ -48,6 +48,9 @@ jobs:
         run: just sandbox-prerequisites
       - name: Check
         run: just check
+      - name: Check sandboxed Markdown
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: just test-markdown-sandbox
       - name: Build and package
         run: just package "$TARGET" "$VERSION"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
