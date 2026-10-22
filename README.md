@@ -14,7 +14,7 @@ verify the archive against `SHA256SUMS`, and put `mm` (`mm.exe` on Windows) on `
 | macOS Intel | `x86_64-apple-darwin` |
 | macOS Apple Silicon | `aarch64-apple-darwin` |
 
-Or install from source with Rust 1.88+:
+Or install from source with Rust 1.99+:
 
 ```sh
 cargo install --git https://github.com/jsturtevant/markmason --tag v0.4.1 --locked
