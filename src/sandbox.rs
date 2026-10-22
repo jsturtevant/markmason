@@ -325,9 +325,10 @@ impl Executor {
         }
         normalize_mounts(&mut readonly, &mut readwrite)?;
         let tools = available_tools_policy(Some(&environment), ToolsPolicyOptions::default());
-        let readwrite_paths = display_paths(&readwrite);
-        let mut readonly_paths = display_paths(&readonly);
-        readonly_paths.extend(tools.readonly_paths.into_iter().filter(|tool| {
+        let readwrite_paths = display_paths(&readwrite)?;
+        let mut readonly_paths = display_paths(&readonly)?;
+        let tool_readonly = canonical_policy_paths(tools.readonly_paths)?;
+        readonly_paths.extend(tool_readonly.into_iter().filter(|tool| {
             !readwrite_paths
                 .iter()
                 .any(|write| Path::new(tool).starts_with(write))
@@ -335,7 +336,7 @@ impl Executor {
         readonly_paths.sort();
         readonly_paths.dedup();
         let mut readwrite_paths = readwrite_paths;
-        readwrite_paths.extend(tools.readwrite_paths);
+        readwrite_paths.extend(canonical_policy_paths(tools.readwrite_paths)?);
         readwrite_paths.sort();
         readwrite_paths.dedup();
         Ok(ContainerRequest {
@@ -347,7 +348,7 @@ impl Executor {
             }),
             network: Some(Self::network_policy(&self.policy.network_allow)?),
             timeout_ms,
-            working_directory: Some(command_cwd.to_string_lossy().into_owned()),
+            working_directory: Some(path_string(&command_cwd, "working directory")?),
             environment: Some(environment),
             inherit_default_environment: Some(false),
             ..ContainerRequest::new(command_line(args)?)
@@ -742,10 +743,30 @@ fn os_string(value: &OsString, label: &str) -> Result<String> {
         .with_context(|| format!("Sandbox {label} is not valid Unicode"))
 }
 
-fn display_paths(paths: &[PathBuf]) -> Vec<String> {
+fn display_paths(paths: &[PathBuf]) -> Result<Vec<String>> {
     paths
         .iter()
-        .map(|path| path.to_string_lossy().into_owned())
+        .map(|path| path_string(path, "mount path"))
+        .collect()
+}
+
+fn path_string(path: &Path, label: &str) -> Result<String> {
+    path.to_str()
+        .map(str::to_owned)
+        .with_context(|| format!("Sandbox {label} is not valid Unicode: {}", path.display()))
+}
+
+fn canonical_policy_paths(paths: Vec<String>) -> Result<Vec<String>> {
+    paths
+        .into_iter()
+        .map(|path| {
+            let original = PathBuf::from(&path);
+            let resolved = dunce::canonicalize(&original).unwrap_or(original);
+            resolved
+                .into_os_string()
+                .into_string()
+                .map_err(|_| anyhow::anyhow!("Sandbox tool path is not valid Unicode: {path:?}"))
+        })
         .collect()
 }
 
@@ -812,5 +833,14 @@ mod tests {
             assert_eq!(port.protocol, Some(NetworkProtocol::Tcp));
             assert_eq!(port.port, expected_port);
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_unicode_mount_paths_are_rejected() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let path = PathBuf::from(OsString::from_vec(b"grant-\xff".to_vec()));
+        assert!(display_paths(&[path]).is_err());
     }
 }
