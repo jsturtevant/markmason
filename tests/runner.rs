@@ -1796,6 +1796,48 @@ fn mxc_sandbox_workdir_access_can_be_restricted_and_regranted() {
     assert_eq!(fs::read_to_string(&marker).unwrap(), "ready");
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn mxc_sandbox_does_not_reapprove_a_replaced_workdir() {
+    let specs = tempfile::tempdir().unwrap();
+    let parent = tempfile::tempdir().unwrap();
+    let workdir = parent.path().join("work");
+    fs::create_dir(&workdir).unwrap();
+    let private = tempfile::tempdir().unwrap();
+    fs::write(private.path().join("secret.txt"), "must-not-leak").unwrap();
+    fs::write(
+        specs.path().join("swap.md"),
+        format!(
+            "## Replace the selected working directory\n```markmason\n\
+             app replace-dir-with-symlink '{}' '{}'\n\
+             app read-file secret.txt\n```\n",
+            shell_path(&workdir),
+            shell_path(private.path())
+        ),
+    )
+    .unwrap();
+    let output = command(specs.path())
+        .args([
+            "--sandbox",
+            "mxc",
+            "--sandbox-workdir",
+            "none",
+            "--sandbox-write",
+        ])
+        .arg(parent.path())
+        .arg("--cwd")
+        .arg(&workdir)
+        .output()
+        .unwrap();
+    let transcript = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{transcript}");
+    assert!(
+        transcript.contains("working directory resolves outside approved permissions"),
+        "{transcript}"
+    );
+    assert!(!transcript.contains("must-not-leak"), "{transcript}");
+}
+
 #[cfg(not(windows))]
 #[test]
 fn mxc_sandbox_runs_setup_and_deferred_cleanup() {

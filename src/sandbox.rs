@@ -101,6 +101,7 @@ impl WorkdirAccess {
 pub struct Executor {
     policy: Policy,
     fallback_cwd: PathBuf,
+    approved_cwds: Vec<PathBuf>,
     readonly: Vec<PathBuf>,
     readwrite: Vec<PathBuf>,
 }
@@ -127,24 +128,44 @@ pub struct PtyRequest<'a> {
 }
 
 impl Executor {
-    pub fn new(policy: Policy, cwd: &Path, home: &Path, config: &Path) -> Result<Self> {
-        let cwd = dunce::canonicalize(cwd).with_context(|| {
-            format!("Cannot resolve sandbox working directory {}", cwd.display())
-        })?;
+    pub fn new(
+        policy: Policy,
+        cwd: &Path,
+        setup_cwd: &Path,
+        home: &Path,
+        config: &Path,
+    ) -> Result<Self> {
+        let cwd = canonical_workdir(cwd)?;
+        let setup_cwd = canonical_workdir(setup_cwd)?;
         let mut readonly = canonical_paths(&policy.readonly, "read-only")?;
         let mut readwrite = canonical_paths(&policy.readwrite, "read-write")?;
-        match policy.workdir {
-            WorkdirAccess::None => {}
-            WorkdirAccess::ReadOnly => readonly.push(cwd.clone()),
-            WorkdirAccess::ReadWrite => readwrite.push(cwd.clone()),
+        let mut candidate_cwds = vec![cwd, setup_cwd];
+        candidate_cwds.sort();
+        candidate_cwds.dedup();
+        for workdir in &candidate_cwds {
+            match policy.workdir {
+                WorkdirAccess::None => {}
+                WorkdirAccess::ReadOnly => readonly.push(workdir.clone()),
+                WorkdirAccess::ReadWrite => readwrite.push(workdir.clone()),
+            }
         }
         let fallback_cwd = dunce::canonicalize(home)?;
         readwrite.push(fallback_cwd.clone());
         readwrite.push(dunce::canonicalize(config)?);
         normalize_mounts(&mut readonly, &mut readwrite)?;
+        let approved_cwds = candidate_cwds
+            .into_iter()
+            .filter(|cwd| {
+                readonly
+                    .iter()
+                    .chain(&readwrite)
+                    .any(|mount| cwd.starts_with(mount))
+            })
+            .collect();
         Ok(Self {
             policy,
             fallback_cwd,
+            approved_cwds,
             readonly,
             readwrite,
         })
@@ -251,6 +272,11 @@ impl Backend {
     }
 }
 
+fn canonical_workdir(cwd: &Path) -> Result<PathBuf> {
+    dunce::canonicalize(cwd)
+        .with_context(|| format!("Cannot resolve sandbox working directory {}", cwd.display()))
+}
+
 fn canonical_paths(paths: &[PathBuf], label: &str) -> Result<Vec<PathBuf>> {
     paths
         .iter()
@@ -312,17 +338,6 @@ impl Executor {
         let command_cwd = self.command_cwd(cwd)?;
         let mut readonly = self.readonly.clone();
         let mut readwrite = self.readwrite.clone();
-        if !readonly
-            .iter()
-            .chain(&readwrite)
-            .any(|mount| command_cwd.starts_with(mount))
-        {
-            match self.policy.workdir {
-                WorkdirAccess::None => {}
-                WorkdirAccess::ReadOnly => readonly.push(command_cwd.clone()),
-                WorkdirAccess::ReadWrite => readwrite.push(command_cwd.clone()),
-            }
-        }
         normalize_mounts(&mut readonly, &mut readwrite)?;
         let tools = available_tools_policy(Some(&environment), ToolsPolicyOptions::default());
         let readwrite_paths = display_paths(&readwrite)?;
@@ -356,21 +371,27 @@ impl Executor {
     }
 
     fn command_cwd(&self, cwd: &Path) -> Result<PathBuf> {
+        let requested = std::path::absolute(cwd).with_context(|| {
+            format!("Cannot resolve command working directory {}", cwd.display())
+        })?;
         let cwd = dunce::canonicalize(cwd).with_context(|| {
             format!("Cannot resolve command working directory {}", cwd.display())
         })?;
-        if self.policy.workdir != WorkdirAccess::None {
-            return Ok(cwd);
+        if self.approved_cwds.contains(&requested) && cwd != requested {
+            bail!(
+                "Sandbox command working directory resolves outside approved permissions: {}",
+                cwd.display()
+            );
         }
-        if self
-            .readonly
-            .iter()
-            .chain(&self.readwrite)
-            .any(|mount| cwd.starts_with(mount))
-        {
+        if self.approved_cwds.contains(&cwd) {
             Ok(cwd)
-        } else {
+        } else if self.policy.workdir == WorkdirAccess::None {
             Ok(self.fallback_cwd.clone())
+        } else {
+            bail!(
+                "Sandbox command working directory resolves outside approved permissions: {}",
+                cwd.display()
+            )
         }
     }
 

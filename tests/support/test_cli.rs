@@ -29,6 +29,13 @@ fn main() {
         "echo" => println!("{}", args[2..].join(" ")),
         "read-file" => print!("{}", fs::read_to_string(&args[2]).unwrap()),
         "write-file" => fs::write(&args[2], &args[3]).unwrap(),
+        #[cfg(unix)]
+        "replace-dir-with-symlink" => {
+            let source = Path::new(&args[2]);
+            let moved = source.with_extension("moved");
+            fs::rename(source, &moved).unwrap();
+            std::os::unix::fs::symlink(&args[3], source).unwrap();
+        }
         "connect" => {
             let mut stream = TcpStream::connect(&args[2]).unwrap();
             stream.write_all(b"ready").unwrap();

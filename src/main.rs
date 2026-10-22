@@ -311,7 +311,8 @@ impl Fixture {
             spec.sandbox.as_ref(),
         )
         .context("Invalid sandbox policy")?;
-        let executor = sandbox::Executor::new(policy, &cwd, home.path(), config.path())?;
+        let executor =
+            sandbox::Executor::new(policy, &cwd, &options.cwd, home.path(), config.path())?;
         let shell = if spec.shell.is_some() {
             let mut shell_env = env.clone();
             for (key, value) in &vars {
