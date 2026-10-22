@@ -193,7 +193,12 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(cwd: &Path, env: &process::Environment, timeout: Duration) -> Result<Self> {
+    pub fn new(
+        cwd: &Path,
+        env: &process::Environment,
+        timeout: Duration,
+        executor: &crate::sandbox::Executor,
+    ) -> Result<Self> {
         let directory = tempfile::Builder::new()
             .prefix("markmason-shell-")
             .tempdir()?;
@@ -205,7 +210,7 @@ impl Session {
         for name in ["BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS"] {
             process::set_env(&mut env, name, "");
         }
-        let terminal = process::Terminal::new(
+        let terminal = executor.with_write_path(directory.path())?.terminal(
             &[
                 "bash".into(),
                 "--noprofile".into(),
@@ -215,6 +220,7 @@ impl Session {
             ],
             cwd,
             &env,
+            timeout,
         )
         .context("shell: bash requires Bash on PATH; on native Windows install Git Bash, not a WSL launcher")?;
         let mut session = Self {
@@ -241,7 +247,7 @@ impl Session {
             if session.directory.path().join("ready").is_file() {
                 return Ok(session);
             }
-            if terminal.child.try_wait()?.is_some() || Instant::now() >= deadline {
+            if terminal.try_wait()?.is_some() || Instant::now() >= deadline {
                 bail!(
                     "Bash session failed to start. Install a local Bash (Git Bash on Windows).\n{}",
                     pty_text(&String::from_utf8_lossy(&output))
@@ -465,7 +471,7 @@ impl Session {
                 }
                 return Ok(output);
             }
-            if terminal.child.try_wait()?.is_some() {
+            if terminal.try_wait()?.is_some() {
                 bail!(
                     "Bash session exited before reporting command status.\nOutput:\n{}",
                     output(1)?.0.text

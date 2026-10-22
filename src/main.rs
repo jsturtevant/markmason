@@ -2,6 +2,7 @@ mod cancellation;
 mod matching;
 mod presentation;
 mod process;
+mod sandbox;
 mod shell;
 mod spec;
 mod step;
@@ -71,6 +72,21 @@ struct Options {
         conflicts_with = "step"
     )]
     parallel: Option<Parallelism>,
+    /// Execute document commands through a containment backend.
+    #[arg(long, value_enum, default_value_t)]
+    sandbox: sandbox::Backend,
+    /// Control sandbox access to the effective command working directory.
+    #[arg(long, value_enum, default_value_t)]
+    sandbox_workdir: sandbox::WorkdirAccess,
+    /// Add a read-only host path to the sandbox.
+    #[arg(long)]
+    sandbox_read: Vec<PathBuf>,
+    /// Add a read-write host path to the sandbox.
+    #[arg(long)]
+    sandbox_write: Vec<PathBuf>,
+    /// Allow an outbound sandbox network destination.
+    #[arg(long)]
+    sandbox_net_allow: Vec<String>,
     #[arg(long)]
     verbose: bool,
 }
@@ -175,6 +191,7 @@ fn resolve_setup(command: &str, dir: &Path) -> Result<Vec<String>> {
 
 struct Fixture {
     shell: RefCell<Option<shell::Session>>,
+    executor: sandbox::Executor,
     processes: process::Scope,
     _home: TempDir,
     _config: TempDir,
@@ -283,6 +300,18 @@ impl Fixture {
                 config.path().to_string_lossy().into_owned(),
             ),
         ];
+        let policy = sandbox::Policy::resolve(
+            &sandbox::CliPolicy {
+                backend: options.sandbox,
+                workdir: options.sandbox_workdir,
+                readonly: options.sandbox_read.clone(),
+                readwrite: options.sandbox_write.clone(),
+                network_allow: options.sandbox_net_allow.clone(),
+            },
+            spec.sandbox.as_ref(),
+        )
+        .context("Invalid sandbox policy")?;
+        let executor = sandbox::Executor::new(policy, &cwd, home.path(), config.path())?;
         let shell = if spec.shell.is_some() {
             let mut shell_env = env.clone();
             for (key, value) in &vars {
@@ -297,6 +326,7 @@ impl Fixture {
                 &shell_env,
                 spec.timeout
                     .unwrap_or(Duration::from_secs_f64(options.timeout)),
+                &executor,
             )?;
             if spec.cases.iter().any(|case| case.always) {
                 shell.enable_cleanup()?;
@@ -307,6 +337,7 @@ impl Fixture {
         };
         Ok(Self {
             shell: RefCell::new(shell),
+            executor,
             processes,
             _home: home,
             _config: config,
@@ -404,18 +435,17 @@ fn execute(
                     &mut progress,
                 )
             } else if let Some(steps) = &case.pty {
-                let (result, completed) = process::pty(
-                    &resolve(&command, dir)?,
-                    &fixture.cwd,
-                    &fixture.env,
-                    &steps[step_index..],
+                let args = resolve(&command, dir)?;
+                let (result, completed) = fixture.executor.pty(sandbox::PtyRequest {
+                    args: &args,
+                    cwd: &fixture.cwd,
+                    env: &fixture.env,
+                    steps: &steps[step_index..],
                     timeout,
-                    process::PtyExecution {
-                        scope: &fixture.processes,
-                        final_command: index + 1 == commands.len(),
-                        progress: &mut progress,
-                    },
-                )?;
+                    scope: &fixture.processes,
+                    final_command: index + 1 == commands.len(),
+                    progress: &mut progress,
+                })?;
                 step_index += completed;
                 Ok(result)
             } else {
@@ -426,15 +456,16 @@ fn execute(
                 let mut input = stdin.take();
                 let mut output = None;
                 for stage in stages {
-                    let result = process::run_with_progress(
-                        &resolve(&stage, dir)?,
-                        &fixture.cwd,
-                        &fixture.env,
+                    let args = resolve(&stage, dir)?;
+                    let result = fixture.executor.run(sandbox::RunRequest {
+                        args: &args,
+                        cwd: &fixture.cwd,
+                        env: &fixture.env,
                         input,
                         timeout,
-                        &fixture.processes,
-                        &mut progress,
-                    )?;
+                        scope: &fixture.processes,
+                        progress: &mut progress,
+                    })?;
                     if result.code != 0 {
                         output = Some(result);
                         break;
@@ -687,14 +718,15 @@ fn run_setup(
                 .join(" ");
             shell.run(&command, None, None, timeout, true)
         } else {
-            process::run(
-                &args,
-                setup_cwd,
-                &fixture.env,
-                None,
+            fixture.executor.run(sandbox::RunRequest {
+                args: &args,
+                cwd: setup_cwd,
+                env: &fixture.env,
+                input: None,
                 timeout,
-                &fixture.processes,
-            )
+                scope: &fixture.processes,
+                progress: &mut || Ok(()),
+            })
         }
         .with_context(|| format!("Setup command failed: {setup}"))?;
         if result.code != 0 {

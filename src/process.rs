@@ -404,13 +404,21 @@ pub fn run_with_progress(
 }
 
 pub struct Terminal {
-    pub child: Box<dyn portable_pty::Child + Send + Sync>,
-    pub master: Option<Box<dyn portable_pty::MasterPty + Send>>,
+    backend: TerminalBackend,
     pub rx: Receiver<std::io::Result<Vec<u8>>>,
     pub input: TerminalInput,
-    #[cfg(windows)]
-    tree: Option<crate::windows::ProcessTree>,
     finished: bool,
+}
+
+enum TerminalBackend {
+    Native {
+        child: Box<dyn portable_pty::Child + Send + Sync>,
+        master: Option<Box<dyn portable_pty::MasterPty + Send>>,
+        #[cfg(windows)]
+        tree: Option<crate::windows::ProcessTree>,
+    },
+    #[cfg(feature = "sandbox-mxc")]
+    Mxc(mxc_sdk::v1::MxcPtyProcess),
 }
 
 struct WriteRequest {
@@ -420,16 +428,38 @@ struct WriteRequest {
 
 #[derive(Clone)]
 pub struct TerminalInput {
-    send: mpsc::Sender<WriteRequest>,
+    inner: TerminalInputKind,
+}
+
+#[derive(Clone)]
+enum TerminalInputKind {
+    Native(mpsc::Sender<WriteRequest>),
+    #[cfg(feature = "sandbox-mxc")]
+    Mxc(Arc<Mutex<Box<dyn Write + Send>>>),
 }
 
 impl TerminalInput {
     pub fn write(&self, input: Vec<u8>) -> Result<Receiver<std::io::Result<()>>> {
         let (completed, result) = mpsc::sync_channel(1);
-        self.send
-            .send(WriteRequest { input, completed })
-            .context("PTY input writer stopped")?;
+        match &self.inner {
+            TerminalInputKind::Native(send) => send
+                .send(WriteRequest { input, completed })
+                .context("PTY input writer stopped")?,
+            #[cfg(feature = "sandbox-mxc")]
+            TerminalInputKind::Mxc(writer) => {
+                let mut writer = writer.lock().unwrap();
+                let result = writer.write_all(&input).and_then(|()| writer.flush());
+                let _ = completed.send(result);
+            }
+        }
         Ok(result)
+    }
+
+    #[cfg(feature = "sandbox-mxc")]
+    pub fn from_writer(writer: Box<dyn Write + Send>) -> Self {
+        Self {
+            inner: TerminalInputKind::Mxc(Arc::new(Mutex::new(writer))),
+        }
     }
 }
 
@@ -539,36 +569,130 @@ impl Terminal {
             }
         });
         Ok(Self {
-            child,
-            master,
+            backend: TerminalBackend::Native {
+                child,
+                master,
+                #[cfg(windows)]
+                tree: Some(tree),
+            },
             rx,
-            input: TerminalInput { send: send_tx },
-            #[cfg(windows)]
-            tree: Some(tree),
+            input: TerminalInput {
+                inner: TerminalInputKind::Native(send_tx),
+            },
             finished: false,
         })
+    }
+
+    #[cfg(feature = "sandbox-mxc")]
+    pub fn from_mxc(process: mxc_sdk::v1::MxcPtyProcess) -> Result<Self> {
+        let mut reader = process.try_clone_reader()?;
+        let input = TerminalInput::from_writer(process.take_writer()?);
+        let (send, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let mut buffer = [0; 8192];
+            loop {
+                match reader.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(count) => {
+                        if send.send(Ok(buffer[..count].to_vec())).is_err() {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        let _ = send.send(Err(error));
+                        break;
+                    }
+                }
+            }
+        });
+        Ok(Self {
+            backend: TerminalBackend::Mxc(process),
+            rx,
+            input,
+            finished: false,
+        })
+    }
+
+    pub fn try_wait(&mut self) -> Result<Option<i32>> {
+        match &mut self.backend {
+            TerminalBackend::Native { child, .. } => {
+                Ok(child.try_wait()?.map(|status| status.exit_code() as i32))
+            }
+            #[cfg(feature = "sandbox-mxc")]
+            TerminalBackend::Mxc(process) => Ok(process.try_wait()?),
+        }
+    }
+
+    fn complete_exit(&mut self) -> Result<()> {
+        match &mut self.backend {
+            TerminalBackend::Native {
+                master,
+                #[cfg(windows)]
+                tree,
+                ..
+            } => {
+                #[cfg(windows)]
+                tree.as_ref().context("Missing PTY job")?.check_started()?;
+                drop(master.take());
+            }
+            #[cfg(feature = "sandbox-mxc")]
+            TerminalBackend::Mxc(process) => {
+                if matches!(process.wait()?, mxc_sdk::v1::WaitResult::TimedOut) {
+                    bail!("Sandbox PTY command timed out");
+                }
+            }
+        }
+        self.finished = true;
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn retain_job(&mut self, scope: &Scope) -> Result<()> {
+        if let TerminalBackend::Native { tree, .. } = &mut self.backend {
+            scope
+                .jobs
+                .borrow_mut()
+                .push(tree.take().context("Missing PTY job")?);
+        }
+        Ok(())
     }
 
     fn terminate(&mut self) -> Result<()> {
         if self.finished {
             return Ok(());
         }
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
-        kill_terminal_session(self.child.process_id().context("Missing PTY process ID")?)?;
-        #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
-        kill_group(self.child.process_id().context("Missing PTY process ID")?)?;
-        #[cfg(windows)]
-        if let Some(tree) = &self.tree {
-            tree.terminate()?;
+        match &mut self.backend {
+            TerminalBackend::Native {
+                child,
+                master,
+                #[cfg(windows)]
+                tree,
+            } => {
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
+                kill_terminal_session(child.process_id().context("Missing PTY process ID")?)?;
+                #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+                kill_group(child.process_id().context("Missing PTY process ID")?)?;
+                #[cfg(windows)]
+                if let Some(tree) = tree {
+                    tree.terminate()?;
+                }
+                if child.try_wait()?.is_none()
+                    && let Err(error) = child.kill()
+                    && child.try_wait()?.is_none()
+                {
+                    return Err(error).context("Failed to terminate PTY command");
+                }
+                child.wait().context("Failed to reap PTY command")?;
+                drop(master.take());
+            }
+            #[cfg(feature = "sandbox-mxc")]
+            TerminalBackend::Mxc(process) => {
+                if process.try_wait()?.is_none() {
+                    process.kill()?;
+                }
+                let _ = process.wait()?;
+            }
         }
-        if self.child.try_wait()?.is_none()
-            && let Err(error) = self.child.kill()
-            && self.child.try_wait()?.is_none()
-        {
-            return Err(error).context("Failed to terminate PTY command");
-        }
-        self.child.wait().context("Failed to reap PTY command")?;
-        drop(self.master.take());
         self.finished = true;
         Ok(())
     }
@@ -576,7 +700,9 @@ impl Terminal {
     pub fn close(mut self) -> Result<()> {
         self.terminate()?;
         #[cfg(windows)]
-        if let Some(tree) = self.tree.take() {
+        if let TerminalBackend::Native { tree, .. } = &mut self.backend
+            && let Some(tree) = tree.take()
+        {
             tree.close()?;
         }
         Ok(())
@@ -704,18 +830,20 @@ pub fn pty(
         final_command,
         progress,
     } = execution;
+    let terminal = Terminal::new(args, cwd, env)?;
+    pty_terminal(terminal, steps, timeout, scope, final_command, progress)
+}
+
+pub fn pty_terminal(
+    mut terminal: Terminal,
+    steps: &[spec::Step],
+    timeout: Duration,
+    scope: &Scope,
+    final_command: bool,
+    progress: &mut dyn FnMut() -> Result<()>,
+) -> Result<(Output, usize)> {
     #[cfg(not(windows))]
     let _ = scope;
-    let mut terminal = Terminal::new(args, cwd, env)?;
-    let Terminal {
-        child,
-        master,
-        rx,
-        input,
-        #[cfg(windows)]
-        tree,
-        ..
-    } = &mut terminal;
     let result = (|| {
         let mut bytes = Vec::new();
         let mut interaction = Interaction::new(steps);
@@ -725,7 +853,7 @@ pub fn pty(
         loop {
             cancellation::check()?;
             progress()?;
-            match rx.recv_timeout(Duration::from_millis(10)) {
+            match terminal.rx.recv_timeout(Duration::from_millis(10)) {
                 Ok(chunk) => bytes.extend(chunk.context("Failed reading PTY output")?),
                 Err(mpsc::RecvTimeoutError::Disconnected) => eof = true,
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -743,21 +871,17 @@ pub fn pty(
                     timeout.as_millis()
                 );
             }
-            interaction.advance(&raw, &clean, input, exited.is_none())?;
+            interaction.advance(&raw, &clean, &terminal.input, exited.is_none())?;
             if exited.is_none() {
-                exited = child.try_wait()?;
+                exited = terminal.try_wait()?;
                 if exited.is_some() {
-                    #[cfg(windows)]
-                    tree.as_ref().context("Missing PTY job")?.check_started()?;
-                    // Closing ConPTY releases its output pipe so the reader can drain to EOF.
-                    drop(master.take());
+                    terminal.complete_exit()?;
                 }
             }
-            if let Some(status) = &exited
+            if let Some(code) = exited
                 && eof
                 && !interaction.sending()
             {
-                let code = status.exit_code() as i32;
                 interaction.check_complete(final_command, code, &clean)?;
                 return Ok((Output { text: clean, code }, interaction.completed()));
             }
@@ -765,15 +889,10 @@ pub fn pty(
     })();
     #[cfg(windows)]
     if result.is_ok() {
-        scope
-            .jobs
-            .borrow_mut()
-            .push(terminal.tree.take().context("Missing PTY job")?);
+        terminal.retain_job(scope)?;
     }
     if result.is_err() {
         terminal.close()?;
-    } else {
-        terminal.finished = true;
     }
     result
 }
@@ -785,7 +904,9 @@ mod tests {
     #[test]
     fn pty_write_completions_are_scoped_to_their_request() -> Result<()> {
         let (send, receive) = mpsc::channel();
-        let input = TerminalInput { send };
+        let input = TerminalInput {
+            inner: TerminalInputKind::Native(send),
+        };
         let steps = [spec::Step {
             text: "ready".into(),
             input: "yes".into(),
@@ -816,7 +937,9 @@ mod tests {
     #[test]
     fn settling_a_pty_write_completes_its_step() -> Result<()> {
         let (send, receive) = mpsc::channel();
-        let input = TerminalInput { send };
+        let input = TerminalInput {
+            inner: TerminalInputKind::Native(send),
+        };
         let steps = [spec::Step {
             text: "ready".into(),
             input: "yes".into(),
