@@ -1,6 +1,8 @@
 use crate::{cancellation, matching::pty_text, spec};
 use anyhow::{Context, Result, bail};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+#[cfg(not(windows))]
+use std::fs;
 use std::{
     collections::BTreeMap,
     ffi::OsString,
@@ -43,6 +45,29 @@ fn executable_not_found() -> anyhow::Error {
     anyhow::anyhow!(
         "executable not found on PATH. Install or build it, then add its directory to PATH"
     )
+}
+
+#[cfg(not(windows))]
+fn executable_missing_from_path(program: &str, cwd: &Path, env: &Environment) -> bool {
+    if Path::new(program).components().count() != 1 || fs::metadata(cwd).is_err() {
+        return false;
+    }
+    let Some(path) = env.get(std::ffi::OsStr::new("PATH")) else {
+        return false;
+    };
+    std::env::split_paths(path).all(|dir| {
+        let dir = if dir.as_os_str().is_empty() {
+            cwd.to_owned()
+        } else if dir.is_absolute() {
+            dir
+        } else {
+            cwd.join(dir)
+        };
+        matches!(
+            fs::metadata(dir.join(program)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound
+        )
+    })
 }
 
 #[derive(Debug)]
@@ -298,12 +323,21 @@ pub fn run_with_progress(
         command.process_group(0);
     }
     let mut child = command.spawn().map_err(|error| {
-        let error = if error.kind() == std::io::ErrorKind::NotFound
-            && Path::new(program).components().count() == 1
-        {
-            executable_not_found()
-        } else {
-            error.into()
+        let error: anyhow::Error = {
+            #[cfg(not(windows))]
+            {
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && executable_missing_from_path(program, cwd, env)
+                {
+                    executable_not_found()
+                } else {
+                    error.into()
+                }
+            }
+            #[cfg(windows)]
+            {
+                error.into()
+            }
         };
         error.context(format!("Failed to start {program:?}"))
     })?;

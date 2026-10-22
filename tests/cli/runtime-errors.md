@@ -3,6 +3,24 @@
 These examples deliberately time out or miss terminal prompts.
 An execution error still fails a case that expects a nonzero exit.
 
+## Report a missing executable
+
+````markdown markmason
+```markmason (exit 1)
+mm tests/fixtures/missing-executable
+```
+
+A command that cannot be found explains that it is missing from `PATH` and how
+to make it available.
+
+```expected-substring
+  ✗ FAIL  Block 1/1 — Start a command that is not on PATH
+    Document: missing.md
+    Command: missing-executable-markmason
+    Failed to start "missing-executable-markmason": executable not found on PATH. Install or build it, then add its directory to PATH
+```
+````
+
 ## Fail on timeout despite an expected error exit
 
 ````markdown markmason
