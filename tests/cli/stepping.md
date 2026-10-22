@@ -15,7 +15,7 @@ These dynamic values are intentionally not hardcoded in the assertions below.
 
 ````markdown markmason
 ```markmason
-mm tests/fixtures/walkthrough --step --file-pattern '^lesson\.md$' --home-env TEST_HOME
+mm tests/fixtures/walkthrough --step --file-pattern '^lesson\.md$'
 ```
 
 The first two commands share a block. Enter advances from the first command to
@@ -214,7 +214,7 @@ send: f{enter}{ctrl-c}
 
 ````markdown markmason
 ```markmason
-mm tests/fixtures/walkthrough --step --file-pattern '^lesson\.md$' --home-env TEST_HOME
+mm tests/fixtures/walkthrough --step --file-pattern '^lesson\.md$'
 ```
 
 Quit at the first pause. An unfinished block is not counted as passed.
@@ -237,7 +237,7 @@ Blocks: 0 passed, 0 failed (includes deferred)
 
 ````markdown markmason
 ```markmason
-mm tests/fixtures/walkthrough --step --home-env TEST_HOME
+mm tests/fixtures/walkthrough --step
 ```
 
 Without a file filter, choose the lesson by typing its name. The default choice is
@@ -267,7 +267,7 @@ Blocks: 2 passed, 0 failed (includes deferred)
 
 ````markdown markmason
 ```markmason
-mm tests/fixtures/walkthrough --step --home-env TEST_HOME
+mm tests/fixtures/walkthrough --step
 ```
 
 ```pty
@@ -325,7 +325,7 @@ Error: The walkthrough file picker needs an interactive terminal; select a file 
 
 ````markdown markmason
 ```markmason
-mm tests/fixtures/markdown-setup/walkthrough.md --step --home-env TEST_HOME
+mm tests/fixtures/markdown-setup/walkthrough.md --step
 ```
 
 A direct file path skips the picker. The walkthrough's

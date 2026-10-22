@@ -17,8 +17,7 @@ description: >-
   Do not add a Node adapter or require Cargo just to run a released binary.
 - Keep the project's existing test directory and scripts where practical.
   Use `tests/cli` as a default, not a requirement.
-- Match `--home-env` to the application's state-directory variable. Set
-  `--env-prefix` when the project uses its own filter environment variables.
+- Set `--env-prefix` when the project uses its own filter environment variables.
 - Read [format and examples](references/format-and-examples.md) for syntax and pitfalls.
 
 ## Write for someone learning the CLI

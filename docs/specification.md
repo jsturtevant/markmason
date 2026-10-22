@@ -432,7 +432,7 @@ In direct-execution mode, command blocks and expected blocks substitute:
 | `$REPO_ROOT` | Spec's working directory |
 | `$PROJECT_NAME` | Working directory's final path component |
 | `$XDG_CONFIG_HOME` | Isolated configuration directory |
-| `$E2E_HOME` | Isolated application home; rename with `--home-env` |
+| `$E2E_HOME` | Isolated application home |
 
 Stdin and PTY directives remain literal.
 In Bash mode these values are environment variables in commands; only expected

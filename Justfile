@@ -30,8 +30,8 @@ build-test-cli:
 # Test the current binary against Markdown specs with bounded leaf fixtures.
 test-markdown: build-test-cli
     # Inherited PWD can contain a Windows drive-letter colon; use Bash's physical path.
-    root="$(pwd -P)" && PATH="$root/target/debug:$root/target/debug/examples:$PATH" cargo run --quiet --locked -- README.md --home-env TEST_HOME
-    root="$(pwd -P)" && PATH="$root/target/debug:$root/target/debug/examples:$PATH" cargo run --quiet --locked -- tests/cli --home-env TEST_HOME
+    root="$(pwd -P)" && PATH="$root/target/debug:$root/target/debug/examples:$PATH" cargo run --quiet --locked -- README.md
+    root="$(pwd -P)" && PATH="$root/target/debug:$root/target/debug/examples:$PATH" cargo run --quiet --locked -- tests/cli
 
 # Run the same checks as CI.
 check: fmt-check lint test

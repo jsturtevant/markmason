@@ -36,10 +36,6 @@ fn helper() -> &'static Path {
 }
 
 fn command(specs: &Path) -> Command {
-    command_with_home(specs, "TEST_HOME")
-}
-
-fn command_with_home(specs: &Path, home_env: &str) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_mm"));
     let path = std::env::join_paths(
         std::iter::once(helper().parent().unwrap().to_owned())
@@ -48,7 +44,6 @@ fn command_with_home(specs: &Path, home_env: &str) -> Command {
     .unwrap();
     command
         .arg(specs)
-        .args(["--home-env", home_env])
         .env("PATH", path)
         .env("GH_CONFIG_DIR", specs.join("real-gh-config"))
         .env_remove("E2E_FILE_PATTERN")
@@ -341,12 +336,12 @@ fn parallel_files_isolate_bash_setup_home_config_and_deferred_cleanup() {
                 "---\nshell: bash\nsetup: mm setup.md\ntimeout: 5\n---\n\
                  ```markmason\n\
                  FILE_ID={id}\n\
-                 printf '%s\\n%s\\n' \"$TEST_HOME\" \"$XDG_CONFIG_HOME\" > \"$MARKMASON_SYNC_DIR/{id}.env\"\n\
+                 printf '%s\\n%s\\n' \"$E2E_HOME\" \"$XDG_CONFIG_HOME\" > \"$MARKMASON_SYNC_DIR/{id}.env\"\n\
                  : > \"$MARKMASON_SYNC_DIR/{id}.ready\"\n\
                  while test ! -f \"$MARKMASON_SYNC_DIR/{other}.ready\"; do sleep 0.01; done\n\
                  IFS= read -r OTHER_HOME < \"$MARKMASON_SYNC_DIR/{other}.env\"\n\
                  OTHER_CONFIG=$(sed -n '2p' \"$MARKMASON_SYNC_DIR/{other}.env\")\n\
-                 test \"$TEST_HOME\" != \"$OTHER_HOME\"\n\
+                 test \"$E2E_HOME\" != \"$OTHER_HOME\"\n\
                  test \"$XDG_CONFIG_HOME\" != \"$OTHER_CONFIG\"\n\
                  test \"$SETUP_VALUE\" = ready\n\
                  ```\n\
@@ -900,8 +895,8 @@ fn always_blocks_run_once_after_ordinary_blocks_in_document_order() {
             format!(
                 "---\n{shell}timeout: 2\n---\n\
                  ```bash markmason always\napp state\n```\n```expected\nordinary\n```\n\
-                 ```markmason\napp write-state TEST_HOME ordinary\n```\n\
-                 ```markmason always\napp write-state TEST_HOME finished\n```\n\
+                 ```markmason\napp write-state E2E_HOME ordinary\n```\n\
+                 ```markmason always\napp write-state E2E_HOME finished\n```\n\
                  ```markmason always\napp state\n```\n```expected\nfinished\n```\n"
             ),
         )
@@ -1640,9 +1635,9 @@ fn bash_sessions_isolate_files_ignore_startup_scripts_and_preserve_shell_quoting
         "---\nshell: bash\n---\n\
          ```markmason\nprintf '%s\\n' \"${ONLY_IN_A-unset}\"\n\
          test \"$PWD\" -ef \"$REPO_ROOT\"\n\
-         printf '%s\\n' '${TEST_HOME}'\n\
+         printf '%s\\n' '${E2E_HOME}'\n\
          ONLY_IN_A=private\numask 0777\nexport PATH=\nprintf 'builtins still work\\n'\n```\n\
-         ```expected\nunset\n${TEST_HOME}\nbuiltins still work\n```\n",
+         ```expected\nunset\n${E2E_HOME}\nbuiltins still work\n```\n",
     )
     .unwrap();
     fs::write(
@@ -1715,8 +1710,8 @@ fn bash_sessions_preserve_previous_status_and_noclobber_in_both_capture_modes() 
             &lesson,
             format!(
                 "---\nshell: bash\n---\n\
-                 ```markmason\nmkdir -p \"$TEST_HOME/work\"\ncd \"$_\"\n\
-                 test \"$PWD\" -ef \"$TEST_HOME/work\"\ntrue\ntest \"$?\" -eq 0\n\
+                 ```markmason\nmkdir -p \"$E2E_HOME/work\"\ncd \"$_\"\n\
+                 test \"$PWD\" -ef \"$E2E_HOME/work\"\ntrue\ntest \"$?\" -eq 0\n\
                  set -C\nprintf 'noclobber retained\\n'\n```\n\
                  {pty}```expected\nnoclobber retained\n```\n\
                  ```markmason (exit 7)\n(exit 7)\n```\n{pty}\
@@ -1812,8 +1807,8 @@ fn bash_background_output_survives_until_wait_in_both_capture_modes() {
             &lesson,
             format!(
                 "---\nshell: bash\n---\n\
-                 ```markmason\n(while test ! -f \"$TEST_HOME/go\"; do sleep 0.01; done; printf 'late\\n') &\nJOB=$!\n```\n{pty}\
-                 ```markmason\n: > \"$TEST_HOME/go\"\nwait \"$JOB\"\nprintf 'done\\n'\n```\n\
+                 ```markmason\n(while test ! -f \"$E2E_HOME/go\"; do sleep 0.01; done; printf 'late\\n') &\nJOB=$!\n```\n{pty}\
+                 ```markmason\n: > \"$E2E_HOME/go\"\nwait \"$JOB\"\nprintf 'done\\n'\n```\n\
                  {pty}```expected\nlate\ndone\n```\n"
             ),
         )
@@ -1899,7 +1894,7 @@ fn bash_session_shares_setup_state_functions_cwd_and_application_input() {
         "---\nsetup: source \"preset env.sh\"\n---\n\
          ```markmason\nexport SHARED=prepared\nSHELL_PID=$$\n\
          greet() {\n  printf '%s %s\\n' \"$FROM_SCRIPT\" \"$SHARED\"\n}\n\
-         mkdir -p \"$TEST_HOME/nested path\"\ncd \"$TEST_HOME/nested path\"\n```\n",
+         mkdir -p \"$E2E_HOME/nested path\"\ncd \"$E2E_HOME/nested path\"\n```\n",
     )
     .unwrap();
     let lesson = dir.path().join("lesson.md");
@@ -1907,7 +1902,7 @@ fn bash_session_shares_setup_state_functions_cwd_and_application_input() {
         &lesson,
         "---\nshell: bash\nsetup: mm sharedset.md\n---\n\
          ```markmason\ntest \"$SHELL_PID\" = \"$$\"\n\
-         test \"$PWD\" -ef \"$TEST_HOME/nested path\"\ngreet\napp env SHARED\n```\n\
+         test \"$PWD\" -ef \"$E2E_HOME/nested path\"\ngreet\napp env SHARED\n```\n\
          ```expected\nready prepared\nprepared\n```\n\
          ```markmason\nread -r ANSWER\nprintf '%s\\n' \"$ANSWER\"\n```\n\
          ```stdin\napplication input\n```\n```expected\napplication input\n```\n\
@@ -2076,14 +2071,14 @@ fn single_file_input_lists_without_setup_and_respects_filters() {
 }
 
 #[test]
-fn markdown_setup_shares_home_config_cwd_and_custom_variables_and_cleans_up() {
+fn markdown_setup_shares_home_config_and_cwd_and_cleans_up() {
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir(dir.path().join("prerequisites")).unwrap();
     fs::write(
         dir.path().join("prerequisites/first steps.md"),
         "---\nsetup: app mark ./setup-ran\n---\n\
-         ```markmason\napp state-exists CUSTOM_HOME\n```\n```expected\nfalse\n```\n\
-         ```markmason\napp mark \"$CUSTOM_HOME/state\"\n\
+         ```markmason\napp state-exists E2E_HOME\n```\n```expected\nfalse\n```\n\
+         ```markmason\napp mark \"$E2E_HOME/state\"\n\
          app write-state XDG_CONFIG_HOME configured\n\
          app mark \"$REPO_ROOT/prepared\"\n```\n",
     )
@@ -2091,19 +2086,19 @@ fn markdown_setup_shares_home_config_cwd_and_custom_variables_and_cleans_up() {
     fs::write(
         dir.path().join("gettingstarted.md"),
         "---\nsetup: 'mm \"prerequisites/first steps.md\"'\n---\n\
-         ```markmason\napp state-exists CUSTOM_HOME\n```\n```expected\ntrue\n```\n",
+         ```markmason\napp state-exists E2E_HOME\n```\n```expected\ntrue\n```\n",
     )
     .unwrap();
     let lesson = dir.path().join("lesson.md");
     fs::write(
         &lesson,
         "---\nsetup: mm gettingstarted.md\n---\n\
-         ```markmason\napp state-exists CUSTOM_HOME\n\
+         ```markmason\napp state-exists E2E_HOME\n\
          app state-exists XDG_CONFIG_HOME\n```\n```expected\ntrue\ntrue\n```\n\
-         ```markmason\napp env CUSTOM_HOME XDG_CONFIG_HOME\n```\n",
+         ```markmason\napp env E2E_HOME XDG_CONFIG_HOME\n```\n",
     )
     .unwrap();
-    let output = command_with_home(&lesson, "CUSTOM_HOME")
+    let output = command(&lesson)
         .arg("--cwd")
         .arg(dir.path())
         .args(["--verbose", "--test-name-pattern", "^lesson"])
@@ -2134,7 +2129,7 @@ fn markdown_setup_failures_skip_later_setup_and_walkthrough_commands() {
             "Line 1 mismatch",
         ),
         (
-            "```markmason\napp env TEST_HOME XDG_CONFIG_HOME\n```\n```expected\ndifferent\n```\n",
+            "```markmason\napp env E2E_HOME XDG_CONFIG_HOME\n```\n```expected\ndifferent\n```\n",
             "Line 1 mismatch",
         ),
         (
@@ -2201,7 +2196,7 @@ fn markdown_setup_preserves_expected_nonzero_and_isolation_between_callers() {
         dir.path().join("setup.md"),
         "```markmason\napp state-exists\n```\n```expected\nfalse\n```\n\
          ```markmason (exit 2)\napp fail\n```\n```expected\nstdout\nstderr\n```\n\
-         ```markmason\napp write-state TEST_HOME ready\n```\n",
+         ```markmason\napp write-state E2E_HOME ready\n```\n",
     )
     .unwrap();
     for name in ["a.md", "b.md"] {
@@ -2369,7 +2364,7 @@ fn step_mode_picker_searches_navigates_and_cancels_before_setup() {
         fs::write(
             dir.path().join("driver.md"),
             format!(
-                "```markmason (exit {exit})\n\"{}\" \"{}\" --step --home-env TEST_HOME \
+                "```markmason (exit {exit})\n\"{}\" \"{}\" --step \
                  --tags tutorial --file-exclude ignored --test-name-pattern \"^app mark\"\n```\n\
                  ```pty\nmatch: nested/b selected.md\nsend: {input}\n{next}```\n",
                 env!("CARGO_BIN_EXE_mm"),
@@ -2624,7 +2619,7 @@ fn declared_inputs_cancel_before_setup_reject_reserved_names_and_reuse_environme
     assert!(output.status.success(), "{}", text(&output));
     assert!(marker.exists());
     for name in [
-        "TEST_HOME",
+        "E2E_HOME",
         "REPO_ROOT",
         "GH_CONFIG_DIR",
         "__markmason_state",
@@ -3136,7 +3131,7 @@ fn step_mode_quit_and_eof_skip_remaining_commands_and_clean_up_fixtures() {
         fs::write(
             dir.path().join("a.md"),
             format!(
-                "```markmason\napp env TEST_HOME XDG_CONFIG_HOME\napp mark \"{}\"\n```\n",
+                "```markmason\napp env E2E_HOME XDG_CONFIG_HOME\napp mark \"{}\"\n```\n",
                 later.display()
             ),
         )
@@ -3291,7 +3286,7 @@ fn step_mode_cancellation_while_paused_cleans_up_without_advancing() {
         fs::write(
             dir.path().join("lesson.md"),
             format!(
-                "```markmason\napp env TEST_HOME XDG_CONFIG_HOME\napp mark \"{}\"\n```\n",
+                "```markmason\napp env E2E_HOME XDG_CONFIG_HOME\napp mark \"{}\"\n```\n",
                 later.display()
             ),
         )
@@ -3371,16 +3366,16 @@ stdout
 stderr
 ```
 ```markmason
-app echo $TEST_HOME $REPO_ROOT $PROJECT_NAME $XDG_CONFIG_HOME
+app echo $E2E_HOME $REPO_ROOT $PROJECT_NAME $XDG_CONFIG_HOME
 ```
 ```expected
-$TEST_HOME $REPO_ROOT $PROJECT_NAME $XDG_CONFIG_HOME
+$E2E_HOME $REPO_ROOT $PROJECT_NAME $XDG_CONFIG_HOME
 ```
 ```markmason
 app vars
 ```
 ```expected
-$TEST_HOME
+$E2E_HOME
 $XDG_CONFIG_HOME
 "#
         .to_owned()
@@ -3411,7 +3406,7 @@ fn command_blocks_combine_output_share_state_and_filter_as_one_test() {
         r#"## Run commands in order
 
 ```markmason
-app write-state TEST_HOME ready
+app write-state E2E_HOME ready
 
 app state
 app echo "hello | world" | app cat
@@ -3464,7 +3459,7 @@ app echo unselected
     assert!(output.status.success(), "{}", text(&output));
     assert!(
         text(&output).contains(
-            "    app write-state TEST_HOME ready\n    app state\n    app echo \"hello | world\" | app cat"
+            "    app write-state E2E_HOME ready\n    app state\n    app echo \"hello | world\" | app cat"
         ),
         "{}",
         text(&output)
@@ -3628,6 +3623,21 @@ fn setup_runner_flag_is_no_longer_supported() {
     assert!(!output.status.success());
     assert!(
         text(&output).contains("unexpected argument '--setup-runner'"),
+        "{}",
+        text(&output)
+    );
+}
+
+#[test]
+fn home_env_flag_is_no_longer_supported() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = command(dir.path())
+        .args(["--home-env", "MYAPP_HOME"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        text(&output).contains("unexpected argument '--home-env'"),
         "{}",
         text(&output)
     );
@@ -4026,7 +4036,7 @@ fn mixed_case_environment_cannot_override_fixture_isolation() {
     )
     .unwrap();
     let overrides = [
-        ("test_home", caller_home.as_os_str().to_owned()),
+        ("e2e_home", caller_home.as_os_str().to_owned()),
         ("xdg_config_home", caller_home.as_os_str().to_owned()),
         ("appdata", caller_home.as_os_str().to_owned()),
         ("localappdata", caller_home.as_os_str().to_owned()),
@@ -4036,28 +4046,27 @@ fn mixed_case_environment_cannot_override_fixture_isolation() {
         ("git_terminal_prompt", "1".into()),
         ("gh_prompt_disabled", "0".into()),
     ];
-    for home_env in ["TEST_HOME", "test_home"] {
-        fs::write(
-            dir.path().join("mixed.md"),
-            format!(
-                "```markmason\napp env TEST_HOME XDG_CONFIG_HOME APPDATA LOCALAPPDATA GH_CONFIG_DIR NO_COLOR FORCE_COLOR GIT_TERMINAL_PROMPT GH_PROMPT_DISABLED\n```\n```expected\n${home_env}\n$XDG_CONFIG_HOME\n$XDG_CONFIG_HOME\n$XDG_CONFIG_HOME\n{}\n1\n0\n0\n1\n```\n",
-                caller_home.display()
-            ),
-        ).unwrap();
-        let inherited = std::env::vars_os().filter(|(key, _)| {
-            !overrides
-                .iter()
-                .any(|(name, _)| key.to_string_lossy().eq_ignore_ascii_case(name))
-        });
-        let output = command_with_home(dir.path(), home_env)
-            .env_clear()
-            .envs(inherited)
-            .envs(overrides.iter().map(|(name, value)| (*name, value)))
-            .env("PATH", &path)
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "{}", text(&output));
-    }
+    fs::write(
+        dir.path().join("mixed.md"),
+        format!(
+            "```markmason\napp env E2E_HOME XDG_CONFIG_HOME APPDATA LOCALAPPDATA GH_CONFIG_DIR NO_COLOR FORCE_COLOR GIT_TERMINAL_PROMPT GH_PROMPT_DISABLED\n```\n```expected\n$E2E_HOME\n$XDG_CONFIG_HOME\n$XDG_CONFIG_HOME\n$XDG_CONFIG_HOME\n{}\n1\n0\n0\n1\n```\n",
+            caller_home.display()
+        ),
+    )
+    .unwrap();
+    let inherited = std::env::vars_os().filter(|(key, _)| {
+        !overrides
+            .iter()
+            .any(|(name, _)| key.to_string_lossy().eq_ignore_ascii_case(name))
+    });
+    let output = command(dir.path())
+        .env_clear()
+        .envs(inherited)
+        .envs(overrides.iter().map(|(name, value)| (*name, value)))
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", text(&output));
     assert_eq!(fs::read_dir(caller_home).unwrap().count(), 0);
 }
 

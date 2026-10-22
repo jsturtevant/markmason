@@ -33,9 +33,6 @@ struct Options {
     /// Working directory for specs without clone frontmatter.
     #[arg(long, default_value = ".")]
     cwd: PathBuf,
-    /// Name of the isolated application-home environment variable and placeholder.
-    #[arg(long, default_value = "E2E_HOME")]
-    home_env: String,
     /// Prefix for FILE_PATTERN, FILE_EXCLUDE, TAGS and TAGS_EXCLUDE environment filters.
     #[arg(long, default_value = "E2E_")]
     env_prefix: String,
@@ -222,7 +219,7 @@ impl Fixture {
             process::set_env(&mut env, key, value);
         }
         process::set_env(&mut env, "GH_CONFIG_DIR", gh_config.as_os_str());
-        process::set_env(&mut env, &options.home_env, home.path().as_os_str());
+        process::set_env(&mut env, "E2E_HOME", home.path().as_os_str());
         process::set_env(&mut env, "XDG_CONFIG_HOME", config.path().as_os_str());
         #[cfg(windows)]
         for name in ["APPDATA", "LOCALAPPDATA"] {
@@ -267,7 +264,7 @@ impl Fixture {
         };
         let vars = vec![
             (
-                format!("${}", options.home_env),
+                "$E2E_HOME".to_owned(),
                 home.path().to_string_lossy().into_owned(),
             ),
             ("$REPO_ROOT".into(), cwd.to_string_lossy().into_owned()),
@@ -861,7 +858,7 @@ fn run_unattended_document(
     let fixture = (|| -> Result<Fixture> {
         let mut inputs = Vec::new();
         collect_inputs(&spec, &dir, &mut vec![root.join(&file)], &mut inputs)?;
-        let env = input_environment(&inputs, &options.home_env, &file, None)?
+        let env = input_environment(&inputs, &file, None)?
             .context("Unattended input collection unexpectedly stopped")?;
         cancellation::check()?;
         Fixture::new(options, &spec, gh_config, env)
@@ -1329,7 +1326,6 @@ fn collect_inputs(
 
 fn input_environment(
     inputs: &[spec::Input],
-    home_env: &str,
     file: &str,
     mut stepping: Option<&mut step::Session>,
 ) -> Result<Option<process::Environment>> {
@@ -1337,7 +1333,7 @@ fn input_environment(
     let mut missing = Vec::new();
     for input in inputs {
         let reserved = [
-            home_env,
+            "E2E_HOME",
             "REPO_ROOT",
             "PROJECT_NAME",
             "XDG_CONFIG_HOME",
@@ -1399,9 +1395,6 @@ fn input_environment(
 }
 
 fn run(options: Options) -> Result<bool> {
-    if options.home_env.is_empty() || options.home_env.contains(['=', '\0']) {
-        bail!("Invalid --home-env name");
-    }
     let from_env = |flag: &Option<String>, suffix: &str| {
         flag.clone()
             .or_else(|| env::var(format!("{}{suffix}", options.env_prefix)).ok())
@@ -1657,9 +1650,7 @@ fn run(options: Options) -> Result<bool> {
         let fixture = (|| -> Result<Option<Fixture>> {
             let mut inputs = Vec::new();
             collect_inputs(&spec, &dir, &mut vec![root.join(&file)], &mut inputs)?;
-            let Some(env) =
-                input_environment(&inputs, &options.home_env, &file, stepping.as_mut())?
-            else {
+            let Some(env) = input_environment(&inputs, &file, stepping.as_mut())? else {
                 return Ok(None);
             };
             if stepping.is_some() {

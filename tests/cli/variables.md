@@ -1,20 +1,20 @@
 # Use paths without hardcoding them
 
 Path variables work in commands and expected output.
-These examples use `--home-env TEST_HOME` for the [test CLI](../support/README.md);
-the default home variable is `E2E_HOME`.
+The runner creates a separate `E2E_HOME` and configuration directory for each
+Markdown document.
 
 ## Locate isolated home and configuration directories
 
 ````markdown markmason
 ```markmason
-mm-test-cli env TEST_HOME XDG_CONFIG_HOME
+mm-test-cli env E2E_HOME XDG_CONFIG_HOME
 ```
 
 The environment and expected-output variables point to the same isolated directories.
 
 ```expected
-$TEST_HOME
+$E2E_HOME
 $XDG_CONFIG_HOME
 ```
 ````
@@ -58,23 +58,5 @@ Quote path variables when passing them as arguments.
 
 ```expected
 $REPO_ROOT $PROJECT_NAME
-```
-````
-
-## Choose an application-specific home variable
-
-````markdown markmason
-```markmason
-mm tests/fixtures/custom-home --home-env MYCLI_HOME
-```
-
-Rename the home variable to match the application.
-[This spec](../fixtures/custom-home/home.md) checks both its environment and substitution.
-
-```expected-contains
-RUN  home.md
-  RUN  Block 1/1 — Report the custom home directory
-  ✓ PASS Block 1/1 — Report the custom home directory
-Blocks: 1 passed, 0 failed (includes deferred)
 ```
 ````

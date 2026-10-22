@@ -30,8 +30,8 @@ just test-markdown
 ```
 
 That builds both programs, puts them on `PATH`, and runs `tests/cli`.
-The runner creates isolated directories with `--home-env TEST_HOME`;
-state commands use that environment rather than your real home.
+The runner creates an isolated `E2E_HOME` for each document; state commands use
+that directory rather than your real home.
 
 ## Commands used in the guides
 
@@ -43,15 +43,15 @@ These are `mm-test-cli` commands, not options or subcommands of `mm`.
 | `cat` | Read stdin and print it back |
 | `interactive` | Print two colored `Ready?` prompts and read an answer to each |
 | `env NAME ...`, `cwd`, `project` | Print environment values, the working directory, or its last path component |
-| No arguments | Write `ready` to `$TEST_HOME/state`; used by per-file setup |
-| `setup FILE` | Check that the setup file exists and write `ready` to `$TEST_HOME/state` |
+| No arguments | Write `ready` to `$E2E_HOME/state`; used by per-file setup |
+| `setup FILE` | Check that the setup file exists and write `ready` to `$E2E_HOME/state` |
 | `state`, `mark PATH`, `write-state NAME VALUE`, `state-exists [NAME]` | Read, change, or check state in the test's directories |
 | `warn`, `fail` | Print to stdout and stderr; `fail` also exits with code 2 |
 | `sleep`, `premature` | Wait ten seconds, or print `done` and exit before a scripted prompt |
 | `with-env NAME VALUE ... -- COMMAND ...` | Set variables for one child command and return its exit code |
 
 In `write-state` and `state-exists`, `NAME` is a directory environment variable,
-such as `XDG_CONFIG_HOME`. `state-exists` defaults to `TEST_HOME`.
+such as `XDG_CONFIG_HOME`. `state-exists` defaults to `E2E_HOME`.
 
 See the [input](../cli/input.md), [terminal](../cli/interactive.md),
 [state](../cli/state.md), and [environment](../cli/environment.md) guides

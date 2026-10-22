@@ -55,4 +55,4 @@ mm tests/fixtures/matching-order
 
 That command should exit with code 1. Run a named subdirectory, not this whole
 directory: it groups separate scenarios and includes this non-executable README.
-Some suites need flags such as `--home-env`; their outer tests show the full command.
+Some suites need additional flags; their outer tests show the full command.

@@ -165,7 +165,7 @@ timeout: 30
 - Use `clone: owner/repo` only when needed; it requires authenticated GitHub CLI.
 - Give each file its own temporary home and XDG config. Cases within it share state.
 - Use `$REPO_ROOT`, `$PROJECT_NAME`, `$XDG_CONFIG_HOME`, and `$E2E_HOME` in
-  command blocks or expected output. `--home-env NAME` renames the home variable.
+  command blocks or expected output.
 - Leave stdin and PTY text literal; they do not substitute these variables.
 - Choose a positive timeout. Frontmatter overrides the command-line default.
 - Document prerequisites when selecting a single case would skip earlier state.

@@ -21,7 +21,7 @@ unsafe extern "system" {
 fn main() {
     let args: Vec<_> = env::args().collect();
     if args.len() == 1 {
-        fs::write(env::var("TEST_HOME").unwrap() + "/state", "ready").unwrap();
+        fs::write(env::var("E2E_HOME").unwrap() + "/state", "ready").unwrap();
         return;
     }
     match args[1].as_str() {
@@ -67,14 +67,14 @@ fn main() {
         "setup" | "setup-other" => {
             assert!(Path::new(&args[2]).exists());
             let value = if args[1] == "setup" { "ready" } else { "other" };
-            fs::write(env::var("TEST_HOME").unwrap() + "/state", value).unwrap();
+            fs::write(env::var("E2E_HOME").unwrap() + "/state", value).unwrap();
         }
         "state" => println!(
             "{}",
-            fs::read_to_string(env::var("TEST_HOME").unwrap() + "/state").unwrap()
+            fs::read_to_string(env::var("E2E_HOME").unwrap() + "/state").unwrap()
         ),
         "state-exists" => {
-            let key = args.get(2).map_or("TEST_HOME", String::as_str);
+            let key = args.get(2).map_or("E2E_HOME", String::as_str);
             println!(
                 "{}",
                 Path::new(&env::var(key).unwrap()).join("state").exists()
@@ -86,7 +86,7 @@ fn main() {
         )
         .unwrap(),
         "vars" => {
-            for key in ["TEST_HOME", "XDG_CONFIG_HOME", "GH_CONFIG_DIR"] {
+            for key in ["E2E_HOME", "XDG_CONFIG_HOME", "GH_CONFIG_DIR"] {
                 println!("{}", env::var(key).unwrap());
             }
             println!("{}", env::current_dir().unwrap().display());
@@ -103,7 +103,7 @@ fn main() {
         "gh-config" => println!("{}", env::var("GH_CONFIG_DIR").unwrap()),
         "where" => println!("{}", env::current_exe().unwrap().display()),
         "setup-location" => fs::write(
-            env::var("TEST_HOME").unwrap() + "/state",
+            env::var("E2E_HOME").unwrap() + "/state",
             env::current_exe().unwrap().display().to_string(),
         )
         .unwrap(),
@@ -141,7 +141,7 @@ fn main() {
                     "{}\n{}\n{}\n{}",
                     std::process::id(),
                     child.id(),
-                    env::var("TEST_HOME").unwrap(),
+                    env::var("E2E_HOME").unwrap(),
                     env::var("XDG_CONFIG_HOME").unwrap()
                 ),
             )
@@ -205,7 +205,7 @@ fn main() {
                     "{}\n{}\n{}\n{}",
                     std::process::id(),
                     child.id(),
-                    env::var("TEST_HOME").unwrap(),
+                    env::var("E2E_HOME").unwrap(),
                     env::var("XDG_CONFIG_HOME").unwrap()
                 ),
             )
@@ -219,7 +219,7 @@ fn main() {
             }
         }
         "agent" => {
-            let home = env::var("TEST_HOME").unwrap();
+            let home = env::var("E2E_HOME").unwrap();
             while !Path::new(&format!("{home}/request")).exists() {
                 if !Path::new(&home).exists() {
                     return;
@@ -233,7 +233,7 @@ fn main() {
             }
         }
         "await-agent" => {
-            let home = env::var("TEST_HOME").unwrap();
+            let home = env::var("E2E_HOME").unwrap();
             fs::write(format!("{home}/request"), "").unwrap();
             let deadline = std::time::Instant::now() + Duration::from_secs(1);
             while !Path::new(&format!("{home}/ready")).exists()
@@ -257,7 +257,7 @@ fn main() {
                 format!(
                     "{}\n{}\n{}",
                     std::process::id(),
-                    env::var("TEST_HOME").unwrap(),
+                    env::var("E2E_HOME").unwrap(),
                     env::var("XDG_CONFIG_HOME").unwrap()
                 ),
             )

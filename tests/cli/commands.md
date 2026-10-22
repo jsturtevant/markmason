@@ -44,7 +44,7 @@ directly, so shell variables and directory changes do not carry over.
 
 ````markdown markmason
 ```markmason
-mm-test-cli write-state TEST_HOME ready
+mm-test-cli write-state E2E_HOME ready
 mm-test-cli state
 ```
 

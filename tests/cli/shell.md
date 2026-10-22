@@ -36,8 +36,8 @@ Commands execute in the shell itself, not in a subshell for each step.
 ````markdown markmason
 ```markmason
 MESSAGE=$(printf 'state survives')
-mkdir -p "$TEST_HOME/working directory"
-cd "$TEST_HOME/working directory"
+mkdir -p "$E2E_HOME/working directory"
+cd "$E2E_HOME/working directory"
 printf '%s\n' "$MESSAGE"
 ```
 
@@ -52,7 +52,7 @@ An exported variable is also visible to native child executables.
 
 ````markdown markmason
 ```markmason
-test "$PWD" -ef "$TEST_HOME/working directory"
+test "$PWD" -ef "$E2E_HOME/working directory"
 export MESSAGE
 mm-test-cli env MESSAGE
 ```
