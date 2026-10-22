@@ -27,6 +27,10 @@ test-rust:
 build-test-cli:
     cargo build --quiet --locked --example mm-test-cli
 
+# Install host prerequisites for the MXC process-containment backend.
+sandbox-prerequisites:
+    if [[ "$(uname -s)" == Linux ]] && ! command -v bwrap >/dev/null; then sudo apt-get update && sudo apt-get install -y bubblewrap; fi
+
 # Test the current binary against Markdown specs with bounded leaf fixtures.
 test-markdown: build-test-cli
     # Inherited PWD can contain a Windows drive-letter colon; use Bash's physical path.

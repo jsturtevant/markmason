@@ -4,6 +4,7 @@
 use std::{
     env, fs,
     io::{self, Read, Write},
+    net::TcpStream,
     path::Path,
     process::Command,
     thread,
@@ -26,6 +27,13 @@ fn main() {
     }
     match args[1].as_str() {
         "echo" => println!("{}", args[2..].join(" ")),
+        "read-file" => print!("{}", fs::read_to_string(&args[2]).unwrap()),
+        "write-file" => fs::write(&args[2], &args[3]).unwrap(),
+        "connect" => {
+            let mut stream = TcpStream::connect(&args[2]).unwrap();
+            stream.write_all(b"ready").unwrap();
+            println!("connected");
+        }
         "args" => println!("{:?}", &args[2..]),
         "lines" => {
             for line in &args[2..] {

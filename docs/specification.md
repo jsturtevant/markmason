@@ -77,6 +77,48 @@ also removed from their contents.
 - Executables resolve through `PATH`, relative to the working directory.
 - `node ./helper.js` resolves the script beside the Markdown file.
 
+## Sandboxed execution
+
+`--sandbox mxc` opts the selected run into MXC's OS-native Process containment:
+Bubblewrap on Linux, ProcessContainer on Windows, and Seatbelt on macOS. Native
+execution remains the default. A document can opt in with scalar frontmatter:
+
+```yaml
+sandbox: mxc
+```
+
+CLI sandboxing is a security ceiling. A document cannot use `sandbox: none` to
+disable CLI-required containment. The object form can only reduce working
+directory access:
+
+```yaml
+sandbox:
+  backend: mxc
+  workdir: ro
+```
+
+`--cwd` selects the effective working directory. `--sandbox-workdir rw|ro|none`
+controls its sandbox mount and defaults to `rw`. The isolated application home
+and configuration directory remain writable. Repeated `--sandbox-read PATH` and
+`--sandbox-write PATH` grants append canonical host mounts; conflicting
+read-only/read-write overlaps are rejected before setup.
+
+Network egress and ingress are denied by default. Repeated
+`--sandbox-net-allow HOST[:PORT]` entries grant outbound TCP destinations.
+Frontmatter cannot add filesystem or network privileges.
+
+Setup, ordinary commands, pipeline stages, PTY commands, persistent Bash, and
+deferred cleanup use the same document sandbox. `clone:` remains a host-owned
+authenticated `gh repo clone`; the resulting temporary checkout is mounted as
+the sandbox working directory without mounting GitHub credentials.
+
+MXC errors include the backend's operation, native code, and remediation when
+available. Linux and macOS do not always expose a denied path or destination;
+Markmason then preserves the command error and prints generic
+`--sandbox-read`/`--sandbox-write` or `--sandbox-net-allow` guidance without
+guessing the resource. Backend unavailability is an error and never falls back
+to native execution.
+
 ### Partial output assertions
 
 Use `expected-substring` for a stable phrase inside a longer line, without

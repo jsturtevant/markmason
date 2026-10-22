@@ -44,6 +44,8 @@ jobs:
           rustup default stable
           rustup target add "$TARGET"
           cargo install --locked just
+      - name: Install sandbox prerequisites
+        run: just sandbox-prerequisites
       - name: Check
         run: just check
       - name: Build and package
