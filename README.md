@@ -22,11 +22,7 @@ cargo install --git https://github.com/jsturtevant/markmason --tag v0.4.1 --lock
 
 ## Write a test
 
-This README is testable. Run `mm README.md`.
-
-Use direct `markmason` fences for normal executable documentation. The examples
-below use the optional `markdown markmason` wrapper only because this README
-teaches Markmason and needs to show the inner fence syntax on GitHub.
+This README is testable.* Run `mm README.md`.
 
 ### Show the installed version
 
@@ -51,6 +47,9 @@ bash -c "echo Hello, world!"
 Hello, world!
 ```
 ````
+
+\* These examples use the optional `markdown markmason` wrapper so GitHub shows
+their inner fence syntax. Use direct `markmason` fences for normal executable docs.
 
 Run Markmason:
 
