@@ -51,7 +51,7 @@ error: unknown option --not-an-option
 | Syntax | Meaning |
 |--------|---------|
 | `markmason` fence | Run commands in order as one test; require exit 0 by default |
-| `markdown markmason` outer fence | Show nested Markdown source when rendered and execute its inner command blocks |
+| `markdown markmason` outer fence | In documentation about Markmason itself, show nested Markdown source and execute its inner command blocks |
 | `markmason (exit N)` opening fence | Require exit N, without treating execution errors as success |
 | `[LANGUAGE] markmason always (exit N)` opening fence | Defer cleanup until the file ends; language and expected exit are optional |
 | `expected` fence | Match output after path, whitespace, blank-line, and wrapping normalization |
@@ -71,8 +71,10 @@ error: unknown option --not-an-option
 - Compare stdout on success; compare stdout followed by stderr on failure.
 - Without an expected block, only the exit code is checked.
 - Use descriptive headings. Keep input and output blocks before the next heading.
-- Use `markdown markmason` only as an outer wrapper around executable Markdown;
-  keep modifiers such as `always` and `(exit N)` on its inner command fences.
+- Default to direct `markmason` fences. Use `markdown markmason` only when
+  documenting Markmason itself and the rendered page needs to show the inner
+  executable syntax; do not use it for ordinary CLI guides. Keep modifiers such
+  as `always` and `(exit N)` on its inner command fences.
 - Wrap literal Markdown examples in a longer fence so their commands do not run.
 - PTY `expected` uses contains matching; explicit substring or regex modes are preserved.
   Every scripted step must finish.
