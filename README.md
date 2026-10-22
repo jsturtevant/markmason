@@ -26,6 +26,7 @@ This README is testable. Run `mm README.md`.
 
 ### Show the installed version
 
+````markdown markmason
 ```markmason
 mm --version
 ```
@@ -33,9 +34,11 @@ mm --version
 ```expected
 mm 0.4.1
 ```
+````
 
 ### Say hello with Bash
 
+````markdown markmason
 ```markmason
 bash -c "echo Hello, world!"
 ```
@@ -43,6 +46,7 @@ bash -c "echo Hello, world!"
 ```expected
 Hello, world!
 ```
+````
 
 Run Markmason:
 

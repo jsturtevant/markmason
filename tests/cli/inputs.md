@@ -21,6 +21,7 @@ Runner-managed variables such as `REPO_ROOT`, `XDG_CONFIG_HOME`, and the chosen
 This real-terminal test clears both caller values and answers the root input
 and its Markdown prerequisite's input.
 
+````markdown markmason
 ```markmason
 mm-test-cli with-env MARKMASON_TUTORIAL_NAME "" MARKMASON_TUTORIAL_REGION "" -- mm tests/fixtures/inputs/lesson.md --step --home-env TEST_HOME
 ```
@@ -44,9 +45,11 @@ Walkthrough finished
 Documents: 1 passed, 0 failed
 Blocks: 1 passed, 0 failed (includes deferred)
 ```
+````
 
 ## Reuse supplied values without prompting
 
+````markdown markmason
 ```markmason
 mm-test-cli with-env MARKMASON_TUTORIAL_NAME "tutorial user" MARKMASON_TUTORIAL_REGION lab -- mm tests/fixtures/inputs/lesson.md --step --home-env TEST_HOME
 ```
@@ -61,9 +64,11 @@ Walkthrough finished
 Documents: 1 passed, 0 failed
 Blocks: 1 passed, 0 failed (includes deferred)
 ```
+````
 
 ## Unattended runs fail instead of asking
 
+````markdown markmason
 ```markmason (exit 1)
 mm-test-cli with-env MARKMASON_TUTORIAL_NAME "" MARKMASON_TUTORIAL_REGION "" -- mm tests/fixtures/inputs/lesson.md
 ```
@@ -73,6 +78,7 @@ mm-test-cli with-env MARKMASON_TUTORIAL_NAME "" MARKMASON_TUTORIAL_REGION "" -- 
     Document: lesson.md
     Missing required inputs: MARKMASON_TUTORIAL_NAME, MARKMASON_TUTORIAL_REGION. Set these environment variables or use --step to be prompted.
 ```
+````
 
 ## Cancel immediately after the final input
 
@@ -80,6 +86,7 @@ Ctrl+C buffered with the final answer must stop before setup. The setup would
 write a marker into the outer fixture, so it remains observable after the inner
 walkthrough exits.
 
+````markdown markmason
 ```markmason (exit 130)
 mm-test-cli with-env MARKMASON_CANCEL_INPUT "" MARKMASON_CANCEL_HOME "$TEST_HOME" -- mm tests/fixtures/inputs/cancel.md --step
 ```
@@ -88,7 +95,9 @@ mm-test-cli with-env MARKMASON_CANCEL_INPUT "" MARKMASON_CANCEL_HOME "$TEST_HOME
 match: Input MARKMASON_CANCEL_INPUT
 send: value{enter}{ctrl-c}
 ```
+````
 
+````markdown markmason
 ```markmason
 mm-test-cli state-exists
 ```
@@ -96,11 +105,13 @@ mm-test-cli state-exists
 ```expected
 false
 ```
+````
 
 ## Quit while supplying inputs
 
 `q` then Enter or EOF cancels before any setup or application command.
 
+````markdown markmason
 ```markmason
 mm-test-cli with-env MARKMASON_TUTORIAL_NAME "" MARKMASON_TUTORIAL_REGION "" -- mm tests/fixtures/inputs/lesson.md --step
 ```
@@ -115,3 +126,4 @@ Walkthrough stopped
 Documents: 0 passed, 0 failed, 1 cancelled
 Blocks: 0 passed, 0 failed (includes deferred)
 ```
+````

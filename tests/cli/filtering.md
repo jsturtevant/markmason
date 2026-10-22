@@ -12,6 +12,7 @@ Run from the repository root with `mm` on `PATH`.
 
 ## Select files by path
 
+````markdown markmason
 ```markmason
 mm tests/fixtures/passing --file-pattern basic
 ```
@@ -27,9 +28,11 @@ RUN  basic.md
   ✓ PASS Block 2/2 — Show the installed version
 Blocks: 2 passed, 0 failed (includes deferred)
 ```
+````
 
 ## Exclude files by path
 
+````markdown markmason
 ```markmason
 mm tests/fixtures/passing --file-exclude basic
 ```
@@ -42,9 +45,11 @@ RUN  extra.md
   ✓ PASS Block 1/1 — Show the installed version
 Blocks: 1 passed, 0 failed (includes deferred)
 ```
+````
 
 ## Require every listed tag
 
+````markdown markmason
 ```markmason
 mm tests/fixtures/passing --tags SMOKE,cli
 ```
@@ -59,9 +64,11 @@ RUN  basic.md
   ✓ PASS Block 2/2 — Show the installed version
 Blocks: 2 passed, 0 failed (includes deferred)
 ```
+````
 
 ## Exclude a tag
 
+````markdown markmason
 ```markmason
 mm tests/fixtures/passing --tags-exclude smoke
 ```
@@ -74,9 +81,11 @@ RUN  extra.md
   ✓ PASS Block 1/1 — Show the installed version
 Blocks: 1 passed, 0 failed (includes deferred)
 ```
+````
 
 ## Select all commands in a matching file
 
+````markdown markmason
 ```markmason
 mm tests/fixtures/passing --test-name-pattern basic.md
 ```
@@ -92,9 +101,11 @@ RUN  basic.md
   ✓ PASS Block 2/2 — Show the installed version
 Blocks: 2 passed, 0 failed (includes deferred)
 ```
+````
 
 ## Select individual commands
 
+````markdown markmason
 ```markmason
 mm tests/fixtures/passing --test-name-pattern "^mm --version$"
 ```
@@ -111,6 +122,7 @@ RUN  extra.md
   ✓ PASS Block 1/1 — Show the installed version
 Blocks: 2 passed, 0 failed (includes deferred)
 ```
+````
 
 Combine the flags to narrow files first, then select commands within them.
 Earlier cases won't run automatically; select the whole file if cases depend on
@@ -118,6 +130,7 @@ each other.
 
 ## Combine alternative command patterns
 
+````markdown markmason
 ```markmason
 mm tests/fixtures/passing --test-name-pattern "^mm --help$" --test-name-pattern "^mm --version$"
 ```
@@ -135,6 +148,7 @@ RUN  extra.md
   ✓ PASS Block 1/1 — Show the installed version
 Blocks: 3 passed, 0 failed (includes deferred)
 ```
+````
 
 See [environment filters](environment.md) for variables and flag precedence,
 or [error cases](errors.md) for filters with no matches.

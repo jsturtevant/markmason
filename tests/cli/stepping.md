@@ -13,6 +13,7 @@ These dynamic values are intentionally not hardcoded in the assertions below.
 
 ## Continue after every command, then finish
 
+````markdown markmason
 ```markmason
 mm tests/fixtures/walkthrough --step --file-pattern '^lesson\.md$' --home-env TEST_HOME
 ```
@@ -51,9 +52,11 @@ ACTUAL OUTPUT
 Walkthrough finished
 Blocks: 2 passed, 0 failed (includes deferred)
 ```
+````
 
 ## Keep a real Bash session alive between pauses
 
+````markdown markmason
 ```markmason
 mm tests/fixtures/shell/lesson.md --step
 ```
@@ -85,6 +88,7 @@ COMMAND 1 OF 1
 Walkthrough finished
 Blocks: 2 passed, 0 failed (includes deferred)
 ```
+````
 
 ## Run to the next block, then finish the file
 
@@ -92,6 +96,7 @@ The terminal redraws the same Markdown block instead of appending a new command
 card. `b` runs the remaining commands and checks their assertion, then pauses
 before any command in the next block. `f` runs the rest of the file.
 
+````markdown markmason
 ```markmason
 mm tests/fixtures/walkthrough/navigation.md --step
 ```
@@ -120,12 +125,14 @@ Ready. No commands in this block have run.
 Walkthrough finished
 Blocks: 3 passed, 0 failed (includes deferred)
 ```
+````
 
 ## Scroll complete output without executing commands
 
 End scrolls to the collected output; Home returns to the heading and description.
 Neither key needs Enter or executes the next command.
 
+````markdown markmason
 ```markmason
 mm tests/fixtures/walkthrough/scrolling.md --step
 ```
@@ -155,12 +162,14 @@ Keep the command context visible, and scroll to inspect every output line.
 Walkthrough finished
 Blocks: 1 passed, 0 failed (includes deferred)
 ```
+````
 
 ## Cancel while running to the next block
 
 Ctrl+C during command execution must unwind normally, restoring the terminal and
 returning exit 130 on every supported platform.
 
+````markdown markmason
 ```markmason (exit 130)
 mm tests/fixtures/walkthrough/interrupt.md --step
 ```
@@ -171,9 +180,11 @@ send: b{enter}
 match: > [running] mm-test-cli sleep
 send: {ctrl-c}
 ```
+````
 
 ## Cancel while finishing the file
 
+````markdown markmason
 ```markmason (exit 130)
 mm tests/fixtures/walkthrough/interrupt.md --step
 ```
@@ -184,9 +195,11 @@ send: f{enter}
 match: > [running] mm-test-cli sleep
 send: {ctrl-c}
 ```
+````
 
 ## Honor cancellation queued with a run-ahead key
 
+````markdown markmason
 ```markmason (exit 130)
 mm tests/fixtures/walkthrough/interrupt.md --step
 ```
@@ -195,9 +208,11 @@ mm tests/fixtures/walkthrough/interrupt.md --step
 match: Enter: Next command
 send: f{enter}{ctrl-c}
 ```
+````
 
 ## Quit before the next command runs
 
+````markdown markmason
 ```markmason
 mm tests/fixtures/walkthrough --step --file-pattern '^lesson\.md$' --home-env TEST_HOME
 ```
@@ -216,9 +231,11 @@ ACTUAL OUTPUT SO FAR
 Walkthrough stopped
 Blocks: 0 passed, 0 failed (includes deferred)
 ```
+````
 
 ## Search for a file in the picker
 
+````markdown markmason
 ```markmason
 mm tests/fixtures/walkthrough --step --home-env TEST_HOME
 ```
@@ -244,9 +261,11 @@ COMMAND 2 OF 2
 Walkthrough finished
 Blocks: 2 passed, 0 failed (includes deferred)
 ```
+````
 
 ## Cancel the picker without running a tutorial
 
+````markdown markmason
 ```markmason
 mm tests/fixtures/walkthrough --step --home-env TEST_HOME
 ```
@@ -259,9 +278,11 @@ send: {escape}
 ```expected-contains
 Walkthrough cancelled. No commands were run.
 ```
+````
 
 ## Inspect an assertion failure before exiting
 
+````markdown markmason
 ```markmason (exit 1)
 mm tests/fixtures/walkthrough --step --file-pattern '^mismatch\.md$'
 ```
@@ -283,9 +304,11 @@ ACTUAL OUTPUT
 Walkthrough finished
 Blocks: 0 passed, 1 failed (includes deferred)
 ```
+````
 
 ## Select a file explicitly when no terminal is available
 
+````markdown markmason
 ```markmason (exit 1)
 mm tests/fixtures/walkthrough --step
 ```
@@ -296,9 +319,11 @@ terminal input.
 ```expected
 Error: The walkthrough file picker needs an interactive terminal; select a file with --file-pattern REGEX
 ```
+````
 
 ## Prepare a walkthrough with another Markdown document
 
+````markdown markmason
 ```markmason
 mm tests/fixtures/markdown-setup/walkthrough.md --step --home-env TEST_HOME
 ```
@@ -324,3 +349,4 @@ ACTUAL OUTPUT
 Walkthrough finished
 Blocks: 2 passed, 0 failed (includes deferred)
 ```
+````

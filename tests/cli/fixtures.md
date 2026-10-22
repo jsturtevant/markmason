@@ -6,6 +6,7 @@ before setup and commands begin.
 
 ## Preview the cloned fixture
 
+````markdown markmason
 ```markmason
 mm tests/fixtures/clone-list --list
 ```
@@ -18,3 +19,4 @@ clone.md
   Block 1/1 — Use a cloned repository
     mm-test-cli cloned
 ```
+````

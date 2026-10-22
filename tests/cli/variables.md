@@ -6,6 +6,7 @@ the default home variable is `E2E_HOME`.
 
 ## Locate isolated home and configuration directories
 
+````markdown markmason
 ```markmason
 mm-test-cli env TEST_HOME XDG_CONFIG_HOME
 ```
@@ -16,9 +17,11 @@ The environment and expected-output variables point to the same isolated directo
 $TEST_HOME
 $XDG_CONFIG_HOME
 ```
+````
 
 ## Find the working directory
 
+````markdown markmason
 ```markmason
 mm-test-cli cwd
 ```
@@ -28,9 +31,11 @@ mm-test-cli cwd
 ```expected
 $REPO_ROOT
 ```
+````
 
 ## Find the project name
 
+````markdown markmason
 ```markmason
 mm-test-cli project
 ```
@@ -40,9 +45,11 @@ mm-test-cli project
 ```expected
 $PROJECT_NAME
 ```
+````
 
 ## Quote paths containing spaces
 
+````markdown markmason
 ```markmason
 mm-test-cli echo "$REPO_ROOT" "$PROJECT_NAME"
 ```
@@ -52,9 +59,11 @@ Quote path variables when passing them as arguments.
 ```expected
 $REPO_ROOT $PROJECT_NAME
 ```
+````
 
 ## Choose an application-specific home variable
 
+````markdown markmason
 ```markmason
 mm tests/fixtures/custom-home --home-env MYCLI_HOME
 ```
@@ -68,3 +77,4 @@ RUN  home.md
   ✓ PASS Block 1/1 — Report the custom home directory
 Blocks: 1 passed, 0 failed (includes deferred)
 ```
+````

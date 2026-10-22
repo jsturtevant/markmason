@@ -7,6 +7,7 @@ Each `markmason` block runs its command; the headings describe what it does.
 
 ## Find available options
 
+````markdown markmason
 ```markmason
 mm --help
 ```
@@ -20,9 +21,11 @@ Print help
 -V, --version
 Print version
 ```
+````
 
 ## Check the installed version
 
+````markdown markmason
 ```markmason
 mm --version
 ```
@@ -32,5 +35,6 @@ Print the installed version, not the help text describing the flag.
 ```expected
 mm 0.4.1
 ```
+````
 
 [Run tests](running.md) | [Filter tests](filtering.md) | [Error cases](errors.md)

@@ -231,13 +231,23 @@ pub fn parse_with_shell(content: &str, shell: Option<Shell>) -> Result<Spec> {
     } else {
         content
     };
+    parse_cases(body, &mut spec, None, String::new())?;
+    Ok(spec)
+}
+
+fn parse_cases(
+    body: &str,
+    spec: &mut Spec,
+    inherited_title: Option<String>,
+    inherited_description: String,
+) -> Result<()> {
     let command_info =
         Regex::new(r"^markmason(?:\s+(?P<always>always))?(?:\s+\(exit\s+(?P<exit>\d+)\))?$")
             .unwrap();
     let language_info = Regex::new(r"^[A-Za-z0-9_+#.-]+$").unwrap();
     let mut current = None;
-    let mut title = None;
-    let mut description = String::new();
+    let mut title = inherited_title;
+    let mut description = inherited_description;
     let mut description_start = 0;
     let mut events = Parser::new(body).into_offset_iter();
     while let Some((event, range)) = events.next() {
@@ -262,7 +272,8 @@ pub fn parse_with_shell(content: &str, shell: Option<Shell>) -> Result<Spec> {
         };
         let mut parts = info.split_whitespace();
         let first = parts.next().unwrap_or("");
-        let kind = if parts.next() == Some("markmason") {
+        let second = parts.next();
+        let kind = if second == Some("markmason") {
             "markmason"
         } else {
             first
@@ -318,6 +329,23 @@ pub fn parse_with_shell(content: &str, shell: Option<Shell>) -> Result<Spec> {
                 let caps = command_info.captures(metadata).context(
                     "Invalid markmason fence: expected [LANGUAGE] markmason [always] [(exit N)]",
                 )?;
+                if first == "markdown" {
+                    if metadata != "markmason" {
+                        bail!(
+                            "Invalid markdown markmason fence: put always and (exit N) on inner command fences"
+                        );
+                    }
+                    let first_nested = spec.cases.len();
+                    parse_cases(block, spec, title.clone(), description.clone())
+                        .context("Invalid executable Markdown")?;
+                    if spec.cases.len() == first_nested {
+                        bail!(
+                            "A markdown markmason block must contain a fenced markmason command block"
+                        );
+                    }
+                    current = Some(spec.cases.len() - 1);
+                    continue;
+                }
                 let command_ranges = if spec.shell.is_some() {
                     crate::shell::command_ranges(block)?
                 } else {
@@ -391,7 +419,7 @@ pub fn parse_with_shell(content: &str, shell: Option<Shell>) -> Result<Spec> {
             }
         }
     }
-    Ok(spec)
+    Ok(())
 }
 
 // Deliberately not shell parsing: backslashes are literal, and empty quoted arguments survive.

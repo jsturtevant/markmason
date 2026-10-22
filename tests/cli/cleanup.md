@@ -8,6 +8,7 @@ ordinary execution fails or a walkthrough stops. Cleanup runs automatically.
 The [example file](../fixtures/always/lesson.md) puts cleanup first in the document.
 Listing shows ordinary commands first and labels cleanup as `Always`.
 
+````markdown markmason
 ```markmason
 mm tests/fixtures/always/lesson.md --list
 ```
@@ -16,12 +17,14 @@ mm tests/fixtures/always/lesson.md --list
 Always 3/3 — Remove the state at the end
 cleanup_example
 ```
+````
 
 ## Use the same Bash state
 
 The ordinary blocks define a cleanup function, create state, and read it.
 The deferred block calls that function in the same Bash session at the end.
 
+````markdown markmason
 ```markmason
 mm tests/fixtures/always/lesson.md --home-env TEST_HOME
 ```
@@ -32,6 +35,7 @@ RUN  Always 3/3 — Remove the state at the end
 Documents: 1 passed, 0 failed
 Blocks: 3 passed, 0 failed (includes deferred)
 ```
+````
 
 Use `bash markmason always` for Markdown language styling. Add `shell: bash`
 in frontmatter when commands need Bash variables or functions. To declare an
@@ -42,6 +46,7 @@ expected exit, put it last: `markmason always (exit 2)`.
 Quit after defining the function, before creating the state. Cleanup is safe
 even when there is no state to remove, and it asks for no further confirmation.
 
+````markdown markmason
 ```markmason
 mm tests/fixtures/always/lesson.md --step --home-env TEST_HOME
 ```
@@ -57,6 +62,7 @@ Walkthrough stopped
 Documents: 0 passed, 0 failed, 1 cancelled
 Blocks: 1 passed, 0 failed (includes deferred)
 ```
+````
 
 All cleanup blocks are attempted in document order, even if one fails.
 They are skipped if fixture or setup creation failed. Filters must select an
