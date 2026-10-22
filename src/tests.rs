@@ -120,10 +120,7 @@ fn bash_commands_keep_complete_shell_constructs_and_heredocs() -> Result<()> {
 
 #[test]
 fn environment_overrides_follow_platform_case_rules() {
-    for (inherited, key) in [
-        ("test_home", "TEST_HOME"),
-        ("\u{e9}2e_home", "\u{c9}2E_HOME"),
-    ] {
+    for (inherited, key) in [("e2e_home", "E2E_HOME"), ("\u{e9}2e_home", "\u{c9}2E_HOME")] {
         let mut env = process::Environment::from([(inherited.into(), "caller".into())]);
         process::set_env(&mut env, key, "fixture");
         assert_eq!(env.get(std::ffi::OsStr::new(key)).unwrap(), "fixture");

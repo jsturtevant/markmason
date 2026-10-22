@@ -6,5 +6,5 @@ inputs:
 # Prepare a greeting
 
 ```markmason
-mm-test-cli write-state TEST_HOME ready
+mm-test-cli write-state E2E_HOME ready
 ```

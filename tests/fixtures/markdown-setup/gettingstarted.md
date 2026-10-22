@@ -6,7 +6,7 @@ its commands and assertions run automatically in the caller's shared fixture.
 ## Create application and configuration state
 
 ```markmason
-mm-test-cli write-state TEST_HOME ready
+mm-test-cli write-state E2E_HOME ready
 mm-test-cli write-state XDG_CONFIG_HOME configured
 ```
 

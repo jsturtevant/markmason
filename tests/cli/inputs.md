@@ -14,7 +14,7 @@ inputs:
 
 Inputs are plain text, not secret/password prompts. Do not use them for secrets.
 Runner-managed variables such as `REPO_ROOT`, `XDG_CONFIG_HOME`, and the chosen
-`--home-env` cannot be declared as inputs.
+`--state-dir-env` variable cannot be declared as inputs.
 
 ## Prompt before shared setup
 
@@ -23,7 +23,7 @@ and its Markdown prerequisite's input.
 
 ````markdown markmason
 ```markmason
-mm-test-cli with-env MARKMASON_TUTORIAL_NAME "" MARKMASON_TUTORIAL_REGION "" -- mm tests/fixtures/inputs/lesson.md --step --home-env TEST_HOME
+mm-test-cli with-env MARKMASON_TUTORIAL_NAME "" MARKMASON_TUTORIAL_REGION "" -- mm tests/fixtures/inputs/lesson.md --step
 ```
 
 ```pty
@@ -51,7 +51,7 @@ Blocks: 1 passed, 0 failed (includes deferred)
 
 ````markdown markmason
 ```markmason
-mm-test-cli with-env MARKMASON_TUTORIAL_NAME "tutorial user" MARKMASON_TUTORIAL_REGION lab -- mm tests/fixtures/inputs/lesson.md --step --home-env TEST_HOME
+mm-test-cli with-env MARKMASON_TUTORIAL_NAME "tutorial user" MARKMASON_TUTORIAL_REGION lab -- mm tests/fixtures/inputs/lesson.md --step
 ```
 
 ```pty
@@ -88,7 +88,7 @@ walkthrough exits.
 
 ````markdown markmason
 ```markmason (exit 130)
-mm-test-cli with-env MARKMASON_CANCEL_INPUT "" MARKMASON_CANCEL_HOME "$TEST_HOME" -- mm tests/fixtures/inputs/cancel.md --step
+mm-test-cli with-env MARKMASON_CANCEL_INPUT "" MARKMASON_CANCEL_HOME "$E2E_HOME" -- mm tests/fixtures/inputs/cancel.md --step
 ```
 
 ```pty

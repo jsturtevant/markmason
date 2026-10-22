@@ -1,20 +1,20 @@
 # Use paths without hardcoding them
 
 Path variables work in commands and expected output.
-These examples use `--home-env TEST_HOME` for the [test CLI](../support/README.md);
-the default home variable is `E2E_HOME`.
+Each Markdown document gets a fresh temporary state directory, exposed as
+`E2E_HOME` by default and removed when the document finishes.
 
-## Locate isolated home and configuration directories
+## Locate isolated state and configuration directories
 
 ````markdown markmason
 ```markmason
-mm-test-cli env TEST_HOME XDG_CONFIG_HOME
+mm-test-cli env E2E_HOME XDG_CONFIG_HOME
 ```
 
 The environment and expected-output variables point to the same isolated directories.
 
 ```expected
-$TEST_HOME
+$E2E_HOME
 $XDG_CONFIG_HOME
 ```
 ````
@@ -61,20 +61,20 @@ $REPO_ROOT $PROJECT_NAME
 ```
 ````
 
-## Choose an application-specific home variable
+## Use an application's state-directory variable
 
 ````markdown markmason
 ```markmason
-mm tests/fixtures/custom-home --home-env MYCLI_HOME
+mm tests/fixtures/custom-state-dir --state-dir-env MYCLI_HOME
 ```
 
-Rename the home variable to match the application.
-[This spec](../fixtures/custom-home/home.md) checks both its environment and substitution.
+`MYCLI_HOME` now points to the managed temporary state directory.
+The flag changes the variable name, not the directory's lifecycle.
 
 ```expected-contains
-RUN  home.md
-  RUN  Block 1/1 — Report the custom home directory
-  ✓ PASS Block 1/1 — Report the custom home directory
+RUN  state.md
+  RUN  Block 1/1 — Report the custom state directory
+  ✓ PASS Block 1/1 — Report the custom state directory
 Blocks: 1 passed, 0 failed (includes deferred)
 ```
 ````

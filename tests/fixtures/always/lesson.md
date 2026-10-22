@@ -25,10 +25,10 @@ The function and later blocks share one Bash session.
 
 ```markmason
 cleanup_example() {
-  rm -f "$TEST_HOME/state"
+  rm -f "$E2E_HOME/state"
   printf 'cleaned example state\n'
 }
-mm-test-cli write-state TEST_HOME ready
+mm-test-cli write-state E2E_HOME ready
 ```
 
 ## Read the state before cleanup
