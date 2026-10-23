@@ -50,6 +50,15 @@ pub struct CliPolicy {
     pub network_allow: Vec<String>,
 }
 
+impl CliPolicy {
+    pub fn approve_paths(mut self) -> Result<Self> {
+        self.readonly = canonical_paths(&self.readonly, "read-only")?;
+        self.readwrite = canonical_paths(&self.readwrite, "read-write")?;
+        normalize_mounts(&mut self.readonly, &mut self.readwrite)?;
+        Ok(self)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Policy {
     backend: Backend,
@@ -85,6 +94,15 @@ impl Policy {
             network_allow: cli.network_allow.clone(),
         })
     }
+
+    pub fn writable_roots(&self, cwd: &Path) -> Vec<PathBuf> {
+        let mut roots = self.readwrite.clone();
+        if self.workdir == WorkdirAccess::ReadWrite {
+            roots.push(cwd.to_owned());
+        }
+        normalize_paths(&mut roots);
+        roots
+    }
 }
 
 impl WorkdirAccess {
@@ -104,6 +122,59 @@ pub struct Executor {
     approved_cwds: Vec<PathBuf>,
     readonly: Vec<PathBuf>,
     readwrite: Vec<PathBuf>,
+    tools: ToolPermissions,
+}
+
+#[derive(Clone, Default)]
+pub struct ToolPermissions {
+    readonly: Vec<PathBuf>,
+    writable_roots: Vec<PathBuf>,
+}
+
+impl ToolPermissions {
+    pub fn discover(env: &process::Environment, writable_roots: &[PathBuf]) -> Result<Self> {
+        use mxc_sdk::v1::policy::filesystem::{ToolsPolicyOptions, available_tools_policy};
+
+        let tools = available_tools_policy(Some(&environment(env)?), ToolsPolicyOptions::default());
+        let mut readonly = canonical_policy_paths(tools.readonly_paths)?;
+        // Discovery is a policy fragment, not an authorization decision. Do not
+        // adopt optional host-history writes or whole-drive reads for PowerShell.
+        readonly.retain(|path| path.parent().is_some());
+        // Do not create separate source mounts beneath guest-writable roots:
+        // the guest can replace their names, but not the roots' host parents.
+        readonly.retain(|tool| {
+            !writable_roots
+                .iter()
+                .any(|write| tool != write && tool.starts_with(write))
+        });
+        Ok(Self {
+            readonly,
+            writable_roots: writable_roots.to_owned(),
+        })
+    }
+
+    fn validate(&self) -> Result<()> {
+        validate_approved_paths(&self.readonly, "tool")
+    }
+
+    fn validate_sources(&self, readonly: &[PathBuf], readwrite: &[PathBuf]) -> Result<()> {
+        for source in readonly.iter().chain(readwrite) {
+            if let Some(parent) = self
+                .writable_roots
+                .iter()
+                .chain(readwrite)
+                .find(|parent| source != *parent && source.starts_with(parent))
+            {
+                bail!(
+                    "Sandbox mount source {} is inside writable permission {}. \
+                     Use non-overlapping permission roots across documents.",
+                    source.display(),
+                    parent.display()
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 pub struct RunRequest<'a> {
@@ -134,12 +205,14 @@ impl Executor {
         setup_cwd: &Path,
         home: &Path,
         config: &Path,
+        tools: &ToolPermissions,
     ) -> Result<Self> {
-        let cwd = canonical_workdir(cwd)?;
-        let setup_cwd = canonical_workdir(setup_cwd)?;
-        let mut readonly = canonical_paths(&policy.readonly, "read-only")?;
-        let mut readwrite = canonical_paths(&policy.readwrite, "read-write")?;
-        let mut candidate_cwds = vec![cwd, setup_cwd];
+        let mut readonly = policy.readonly.clone();
+        let mut readwrite = policy.readwrite.clone();
+        let mut candidate_cwds = vec![cwd.to_owned(), setup_cwd.to_owned()];
+        validate_approved_paths(&candidate_cwds, "working directory")?;
+        validate_approved_paths(&readonly, "read-only")?;
+        validate_approved_paths(&readwrite, "read-write")?;
         candidate_cwds.sort();
         candidate_cwds.dedup();
         for workdir in &candidate_cwds {
@@ -168,12 +241,14 @@ impl Executor {
             approved_cwds,
             readonly,
             readwrite,
+            tools: tools.clone(),
         })
     }
 
-    pub fn with_write_path(&self, path: &Path) -> Result<Self> {
+    pub fn with_shell_paths(&self, requests: &Path, responses: &Path) -> Result<Self> {
         let mut executor = self.clone();
-        executor.readwrite.push(dunce::canonicalize(path)?);
+        executor.readonly.push(dunce::canonicalize(requests)?);
+        executor.readwrite.push(dunce::canonicalize(responses)?);
         normalize_mounts(&mut executor.readonly, &mut executor.readwrite)?;
         Ok(executor)
     }
@@ -272,11 +347,6 @@ impl Backend {
     }
 }
 
-fn canonical_workdir(cwd: &Path) -> Result<PathBuf> {
-    dunce::canonicalize(cwd)
-        .with_context(|| format!("Cannot resolve sandbox working directory {}", cwd.display()))
-}
-
 fn canonical_paths(paths: &[PathBuf], label: &str) -> Result<Vec<PathBuf>> {
     paths
         .iter()
@@ -287,11 +357,37 @@ fn canonical_paths(paths: &[PathBuf], label: &str) -> Result<Vec<PathBuf>> {
         .collect()
 }
 
+fn validate_approved_paths(paths: &[PathBuf], label: &str) -> Result<()> {
+    for path in paths {
+        let resolved = dunce::canonicalize(path).with_context(|| {
+            format!(
+                "Cannot resolve approved sandbox {label} path {}",
+                path.display()
+            )
+        })?;
+        if &resolved != path {
+            bail!(
+                "Sandbox {label} path changed since approval: {}",
+                path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn normalize_paths(paths: &mut Vec<PathBuf>) {
+    paths.sort();
+    let ordered = std::mem::take(paths);
+    for path in ordered {
+        if !paths.iter().any(|parent| path.starts_with(parent)) {
+            paths.push(path);
+        }
+    }
+}
+
 fn normalize_mounts(readonly: &mut Vec<PathBuf>, readwrite: &mut Vec<PathBuf>) -> Result<()> {
-    readonly.sort();
-    readonly.dedup();
-    readwrite.sort();
-    readwrite.dedup();
+    normalize_paths(readonly);
+    normalize_paths(readwrite);
     for read in readonly.iter() {
         for write in readwrite.iter() {
             if read == write || read.starts_with(write) || write.starts_with(read) {
@@ -314,10 +410,7 @@ impl Executor {
         env: &process::Environment,
         timeout: Option<Duration>,
     ) -> Result<mxc_sdk::v1::ContainerRequest> {
-        use mxc_sdk::v1::policy::{
-            FilesystemPolicy,
-            filesystem::{ToolsPolicyOptions, available_tools_policy},
-        };
+        use mxc_sdk::v1::policy::FilesystemPolicy;
         use mxc_sdk::v1::{ContainerRequest, Containment};
 
         let timeout_ms = timeout
@@ -326,39 +419,28 @@ impl Executor {
                     .context("Sandbox timeout exceeds MXC's supported range")
             })
             .transpose()?;
-        let environment = env
-            .iter()
-            .map(|(name, value)| {
-                Ok((
-                    os_string(name, "environment name")?,
-                    os_string(value, "environment value")?,
-                ))
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let environment = environment(env)?;
         let command_cwd = self.command_cwd(cwd)?;
         let mut readonly = self.readonly.clone();
         let mut readwrite = self.readwrite.clone();
         normalize_mounts(&mut readonly, &mut readwrite)?;
-        let tools = available_tools_policy(Some(&environment), ToolsPolicyOptions::default());
-        let readwrite_paths = display_paths(&readwrite)?;
-        let mut readonly_paths = display_paths(&readonly)?;
-        let tool_readonly = canonical_policy_paths(tools.readonly_paths)?;
-        readonly_paths.extend(tool_readonly.into_iter().filter(|tool| {
-            !readwrite_paths
+        validate_approved_paths(&readonly, "read-only")?;
+        validate_approved_paths(&readwrite, "read-write")?;
+        self.tools.validate()?;
+        readonly.extend(
+            self.tools
+                .readonly
                 .iter()
-                .any(|write| Path::new(tool).starts_with(write))
-        }));
-        readonly_paths.sort();
-        readonly_paths.dedup();
-        let mut readwrite_paths = readwrite_paths;
-        readwrite_paths.extend(canonical_policy_paths(tools.readwrite_paths)?);
-        readwrite_paths.sort();
-        readwrite_paths.dedup();
+                .filter(|tool| !readwrite.iter().any(|write| tool.starts_with(write)))
+                .cloned(),
+        );
+        normalize_paths(&mut readonly);
+        self.tools.validate_sources(&readonly, &readwrite)?;
         Ok(ContainerRequest {
             containment: Containment::Process,
             filesystem: Some(FilesystemPolicy {
-                readonly_paths,
-                readwrite_paths,
+                readonly_paths: display_paths(&readonly)?,
+                readwrite_paths: display_paths(&readwrite)?,
                 ..Default::default()
             }),
             network: Some(Self::network_policy(&self.policy.network_allow)?),
@@ -764,6 +846,17 @@ fn os_string(value: &OsString, label: &str) -> Result<String> {
         .with_context(|| format!("Sandbox {label} is not valid Unicode"))
 }
 
+fn environment(env: &process::Environment) -> Result<Vec<(String, String)>> {
+    env.iter()
+        .map(|(name, value)| {
+            Ok((
+                os_string(name, "environment name")?,
+                os_string(value, "environment value")?,
+            ))
+        })
+        .collect()
+}
+
 fn display_paths(paths: &[PathBuf]) -> Result<Vec<String>> {
     paths
         .iter()
@@ -777,16 +870,14 @@ fn path_string(path: &Path, label: &str) -> Result<String> {
         .with_context(|| format!("Sandbox {label} is not valid Unicode: {}", path.display()))
 }
 
-fn canonical_policy_paths(paths: Vec<String>) -> Result<Vec<String>> {
+fn canonical_policy_paths(paths: Vec<String>) -> Result<Vec<PathBuf>> {
     paths
         .into_iter()
         .map(|path| {
-            let original = PathBuf::from(&path);
-            let resolved = dunce::canonicalize(&original).unwrap_or(original);
-            resolved
-                .into_os_string()
-                .into_string()
-                .map_err(|_| anyhow::anyhow!("Sandbox tool path is not valid Unicode: {path:?}"))
+            let resolved = dunce::canonicalize(&path)
+                .with_context(|| format!("Cannot resolve sandbox tool path {path}"))?;
+            path_string(&resolved, "tool path")?;
+            Ok(resolved)
         })
         .collect()
 }
@@ -831,6 +922,41 @@ mod tests {
         let mut readonly = vec![root.join("fixtures")];
         let mut readwrite = vec![root];
         assert!(normalize_mounts(&mut readonly, &mut readwrite).is_err());
+    }
+
+    #[test]
+    fn nested_mount_sources_are_reduced_to_their_permission_roots() {
+        let root = PathBuf::from("/tmp/workspace");
+        let readonly_root = PathBuf::from("/tmp/tools");
+        let mut readonly = vec![readonly_root.join("bin"), readonly_root.clone()];
+        let mut readwrite = vec![root.join("data"), root.clone(), root.join("data/nested")];
+        normalize_mounts(&mut readonly, &mut readwrite).unwrap();
+        assert_eq!(readonly, [readonly_root]);
+        assert_eq!(readwrite, [root]);
+    }
+
+    #[test]
+    fn mount_sources_cannot_be_replaced_by_another_document() {
+        let root = PathBuf::from("/tmp/workspace");
+        let permissions = ToolPermissions {
+            writable_roots: vec![root.clone()],
+            ..Default::default()
+        };
+        assert!(
+            permissions
+                .validate_sources(std::slice::from_ref(&root), &[])
+                .is_ok()
+        );
+        assert!(
+            permissions
+                .validate_sources(&[root.join("tools")], &[])
+                .is_err()
+        );
+        assert!(
+            permissions
+                .validate_sources(&[], &[root.join("data")])
+                .is_err()
+        );
     }
 
     #[test]

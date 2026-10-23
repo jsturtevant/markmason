@@ -201,6 +201,14 @@ struct Fixture {
     vars: Vec<(String, String)>,
 }
 
+#[derive(Clone)]
+struct HostContext {
+    gh_config: PathBuf,
+    cwd: PathBuf,
+    sandbox: sandbox::CliPolicy,
+    tools: sandbox::ToolPermissions,
+}
+
 fn gh_config_dir() -> Result<PathBuf> {
     let nonempty = |key| env::var_os(key).filter(|value| !value.is_empty());
     if let Some(dir) = nonempty("GH_CONFIG_DIR") {
@@ -224,7 +232,7 @@ impl Fixture {
     fn new(
         options: &Options,
         spec: &spec::Spec,
-        gh_config: &Path,
+        host: &HostContext,
         mut env: process::Environment,
     ) -> Result<Self> {
         let home = Builder::new().prefix("markmason-home-").tempdir()?;
@@ -238,14 +246,14 @@ impl Fixture {
         ] {
             process::set_env(&mut env, key, value);
         }
-        process::set_env(&mut env, "GH_CONFIG_DIR", gh_config.as_os_str());
+        process::set_env(&mut env, "GH_CONFIG_DIR", host.gh_config.as_os_str());
         process::set_env(&mut env, &options.state_dir_env, home.path().as_os_str());
         process::set_env(&mut env, "XDG_CONFIG_HOME", config.path().as_os_str());
         #[cfg(windows)]
         for name in ["APPDATA", "LOCALAPPDATA"] {
             process::set_env(&mut env, name, config.path().as_os_str());
         }
-        let mut cwd = dunce::canonicalize(&options.cwd)?;
+        let mut cwd = host.cwd.clone();
         let repo = if let Some(owner_repo) = &spec.clone {
             let auth = process::run(
                 &["gh".into(), "auth".into(), "status".into()],
@@ -277,7 +285,7 @@ impl Fixture {
             if cloned.code != 0 {
                 bail!("Failed to clone {owner_repo}:\n{}", cloned.text);
             }
-            cwd = repo.path().to_owned();
+            cwd = dunce::canonicalize(repo.path())?;
             Some(repo)
         } else {
             None
@@ -300,19 +308,16 @@ impl Fixture {
                 config.path().to_string_lossy().into_owned(),
             ),
         ];
-        let policy = sandbox::Policy::resolve(
-            &sandbox::CliPolicy {
-                backend: options.sandbox,
-                workdir: options.sandbox_workdir,
-                readonly: options.sandbox_read.clone(),
-                readwrite: options.sandbox_write.clone(),
-                network_allow: options.sandbox_net_allow.clone(),
-            },
-            spec.sandbox.as_ref(),
-        )
-        .context("Invalid sandbox policy")?;
-        let executor =
-            sandbox::Executor::new(policy, &cwd, &options.cwd, home.path(), config.path())?;
+        let policy = sandbox::Policy::resolve(&host.sandbox, spec.sandbox.as_ref())
+            .context("Invalid sandbox policy")?;
+        let executor = sandbox::Executor::new(
+            policy,
+            &cwd,
+            &host.cwd,
+            home.path(),
+            config.path(),
+            &host.tools,
+        )?;
         let shell = if spec.shell.is_some() {
             let mut shell_env = env.clone();
             for (key, value) in &vars {
@@ -840,7 +845,7 @@ struct FileRun {
 fn run_unattended_document(
     options: &Options,
     root: &Path,
-    gh_config: &Path,
+    host: &HostContext,
     selected: (String, spec::Spec, Vec<usize>),
     verbose: bool,
     buffered: bool,
@@ -901,7 +906,7 @@ fn run_unattended_document(
         let env = input_environment(&inputs, &options.state_dir_env, &file, None)?
             .context("Unattended input collection unexpectedly stopped")?;
         cancellation::check()?;
-        Fixture::new(options, &spec, gh_config, env)
+        Fixture::new(options, &spec, host, env)
     })();
     let fixture = match fixture {
         Ok(fixture) => fixture,
@@ -1039,7 +1044,7 @@ fn print_file_run(run: &FileRun) -> Result<()> {
 fn run_serial_documents(
     options: &Options,
     root: &Path,
-    gh_config: &Path,
+    host: &HostContext,
     specs: Vec<(String, spec::Spec, Vec<usize>)>,
     verbose: bool,
 ) -> Result<bool> {
@@ -1059,14 +1064,8 @@ fn run_serial_documents(
         if cancellation::signal().is_some() {
             break;
         }
-        let run = run_unattended_document(
-            options,
-            root,
-            gh_config,
-            (file, spec, indices),
-            verbose,
-            false,
-        )?;
+        let run =
+            run_unattended_document(options, root, host, (file, spec, indices), verbose, false)?;
         print_file_run(&run)?;
         let failed = run.document.failed();
         documents.push(run.document);
@@ -1160,7 +1159,7 @@ where
 fn run_parallel_documents(
     options: &Options,
     root: &Path,
-    gh_config: &Path,
+    host: &HostContext,
     specs: Vec<(String, spec::Spec, Vec<usize>)>,
     verbose: bool,
     workers: usize,
@@ -1176,7 +1175,7 @@ fn run_parallel_documents(
         .collect();
     let options = Arc::new(options.clone());
     let root = Arc::new(root.to_owned());
-    let gh_config = Arc::new(gh_config.to_owned());
+    let host = Arc::new(host.clone());
     let (completed, results) = mpsc::channel();
     let mut queued: VecDeque<_> = specs.into_iter().enumerate().collect();
     let mut active = 0usize;
@@ -1206,7 +1205,7 @@ fn run_parallel_documents(
                 let run = run_unattended_document(
                     &options,
                     &root,
-                    &gh_config,
+                    &host,
                     (file.clone(), spec, indices),
                     verbose,
                     true,
@@ -1221,7 +1220,7 @@ fn run_parallel_documents(
             }
             let worker_options = Arc::clone(&options);
             let root = Arc::clone(&root);
-            let gh_config = Arc::clone(&gh_config);
+            let host = Arc::clone(&host);
             let completed = completed.clone();
             let failed_file = file.clone();
             let total = indices.len() + spec.cases.iter().filter(|case| case.always).count();
@@ -1229,7 +1228,7 @@ fn run_parallel_documents(
                 run_unattended_document(
                     &worker_options,
                     &root,
-                    &gh_config,
+                    &host,
                     (file.clone(), spec, indices),
                     verbose,
                     true,
@@ -1569,24 +1568,51 @@ fn run(options: Options) -> Result<bool> {
         }
         return Ok(valid);
     }
-    // Resolve authentication before replacing XDG_CONFIG_HOME in each fixture.
-    let gh_config = Some(gh_config_dir()?);
+    // Snapshot host permissions before any document can modify discovered paths.
+    let cwd = dunce::canonicalize(&options.cwd)
+        .with_context(|| format!("Cannot resolve working directory {}", options.cwd.display()))?;
+    let sandbox = sandbox::CliPolicy {
+        backend: options.sandbox,
+        workdir: options.sandbox_workdir,
+        readonly: options.sandbox_read.clone(),
+        readwrite: options.sandbox_write.clone(),
+        network_allow: options.sandbox_net_allow.clone(),
+    }
+    .approve_paths()?;
+    let mut writable_roots = Vec::new();
+    for (_, spec, _) in &specs {
+        writable_roots.extend(
+            sandbox::Policy::resolve(&sandbox, spec.sandbox.as_ref())?.writable_roots(&cwd),
+        );
+    }
+    let host = HostContext {
+        gh_config: gh_config_dir()?,
+        cwd,
+        sandbox,
+        tools: if options.sandbox == sandbox::Backend::Mxc
+            || specs.iter().any(|(_, spec, _)| {
+                spec.sandbox
+                    .as_ref()
+                    .is_some_and(|policy| policy.backend == sandbox::Backend::Mxc)
+            }) {
+            sandbox::ToolPermissions::discover(&env::vars_os().collect(), &writable_roots)?
+        } else {
+            sandbox::ToolPermissions::default()
+        },
+    };
     if !options.step {
-        let gh_config = gh_config
-            .as_deref()
-            .context("Missing fixture configuration")?;
         return match options.parallel {
             Some(Parallelism::Auto) => {
                 let workers = thread::available_parallelism()
                     .map(usize::from)
                     .unwrap_or(1)
                     .max(1);
-                run_parallel_documents(&options, &root, gh_config, specs, verbose, workers)
+                run_parallel_documents(&options, &root, &host, specs, verbose, workers)
             }
             Some(Parallelism::Jobs(workers)) => {
-                run_parallel_documents(&options, &root, gh_config, specs, verbose, workers)
+                run_parallel_documents(&options, &root, &host, specs, verbose, workers)
             }
-            _ => run_serial_documents(&options, &root, gh_config, specs, verbose),
+            _ => run_serial_documents(&options, &root, &host, specs, verbose),
         };
     }
     let mut failed = 0;
@@ -1703,15 +1729,7 @@ fn run(options: Options) -> Result<bool> {
                 presenter.resume_document(&file, document_started)?;
             }
             cancellation::check()?;
-            Fixture::new(
-                &options,
-                &spec,
-                gh_config
-                    .as_deref()
-                    .context("Missing fixture configuration")?,
-                env,
-            )
-            .map(Some)
+            Fixture::new(&options, &spec, &host, env).map(Some)
         })();
         let fixture = match fixture {
             Ok(Some(fixture)) => fixture,

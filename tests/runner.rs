@@ -1794,43 +1794,156 @@ fn mxc_sandbox_workdir_access_can_be_restricted_and_regranted() {
 #[cfg(target_os = "linux")]
 #[test]
 fn mxc_sandbox_does_not_reapprove_a_replaced_workdir() {
-    let specs = tempfile::tempdir().unwrap();
-    let parent = tempfile::tempdir().unwrap();
-    let workdir = parent.path().join("work");
-    fs::create_dir(&workdir).unwrap();
-    let private = tempfile::tempdir().unwrap();
-    fs::write(private.path().join("secret.txt"), "must-not-leak").unwrap();
-    fs::write(
-        specs.path().join("swap.md"),
-        format!(
-            "## Replace the selected working directory\n```markmason\n\
-             app replace-dir-with-symlink '{}' '{}'\n\
-             app read-file secret.txt\n```\n",
+    for separate_documents in [false, true] {
+        let specs = tempfile::tempdir().unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        let workdir = parent.path().join("work");
+        fs::create_dir(&workdir).unwrap();
+        let private = tempfile::tempdir().unwrap();
+        fs::write(private.path().join("secret.txt"), "must-not-leak").unwrap();
+        let replace = format!(
+            "```markmason\napp replace-dir-with-symlink '{}' '{}'\n```\n",
             shell_path(&workdir),
             shell_path(private.path())
-        ),
-    )
-    .unwrap();
-    let output = command(specs.path())
-        .args([
-            "--sandbox",
-            "mxc",
-            "--sandbox-workdir",
-            "none",
-            "--sandbox-write",
-        ])
-        .arg(parent.path())
-        .arg("--cwd")
-        .arg(&workdir)
-        .output()
+        );
+        let read = "```markmason\napp read-file secret.txt\n```\n";
+        fs::write(
+            specs.path().join("a.md"),
+            if separate_documents {
+                replace.clone()
+            } else {
+                replace + read
+            },
+        )
         .unwrap();
-    let transcript = text(&output);
-    assert_eq!(output.status.code(), Some(1), "{transcript}");
-    assert!(
-        transcript.contains("working directory resolves outside approved permissions"),
-        "{transcript}"
-    );
-    assert!(!transcript.contains("must-not-leak"), "{transcript}");
+        if separate_documents {
+            fs::write(specs.path().join("b.md"), read).unwrap();
+        }
+        let output = command(specs.path())
+            .args([
+                "--sandbox",
+                "mxc",
+                "--sandbox-workdir",
+                "none",
+                "--sandbox-write",
+            ])
+            .arg(parent.path())
+            .arg("--cwd")
+            .arg(&workdir)
+            .output()
+            .unwrap();
+        let transcript = text(&output);
+        assert_eq!(output.status.code(), Some(1), "{transcript}");
+        assert!(transcript.contains("working directory"), "{transcript}");
+        assert!(!transcript.contains("must-not-leak"), "{transcript}");
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn mxc_sandbox_does_not_reapprove_explicit_permissions_between_documents() {
+    for redundant_parent in [false, true] {
+        let specs = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let nested = workspace.path().join("data");
+        fs::create_dir(&nested).unwrap();
+        let private = tempfile::tempdir().unwrap();
+        let secret = private.path().join("secret.txt");
+        fs::write(&secret, "must-not-leak-through-explicit-permission").unwrap();
+        fs::write(
+            specs.path().join("a.md"),
+            format!(
+                "```markmason\napp replace-dir-with-symlink '{}' '{}'\n```\n",
+                shell_path(&nested),
+                shell_path(private.path())
+            ),
+        )
+        .unwrap();
+        fs::write(
+            specs.path().join("b.md"),
+            format!(
+                "```markmason\napp read-file '{}'\n```\n",
+                shell_path(&secret)
+            ),
+        )
+        .unwrap();
+        let mut run = command(specs.path());
+        run.args(["--sandbox", "mxc", "--cwd"])
+            .arg(workspace.path())
+            .arg("--sandbox-write")
+            .arg(&nested)
+            .arg("--verbose");
+        if redundant_parent {
+            run.arg("--sandbox-write").arg(workspace.path());
+        }
+        let output = run.output().unwrap();
+        let transcript = text(&output);
+        assert_eq!(output.status.code(), Some(1), "{transcript}");
+        assert!(
+            !transcript.contains("must-not-leak-through-explicit-permission"),
+            "{transcript}"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn mxc_sandbox_does_not_reapprove_replaced_tool_directories() {
+    for separate_documents in [false, true] {
+        let specs = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let tools = workspace.path().join("bin");
+        fs::create_dir(&tools).unwrap();
+        let private = tempfile::tempdir().unwrap();
+        let secret = private.path().join("secret.txt");
+        fs::write(&secret, "must-not-leak-through-tools").unwrap();
+        let replace = format!(
+            "```markmason\napp replace-dir-with-symlink '{}' '{}'\n```\n",
+            shell_path(&tools),
+            shell_path(private.path()),
+        );
+        let read = format!(
+            "```markmason\napp read-file '{}'\n```\n",
+            shell_path(&secret)
+        );
+        fs::write(
+            specs.path().join("a.md"),
+            if separate_documents {
+                replace.clone()
+            } else {
+                replace + &read
+            },
+        )
+        .unwrap();
+        if separate_documents {
+            fs::write(specs.path().join("b.md"), read).unwrap();
+        }
+        let mut run = command(specs.path());
+        let original_path = run
+            .get_envs()
+            .find(|(key, _)| *key == "PATH")
+            .unwrap()
+            .1
+            .unwrap()
+            .to_owned();
+        let path = std::env::join_paths(
+            std::iter::once(tools).chain(std::env::split_paths(&original_path)),
+        )
+        .unwrap();
+        let output = run
+            .args(["--sandbox", "mxc", "--cwd"])
+            .arg(workspace.path())
+            .env("PATH", path)
+            .arg("--verbose")
+            .output()
+            .unwrap();
+        let transcript = text(&output);
+        assert_eq!(output.status.code(), Some(1), "{transcript}");
+        assert!(
+            !transcript.contains("must-not-leak-through-tools"),
+            "{transcript}"
+        );
+    }
 }
 
 #[cfg(not(windows))]
@@ -1933,6 +2046,45 @@ fn mxc_bash_capture_paths_cannot_redirect_host_reads() {
     assert!(
         !transcript.contains("must-not-leak-from-host"),
         "{transcript}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn mxc_bash_requests_cannot_be_replaced_with_symlinks() {
+    let specs = tempfile::tempdir().unwrap();
+    let private = tempfile::tempdir().unwrap();
+    let victim = private.path().join("state.txt");
+    fs::write(&victim, "host-state-must-not-change").unwrap();
+    fs::write(
+        specs.path().join("requests.md"),
+        format!(
+            "---\nshell: bash\nsandbox: mxc\n---\n\
+             ```markmason\n\
+             for name in script input boundary ready; do\n\
+               if rm \"$__markmason_request/$name\"; then\n\
+                 printf 'host request was writable: %s\\n' \"$name\"\n\
+                 exit 1\n\
+               fi\n\
+             done\n\
+             if ln -s '{}' \"${{__markmason_request%/*}}/command-1\"; then\n\
+               printf 'host request parent was writable\\n'\n\
+               exit 1\n\
+             fi\n\
+             printf 'requests protected\\n'\n```\n\
+             ```expected\nrequests protected\n```\n\
+             ```markmason\ncat\n```\n```stdin\nnext input\n```\n\
+             ```expected\nnext input\n```\n",
+            shell_path(&victim)
+        ),
+    )
+    .unwrap();
+    let output = command(specs.path()).output().unwrap();
+    let transcript = text(&output);
+    assert!(output.status.success(), "{transcript}");
+    assert_eq!(
+        fs::read_to_string(&victim).unwrap(),
+        "host-state-must-not-change"
     );
 }
 

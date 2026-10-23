@@ -14,6 +14,7 @@ use tempfile::TempDir;
 
 const BOOTSTRAP: &str = r#"set -uo pipefail
 readonly __markmason_root=$1
+readonly __markmason_requests=$2
 __markmason_sleep=$(type -P sleep)
 : "${__markmason_sleep:?shell: bash requires sleep on PATH}"
 case "$__markmason_sleep" in
@@ -23,7 +24,7 @@ esac
 readonly __markmason_sleep
 set --
 command stty -echo || exit
-builtin printf 'ready\n' >| "$__markmason_root/ready"
+builtin printf 'ready\n' >| "$__markmason_root/status"
 __markmason_sequence=0
 __markmason_status=0
 __markmason_last_arg=
@@ -36,11 +37,11 @@ __markmason_previous_status() {
     } 2>/dev/null
 }
 while :; do
-    __markmason_request="$__markmason_root/command-$__markmason_sequence"
+    __markmason_request="$__markmason_requests/command-$__markmason_sequence"
     while ! builtin test -f "$__markmason_request/ready"; do
         "$__markmason_sleep" 0.05 || exit
     done
-    if builtin test -f "$__markmason_root/cleanup" &&
+    if builtin test -f "$__markmason_requests/cleanup" &&
         builtin test -z "$(builtin trap -p INT)"; then
         builtin trap 'return 130' INT
     fi
@@ -59,7 +60,7 @@ while :; do
     } 2>/dev/null
     IFS= builtin read -r __markmason_boundary < "$__markmason_request/boundary"
     builtin printf '\r\n%s\r\n' "$__markmason_boundary"
-    builtin printf '%s\n' "$__markmason_status" >| "$__markmason_request/status"
+    builtin printf '%s:%s\n' "$__markmason_sequence" "$__markmason_status" >| "$__markmason_root/status"
     __markmason_sequence=$((__markmason_sequence + 1))
 done
 "#;
@@ -198,7 +199,9 @@ pub(crate) fn recovery_needs_interrupt(status: Option<i32>, frame_end: Option<us
 
 pub struct Session {
     terminal: Option<process::Terminal>,
+    requests: TempDir,
     directory: TempDir,
+    status: fs::File,
     sequence: usize,
     pending: Vec<u8>,
     stdout: RefCell<fs::File>,
@@ -216,24 +219,31 @@ impl Session {
         timeout: Duration,
         executor: &crate::sandbox::Executor,
     ) -> Result<Self> {
+        let requests = tempfile::Builder::new()
+            .prefix("markmason-shell-requests-")
+            .tempdir()?;
         let directory = tempfile::Builder::new()
             .prefix("markmason-shell-")
             .tempdir()?;
-        let bootstrap = directory.path().join("session.sh");
+        let bootstrap = requests.path().join("session.sh");
         fs::write(&bootstrap, BOOTSTRAP)?;
+        // All guest-writable files are opened before launch. Later host writes
+        // only use the separate directory that MXC exposes read-only.
+        let status = protocol_file(&directory.path().join("status"))?;
         let stdout = protocol_file(&directory.path().join("stdout"))?;
         let stderr = protocol_file(&directory.path().join("stderr"))?;
         let mut env = env.clone();
         for name in ["BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS"] {
             process::set_env(&mut env, name, "");
         }
-        let terminal = executor.with_write_path(directory.path())?.terminal(
+        let terminal = executor.with_shell_paths(requests.path(), directory.path())?.terminal(
             &[
                 "bash".into(),
                 "--noprofile".into(),
                 "--norc".into(),
                 path(&bootstrap),
                 path(directory.path()),
+                path(requests.path()),
             ],
             cwd,
             &env,
@@ -241,7 +251,9 @@ impl Session {
         .context("shell: bash requires Bash on PATH; on native Windows install Git Bash, not a WSL launcher")?;
         let mut session = Self {
             terminal: Some(terminal),
+            requests,
             directory,
+            status,
             sequence: 0,
             pending: Vec::new(),
             stdout: RefCell::new(stdout),
@@ -262,7 +274,7 @@ impl Session {
             while let Ok(chunk) = terminal.rx.try_recv() {
                 output.extend(chunk.context("Failed reading Bash startup output")?);
             }
-            if session.directory.path().join("ready").is_file() {
+            if read_protocol_text(&mut session.status)? == "ready\n" {
                 return Ok(session);
             }
             if terminal.try_wait()?.is_some() || Instant::now() >= deadline {
@@ -276,7 +288,7 @@ impl Session {
     }
 
     pub fn enable_cleanup(&mut self) -> Result<()> {
-        fs::write(self.directory.path().join("cleanup"), "")?;
+        fs::write(self.requests.path().join("cleanup"), "")?;
         self.cleanup_enabled = true;
         Ok(())
     }
@@ -331,7 +343,7 @@ impl Session {
     ) -> Result<process::Output> {
         let terminal = self.terminal.as_mut().context("Bash session is closed")?;
         let directory = self
-            .directory
+            .requests
             .path()
             .join(format!("command-{}", self.sequence));
         fs::create_dir(&directory)?;
@@ -345,7 +357,7 @@ impl Session {
             ),
         )?;
         fs::write(directory.join("input"), input.unwrap_or_default())?;
-        let mut status_file = protocol_file(&directory.join("status"))?;
+        let status_prefix = format!("{}:", self.sequence);
         if block.is_some() {
             fs::write(directory.join("pty"), "")?;
         }
@@ -376,9 +388,10 @@ impl Session {
                 Err(mpsc::RecvTimeoutError::Disconnected) => {}
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
-            let status = match read_protocol_text(&mut status_file) {
-                Ok(text) if text.ends_with('\n') => Some(
-                    text.trim()
+            let status = match read_protocol_text(&mut self.status) {
+                Ok(text) if text.starts_with(&status_prefix) && text.ends_with('\n') => Some(
+                    text[status_prefix.len()..]
+                        .trim()
                         .parse::<i32>()
                         .context("Invalid Bash command status")?,
                 ),
@@ -508,6 +521,9 @@ impl Session {
         if let Some(terminal) = self.terminal.take() {
             terminal.close()?;
         }
+        self.requests
+            .close()
+            .context("Failed to clean up Bash requests")?;
         self.directory
             .close()
             .context("Failed to clean up Bash session")

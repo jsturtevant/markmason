@@ -103,7 +103,7 @@ sandbox:
 ```
 
 `--cwd` selects the effective working directory. `--sandbox-workdir rw|ro|none`
-controls its sandbox mount and defaults to `rw`. The isolated application home
+controls its sandbox mount and defaults to `rw`. The isolated state directory
 and configuration directory remain writable. Repeated `--sandbox-read PATH` and
 `--sandbox-write PATH` permissions append canonical host mounts; conflicting
 read-only/read-write overlaps are rejected before setup.
@@ -123,6 +123,25 @@ Markmason then preserves the command error and prints generic
 `--sandbox-read`/`--sandbox-write` or `--sandbox-net-allow` guidance without
 guessing the resource. Backend unavailability is an error and never falls back
 to native execution.
+
+MXC enforces filesystem permissions for the contained commands, not for the
+Markmason host process. Its [filesystem helpers return policy fragments for the
+caller to compose](https://github.com/microsoft/mxc/blob/fda29ac63bc306b7f97f3b86b4b63d44f7f40cf2/src/mxc-sdk/src/policy.rs#L37-L44);
+discovery is not an authorization decision.
+
+Markmason approves operator paths and tool permissions once, before any document
+runs. Redundant descendant mounts are removed; a mount source beneath another
+document's writable root is rejected. Tool directories within writable roots
+are available only through an existing permission, never separately remounted.
+Tool discovery's optional host-history writes and whole-drive reads are not
+adopted. These rules prevent commands from turning symlink changes into new
+permissions; they do not protect against unrelated host processes changing the
+approved filesystem.
+
+Persistent Bash reads scripts and stdin from a separate, read-only request
+directory. Its writable output files are opened by the host before launch and
+read through retained handles. The host never creates files inside a directory
+the contained command can modify.
 
 ### Partial output assertions
 
