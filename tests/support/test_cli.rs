@@ -54,6 +54,10 @@ fn main() {
                 std::process::exit(2);
             }
         }
+        "permission-denied" => {
+            eprintln!("Permission denied");
+            std::process::exit(2);
+        }
         "cat" => {
             let mut s = String::new();
             io::stdin().read_to_string(&mut s).unwrap();

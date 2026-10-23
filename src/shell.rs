@@ -426,7 +426,11 @@ impl Session {
                     text.push_str(&String::from_utf8_lossy(&stderr));
                 }
                 Ok((
-                    process::Output { text, code },
+                    process::Output {
+                        text,
+                        code,
+                        ..Default::default()
+                    },
                     u64::try_from(stdout.len())?,
                     u64::try_from(stderr.len())?,
                 ))

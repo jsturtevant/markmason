@@ -47,6 +47,7 @@ These are `mm-test-cli` commands, not options or subcommands of `mm`.
 | `setup FILE` | Check that the setup file exists and write `ready` to `$E2E_HOME/state` |
 | `state`, `mark PATH`, `write-state NAME VALUE`, `state-exists [NAME]` | Read, change, or check state in the test's directories |
 | `warn`, `fail` | Print to stdout and stderr; `fail` also exits with code 2 |
+| `permission-denied` | Print `Permission denied` to stderr and exit 2 without accessing a file |
 | `sleep`, `premature` | Wait ten seconds, or print `done` and exit before a scripted prompt |
 | `with-env NAME VALUE ... -- COMMAND ...` | Set variables for one child command and return its exit code |
 

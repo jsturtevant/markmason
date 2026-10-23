@@ -189,6 +189,24 @@ fn resolve_setup(command: &str, dir: &Path) -> Result<Vec<String>> {
     Ok(args)
 }
 
+fn is_markdown_setup(args: &[String]) -> bool {
+    args.len() == 2
+        && Path::new(&args[0])
+            .file_name()
+            .is_some_and(|name| name == "mm" || name == "mm.exe")
+        && Path::new(&args[1])
+            .extension()
+            .is_some_and(|ext| ext == "md")
+}
+
+fn needs_original_setup_cwd(spec: &spec::Spec) -> bool {
+    spec.shell.is_none()
+        && spec
+            .setup
+            .as_ref()
+            .is_some_and(|setup| !is_markdown_setup(&spec::split_command(setup)))
+}
+
 struct Fixture {
     shell: RefCell<Option<shell::Session>>,
     executor: sandbox::Executor,
@@ -363,7 +381,7 @@ impl Fixture {
         let executor = sandbox::Executor::new(
             policy,
             &cwd,
-            &host.cwd,
+            needs_original_setup_cwd(spec).then_some(host.cwd.as_path()),
             home.path(),
             config.path(),
             &host.tools,
@@ -459,10 +477,7 @@ fn execute(
             return Ok(false);
         }
     }
-    let mut output = process::Output {
-        text: String::new(),
-        code: 0,
-    };
+    let mut output = process::Output::default();
     let mut stdin = case.stdin.as_ref().map(|s| s.as_bytes().to_vec());
     let mut step_index = 0;
     let mut shell_block = case.pty.as_deref().map(shell::Block::new);
@@ -512,6 +527,7 @@ fn execute(
                 }
                 let mut input = stdin.take();
                 let mut output = None;
+                let mut pipeline_diagnostics = String::new();
                 for stage in stages {
                     let args = resolve(&stage, dir)?;
                     let result = fixture.executor.run(sandbox::RunRequest {
@@ -523,6 +539,7 @@ fn execute(
                         scope: &fixture.processes,
                         progress: &mut progress,
                     })?;
+                    pipeline_diagnostics.push_str(&result.diagnostics);
                     if result.code != 0 {
                         output = Some(result);
                         break;
@@ -530,7 +547,9 @@ fn execute(
                     input = Some(result.text.as_bytes().to_vec());
                     output = Some(result);
                 }
-                output.context("Pipeline produced no output")
+                let mut output = output.context("Pipeline produced no output")?;
+                output.diagnostics = pipeline_diagnostics;
+                Ok(output)
             }
         })();
         let result = match result {
@@ -538,7 +557,7 @@ fn execute(
             Err(error) => {
                 if let Some(session) = stepping.as_deref_mut() {
                     session.inspect(
-                        &output.text,
+                        &output,
                         None,
                         step::Status::ExecutionError(&error),
                         shell_mode,
@@ -557,6 +576,7 @@ fn execute(
             output.text.push('\n');
         }
         output.text.push_str(&result.text);
+        output.diagnostics.push_str(&result.diagnostics);
         output.code = result.code;
         if let Some(session) = stepping.as_deref_mut() {
             let complete = index + 1 == commands.len() || output.code != 0;
@@ -571,7 +591,7 @@ fn execute(
                 Ok(()) => step::Status::Progress,
             };
             session.inspect(
-                &output.text,
+                &output,
                 Some(output.code),
                 status,
                 shell_mode && verdict.is_err(),
@@ -606,6 +626,9 @@ fn check_output(
     diagnostics: bool,
     mut buffered: Option<&mut String>,
 ) -> Result<()> {
+    if diagnostics {
+        emit_diagnostic(&mut buffered, &output.diagnostics);
+    }
     if verbose {
         emit_diagnostic(&mut buffered, &format!("ACTUAL:\n{}\n", output.text));
     }
@@ -682,15 +705,7 @@ fn run_setup(
         return Ok(());
     };
     let args = resolve_setup(setup, dir)?;
-    let executable = Path::new(&args[0]);
-    let markdown = args.len() == 2
-        && executable
-            .file_name()
-            .is_some_and(|name| name == "mm" || name == "mm.exe")
-        && Path::new(&args[1])
-            .extension()
-            .is_some_and(|ext| ext == "md");
-    if markdown {
+    if is_markdown_setup(&args) {
         let path = dunce::canonicalize(dir.join(&args[1]))
             .with_context(|| format!("Cannot find Markdown setup {}", args[1]))?;
         if state.chain.contains(&path) {
@@ -790,6 +805,7 @@ fn run_setup(
             })
         }
         .with_context(|| format!("Setup command failed: {setup}"))?;
+        emit_diagnostic(&mut diagnostics, &result.diagnostics);
         if result.code != 0 {
             bail!("Setup command failed: {setup}\n{}", result.text);
         }
@@ -1386,14 +1402,7 @@ fn collect_inputs(
         return Ok(());
     };
     let args = resolve_setup(setup, dir)?;
-    if args.len() == 2
-        && Path::new(&args[0])
-            .file_name()
-            .is_some_and(|name| name == "mm" || name == "mm.exe")
-        && Path::new(&args[1])
-            .extension()
-            .is_some_and(|ext| ext == "md")
-    {
+    if is_markdown_setup(&args) {
         let path = dunce::canonicalize(dir.join(&args[1]))
             .with_context(|| format!("Cannot find Markdown setup {}", args[1]))?;
         if chain.contains(&path) {
@@ -1632,8 +1641,10 @@ fn run(options: Options) -> Result<bool> {
     .approve_paths()?;
     let mut writable_roots = Vec::new();
     for (_, spec, _) in &specs {
+        let original_cwd =
+            (spec.clone.is_none() || needs_original_setup_cwd(spec)).then_some(cwd.as_path());
         writable_roots.extend(
-            sandbox::Policy::resolve(&sandbox, spec.sandbox.as_ref())?.writable_roots(&cwd),
+            sandbox::Policy::resolve(&sandbox, spec.sandbox.as_ref())?.writable_roots(original_cwd),
         );
     }
     let sandboxed = options.sandbox == sandbox::Backend::Mxc

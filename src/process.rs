@@ -70,10 +70,11 @@ fn executable_missing_from_path(program: &str, cwd: &Path, env: &Environment) ->
     })
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Output {
     pub text: String,
     pub code: i32,
+    pub diagnostics: String,
 }
 
 #[cfg(windows)]
@@ -438,7 +439,11 @@ pub fn run_with_progress(
         if code != 0 {
             text.push_str(&String::from_utf8_lossy(&stderr));
         }
-        Ok(Output { text, code })
+        Ok(Output {
+            text,
+            code,
+            ..Default::default()
+        })
     })();
     if result.is_err() && !terminated {
         terminate(&mut child).context("Failed to clean up command process group")?;
@@ -937,7 +942,14 @@ pub fn pty_terminal(
             {
                 interaction.check_complete(final_command, code, &clean)?;
                 terminal.finished = true;
-                return Ok((Output { text: clean, code }, interaction.completed()));
+                return Ok((
+                    Output {
+                        text: clean,
+                        code,
+                        ..Default::default()
+                    },
+                    interaction.completed(),
+                ));
             }
         }
     })();

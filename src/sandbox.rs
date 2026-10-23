@@ -95,9 +95,11 @@ impl Policy {
         })
     }
 
-    pub fn writable_roots(&self, cwd: &Path) -> Vec<PathBuf> {
+    pub fn writable_roots(&self, cwd: Option<&Path>) -> Vec<PathBuf> {
         let mut roots = self.readwrite.clone();
-        if self.workdir == WorkdirAccess::ReadWrite {
+        if self.workdir == WorkdirAccess::ReadWrite
+            && let Some(cwd) = cwd
+        {
             roots.push(cwd.to_owned());
         }
         normalize_paths(&mut roots);
@@ -202,14 +204,15 @@ impl Executor {
     pub fn new(
         policy: Policy,
         cwd: &Path,
-        setup_cwd: &Path,
+        setup_cwd: Option<&Path>,
         home: &Path,
         config: &Path,
         tools: &ToolPermissions,
     ) -> Result<Self> {
         let mut readonly = policy.readonly.clone();
         let mut readwrite = policy.readwrite.clone();
-        let mut candidate_cwds = vec![cwd.to_owned(), setup_cwd.to_owned()];
+        let mut candidate_cwds = vec![cwd.to_owned()];
+        candidate_cwds.extend(setup_cwd.map(Path::to_owned));
         validate_approved_paths(&candidate_cwds, "working directory")?;
         validate_approved_paths(&readonly, "read-only")?;
         validate_approved_paths(&readwrite, "read-write")?;
@@ -664,20 +667,18 @@ impl Executor {
                 WaitResult::TimedOut => unreachable!(),
             };
             let mut text = String::from_utf8_lossy(&stdout).into_owned();
+            let mut diagnostics = String::new();
             if code != 0 {
                 let stderr = String::from_utf8_lossy(&stderr);
                 text.push_str(&stderr);
                 if let Some(guidance) = policy_guidance(&stderr) {
-                    if !text.ends_with('\n') {
-                        text.push('\n');
-                    }
-                    text.push_str(guidance);
-                    text.push('\n');
+                    diagnostics.push_str(guidance);
+                    diagnostics.push('\n');
                 }
                 if !warnings.is_empty() {
-                    text.push_str("\nSandbox warnings:\n");
-                    text.push_str(&warnings.join("\n"));
-                    text.push('\n');
+                    diagnostics.push_str("Sandbox warnings:\n");
+                    diagnostics.push_str(&warnings.join("\n"));
+                    diagnostics.push('\n');
                 }
 
                 fn policy_guidance(stderr: &str) -> Option<&'static str> {
@@ -715,7 +716,11 @@ impl Executor {
                     None
                 }
             }
-            Ok(process::Output { text, code })
+            Ok(process::Output {
+                text,
+                code,
+                diagnostics,
+            })
         })();
         if result.is_err() {
             for closer in [stdout_closer, stderr_closer].into_iter().flatten() {

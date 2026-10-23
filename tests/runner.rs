@@ -4695,6 +4695,135 @@ fn clone_fixture_is_isolated_and_removed() {
 
 #[cfg(unix)]
 #[test]
+fn mxc_clone_documents_do_not_mount_an_unused_original_cwd() {
+    for frontmatter in [
+        "",
+        "setup: mm setup.md\n",
+        "shell: bash\nsetup: export PREPARED=ready\n",
+    ] {
+        let specs = tempfile::tempdir().unwrap();
+        let original = tempfile::tempdir().unwrap();
+        let tools = tempfile::tempdir().unwrap();
+        fs::hard_link(helper(), tools.path().join("gh")).unwrap();
+        let secret = original.path().join("private.txt");
+        fs::write(&secret, "must-not-expose-original-cwd").unwrap();
+        fs::write(
+            specs.path().join("setup.md"),
+            "---\nsetup: app write-file prepared ready\n---\n\
+             ```markmason\napp read-file prepared\n```\n```expected\nready\n```\n",
+        )
+        .unwrap();
+        let lesson = specs.path().join("clone.md");
+        fs::write(
+            &lesson,
+            format!(
+                "---\nclone: owner/repo\n{frontmatter}---\n\
+             ```markmason\napp cloned\n```\n```expected\nyes\n```\n\
+             ```markmason\napp read-file '{}'\n```\n",
+                shell_path(&secret)
+            ),
+        )
+        .unwrap();
+        let path = std::env::join_paths(
+            [
+                tools.path().to_owned(),
+                helper().parent().unwrap().to_owned(),
+            ]
+            .into_iter()
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+        )
+        .unwrap();
+        let output = command(&lesson)
+            .args(["--sandbox", "mxc", "--cwd"])
+            .arg(original.path())
+            .env("PATH", path)
+            .arg("--verbose")
+            .output()
+            .unwrap();
+        let transcript = text(&output);
+        assert_eq!(output.status.code(), Some(1), "{transcript}");
+        assert!(
+            transcript.contains("Blocks: 1 passed, 1 failed"),
+            "{transcript}"
+        );
+        assert!(
+            !transcript.contains("must-not-expose-original-cwd"),
+            "{transcript}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn mxc_clone_only_can_start_from_the_system_temporary_directory() {
+    let specs = tempfile::tempdir().unwrap();
+    let tools = tempfile::tempdir().unwrap();
+    fs::hard_link(helper(), tools.path().join("gh")).unwrap();
+    fs::write(
+        specs.path().join("clone.md"),
+        "---\nclone: owner/repo\n---\n```markmason\napp cloned\n```\n```expected\nyes\n```\n",
+    )
+    .unwrap();
+    let path = std::env::join_paths(
+        [
+            tools.path().to_owned(),
+            helper().parent().unwrap().to_owned(),
+        ]
+        .into_iter()
+        .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let output = command(specs.path())
+        .args(["--sandbox", "mxc", "--cwd"])
+        .arg(std::env::temp_dir())
+        .env("PATH", path)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+}
+
+#[cfg(unix)]
+#[test]
+fn mxc_diagnostics_do_not_change_expected_command_output() {
+    let specs = tempfile::tempdir().unwrap();
+    fs::write(
+        specs.path().join("errors.md"),
+        "```markmason (exit 2)\napp permission-denied\n```\n\
+         ```expected\nPermission denied\n```\n\
+         ```markmason (exit 2)\napp permission-denied | app echo must-not-run\n```\n\
+         ```expected-contains\nPermission denied\n```\n",
+    )
+    .unwrap();
+    for backend in ["none", "mxc"] {
+        let output = command(specs.path())
+            .args(["--sandbox", backend])
+            .output()
+            .unwrap();
+        let transcript = text(&output);
+        assert!(output.status.success(), "{transcript}");
+        assert!(
+            transcript.contains("Blocks: 2 passed, 0 failed"),
+            "{transcript}"
+        );
+        if backend == "mxc" {
+            assert!(
+                transcript.contains("Sandbox filesystem access may be denied"),
+                "{transcript}"
+            );
+        }
+    }
+    let stepped = step_output(specs.path(), &["--sandbox", "mxc"], "\n\n\n\n");
+    let transcript = text(&stepped);
+    assert!(stepped.status.success(), "{transcript}");
+    assert!(transcript.contains("RUNNER DIAGNOSTICS"), "{transcript}");
+    assert!(
+        transcript.contains("Blocks: 2 passed, 0 failed"),
+        "{transcript}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn mxc_sandbox_clones_before_documents_can_replace_gh() {
     for parallel in [false, true] {
         let specs = tempfile::tempdir().unwrap();

@@ -108,6 +108,11 @@ and configuration directory remain writable. Repeated `--sandbox-read PATH` and
 `--sandbox-write PATH` permissions append canonical host mounts; conflicting
 read-only/read-write overlaps are rejected before setup.
 
+With `clone:`, the checkout is the effective working directory. The original
+`--cwd` is mounted only for a top-level direct setup command that runs there.
+Markdown prerequisites and persistent Bash setup run in the checkout; files
+outside it need explicit filesystem permissions.
+
 Network egress and ingress are denied by default. Repeated
 `--sandbox-net-allow HOST[:PORT]` entries permit outbound TCP destinations.
 Frontmatter cannot add filesystem or network privileges.
@@ -130,6 +135,9 @@ Markmason then preserves the command error and prints generic
 `--sandbox-read`/`--sandbox-write` or `--sandbox-net-allow` guidance without
 guessing the resource. Backend unavailability is an error and never falls back
 to native execution.
+
+Hints and warnings are runner diagnostics, separate from application output.
+They are never passed into pipelines or included in output assertions.
 
 MXC enforces filesystem permissions for the contained commands, not for the
 Markmason host process. Its [filesystem helpers return policy fragments for the

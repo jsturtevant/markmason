@@ -98,6 +98,7 @@ struct Frame {
     expected_exit: i32,
     matching: matching::Mode,
     actual: String,
+    diagnostics: String,
     exit: Option<i32>,
     phase: Phase,
     error: Option<String>,
@@ -119,6 +120,7 @@ impl Frame {
             expected_exit: case.exit_code,
             matching: case.output_mode(),
             actual: String::new(),
+            diagnostics: String::new(),
             exit: None,
             phase: Phase::Ready,
             error: None,
@@ -545,14 +547,15 @@ impl Session {
 
     pub fn inspect(
         &mut self,
-        actual: &str,
+        output: &crate::process::Output,
         exit: Option<i32>,
         status: Status<'_>,
         stop_file: bool,
     ) -> Result<()> {
         let result = (|| {
             let frame = self.frame.as_mut().context("Missing walkthrough block")?;
-            frame.actual = actual.to_owned();
+            frame.actual = output.text.clone();
+            frame.diagnostics = output.diagnostics.clone();
             frame.exit = exit;
             frame.error = None;
             frame.stop_file = stop_file;
@@ -676,6 +679,10 @@ impl Session {
         lines.extend(expected);
         lines.push(format!("{BOLD}{actual_label}{RESET}"));
         lines.extend(actual);
+        if !frame.diagnostics.is_empty() {
+            lines.push(format!("{BOLD}RUNNER DIAGNOSTICS{RESET}"));
+            lines.extend(panel(&frame.diagnostics));
+        }
         lines.push(String::new());
         if let Some(exit) = frame.exit.filter(|_| frame.phase != Phase::Running) {
             lines.push(format!("  Command exited {exit}"));
