@@ -18,7 +18,7 @@ verify the archive against `SHA256SUMS`, and put `mm` (`mm.exe` on Windows) on `
 Or install from source with Rust 1.99+:
 
 ```sh
-cargo install --git https://github.com/jsturtevant/markmason --tag v0.5.0 --locked
+cargo install --git https://github.com/jsturtevant/markmason --tag v0.6.0 --locked
 ```
 
 ## Write a test
@@ -33,7 +33,7 @@ mm --version
 ```
 
 ```expected
-mm 0.5.0
+mm 0.6.0
 ```
 ````
 
