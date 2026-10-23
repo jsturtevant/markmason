@@ -163,9 +163,11 @@ timeout: 30
 - Treat `setup` as a complete per-file command, not a script with an assumed runtime.
 - Resolve setup file arguments beside the spec. Setup runs in `--cwd`, after cloning.
 - Use `clone: owner/repo` only when needed; it requires authenticated GitHub CLI.
-- Give each file its own temporary home and XDG config. Cases within it share state.
+- Give each file its own temporary state directory and XDG config. Cases within
+  it share state.
 - Use `$REPO_ROOT`, `$PROJECT_NAME`, `$XDG_CONFIG_HOME`, and `$E2E_HOME` in
-  command blocks or expected output. `--home-env NAME` renames the home variable.
+  command blocks or expected output. `--state-dir-env NAME` renames the managed
+  state-directory variable for applications that require their own name.
 - Leave stdin and PTY text literal; they do not substitute these variables.
 - Choose a positive timeout. Frontmatter overrides the command-line default.
 - Document prerequisites when selecting a single case would skip earlier state.

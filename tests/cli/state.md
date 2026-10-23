@@ -4,8 +4,9 @@ setup: mm-test-cli setup ../fixtures/setup.fixture
 
 # Set up and share state
 
-Setup runs once per file; its cases then run in order and share a temporary home.
-The [test CLI](../support/README.md) uses `TEST_HOME`, set by `just test-markdown`.
+Setup runs once per file; its cases then run in order and share a temporary
+state directory.
+The [test CLI](../support/README.md) uses `E2E_HOME`, set by `just test-markdown`.
 
 ## Read the state created by setup
 
@@ -25,11 +26,11 @@ ready
 
 ````markdown markmason
 ```markmason
-mm-test-cli mark "$TEST_HOME/state"
+mm-test-cli mark "$E2E_HOME/state"
 ```
 ````
 
-Overwrite that state using the runner-provided home variable.
+Overwrite that state using the runner-provided state-directory variable.
 
 ## Read the changed state
 
@@ -49,7 +50,7 @@ unexpected
 
 ````markdown markmason
 ```markmason
-mm tests/fixtures/isolation --home-env TEST_HOME
+mm tests/fixtures/isolation
 ```
 
 [These two files](../fixtures/isolation) get separate homes.
@@ -83,7 +84,7 @@ Both files can also run directly:
 
 ````markdown markmason
 ```markmason
-mm tests/fixtures/markdown-setup/walkthrough.md --home-env TEST_HOME
+mm tests/fixtures/markdown-setup/walkthrough.md
 ```
 
 ```expected-contains

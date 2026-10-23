@@ -26,7 +26,7 @@ The deferred block calls that function in the same Bash session at the end.
 
 ````markdown markmason
 ```markmason
-mm tests/fixtures/always/lesson.md --home-env TEST_HOME
+mm tests/fixtures/always/lesson.md
 ```
 
 ```expected-contains
@@ -48,7 +48,7 @@ even when there is no state to remove, and it asks for no further confirmation.
 
 ````markdown markmason
 ```markmason
-mm tests/fixtures/always/lesson.md --step --home-env TEST_HOME
+mm tests/fixtures/always/lesson.md --step
 ```
 
 ```stdin
