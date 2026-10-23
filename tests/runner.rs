@@ -3499,12 +3499,67 @@ fn command_blocks_stop_on_failure_and_check_the_combined_output_and_exit() {
     .unwrap();
     let output = command(dir.path()).output().unwrap();
     assert!(!output.status.success(), "{}", text(&output));
+    let result = text(&output);
     assert!(
-        text(&output).contains("Failed to start"),
-        "{}",
-        text(&output)
+        result.contains(
+            "Failed to start \"missing-executable-markmason\": executable not found on PATH. \
+             Install or build it, then add its directory to PATH"
+        ),
+        "{result}"
     );
     assert!(!marker.exists(), "Commands continued after a startup error");
+}
+
+#[cfg(unix)]
+#[test]
+fn missing_shebang_interpreter_preserves_the_os_startup_error() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let tools = dir.path().join("tools");
+    fs::create_dir(&tools).unwrap();
+    let script = tools.join("broken-shebang");
+    fs::write(&script, "#!/markmason/missing/interpreter\n").unwrap();
+    let mut permissions = fs::metadata(&script).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&script, permissions).unwrap();
+    fs::write(
+        dir.path().join("commands.md"),
+        "```markmason\nbroken-shebang\n```\n",
+    )
+    .unwrap();
+
+    let output = command(dir.path()).env("PATH", tools).output().unwrap();
+    let result = text(&output);
+    assert!(!output.status.success(), "{result}");
+    assert!(
+        result.contains("Failed to start \"broken-shebang\": No such file or directory"),
+        "{result}"
+    );
+    assert!(!result.contains("executable not found on PATH"), "{result}");
+}
+
+#[cfg(unix)]
+#[test]
+fn explicit_missing_paths_preserve_the_os_startup_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let spec = dir.path().join("commands.md");
+    for program in ["missing-tool/", "missing-tool/."] {
+        fs::write(&spec, format!("```markmason\n{program}\n```\n")).unwrap();
+        let output = command(dir.path()).output().unwrap();
+        let result = text(&output);
+        assert!(!output.status.success(), "{program}: {result}");
+        assert!(
+            result.contains(&format!(
+                "Failed to start {program:?}: No such file or directory"
+            )),
+            "{program}: {result}"
+        );
+        assert!(
+            !result.contains("executable not found on PATH"),
+            "{program}: {result}"
+        );
+    }
 }
 
 #[test]

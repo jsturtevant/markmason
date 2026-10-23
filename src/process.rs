@@ -1,6 +1,8 @@
 use crate::{cancellation, matching::pty_text, spec};
 use anyhow::{Context, Result, bail};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+#[cfg(not(windows))]
+use std::fs;
 use std::{
     collections::BTreeMap,
     ffi::OsString,
@@ -37,6 +39,35 @@ pub fn set_env(env: &mut Environment, key: &str, value: impl Into<OsString>) {
     #[cfg(windows)]
     env.retain(|name, _| !crate::windows::same_env_name(name, key));
     env.insert(key.into(), value.into());
+}
+
+fn executable_not_found() -> anyhow::Error {
+    anyhow::anyhow!(
+        "executable not found on PATH. Install or build it, then add its directory to PATH"
+    )
+}
+
+#[cfg(not(windows))]
+fn executable_missing_from_path(program: &str, cwd: &Path, env: &Environment) -> bool {
+    if program.contains('/') || fs::metadata(cwd).is_err() {
+        return false;
+    }
+    let Some(path) = env.get(std::ffi::OsStr::new("PATH")) else {
+        return false;
+    };
+    std::env::split_paths(path).all(|dir| {
+        let dir = if dir.as_os_str().is_empty() {
+            cwd.to_owned()
+        } else if dir.is_absolute() {
+            dir
+        } else {
+            cwd.join(dir)
+        };
+        matches!(
+            fs::metadata(dir.join(program)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound
+        )
+    })
 }
 
 #[derive(Debug)]
@@ -81,7 +112,7 @@ fn executable(program: &str, cwd: &Path, env: &Environment) -> Result<std::path:
             }
         }
     }
-    bail!("Executable not found on PATH: {program}");
+    Err(executable_not_found())
 }
 
 #[cfg(windows)]
@@ -262,7 +293,7 @@ pub fn run_with_progress(
     let program = args.first().context("Empty command in pipeline stage")?;
     #[cfg(windows)]
     let program =
-        executable(program, cwd, env).with_context(|| format!("Failed to start {program}"))?;
+        executable(program, cwd, env).with_context(|| format!("Failed to start {program:?}"))?;
     #[cfg(windows)]
     let tree = crate::windows::ProcessTree::new()?;
     #[cfg(windows)]
@@ -291,9 +322,25 @@ pub fn run_with_progress(
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    let mut child = command
-        .spawn()
-        .with_context(|| format!("Failed to start {program:?}"))?;
+    let mut child = command.spawn().map_err(|error| {
+        let error: anyhow::Error = {
+            #[cfg(not(windows))]
+            {
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && executable_missing_from_path(program, cwd, env)
+                {
+                    executable_not_found()
+                } else {
+                    error.into()
+                }
+            }
+            #[cfg(windows)]
+            {
+                error.into()
+            }
+        };
+        error.context(format!("Failed to start {program:?}"))
+    })?;
     #[cfg(windows)]
     if let Err(error) = tree.start(child.id()) {
         child
