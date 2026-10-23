@@ -40,11 +40,12 @@ test-markdown: build-test-cli
     root="$(pwd -P)" && PATH="$root/target/debug:$root/target/debug/examples:$PATH" cargo run --quiet --locked -- README.md
     root="$(pwd -P)" && PATH="$root/target/debug:$root/target/debug/examples:$PATH" cargo run --quiet --locked -- tests/cli
 
-# Test every executable Markdown guide through the MXC backend.
+# Run normal guides inside MXC, then exercise the sandbox-policy guide.
 test-markdown-sandbox: build-test-cli
     # Inherited PWD can contain a Windows drive-letter colon; use Bash's physical path.
     root="$(pwd -P)" && PATH="$root/target/debug:$root/target/debug/examples:$PATH" cargo run --quiet --locked -- README.md --sandbox mxc
     root="$(pwd -P)" && PATH="$root/target/debug:$root/target/debug/examples:$PATH" cargo run --quiet --locked -- tests/cli --sandbox mxc
+    # This separate guide uses a native driver; its nested mm commands select MXC.
     root="$(pwd -P)" && PATH="$root/target/debug:$root/target/debug/examples:$PATH" cargo run --quiet --locked -- tests/sandbox-cli
 
 # Run the same checks as CI.

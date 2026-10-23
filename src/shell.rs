@@ -218,13 +218,14 @@ impl Session {
         env: &process::Environment,
         timeout: Duration,
         executor: &crate::sandbox::Executor,
+        temporary_root: &Path,
     ) -> Result<Self> {
         let requests = tempfile::Builder::new()
             .prefix("markmason-shell-requests-")
-            .tempdir()?;
+            .tempdir_in(temporary_root)?;
         let directory = tempfile::Builder::new()
             .prefix("markmason-shell-")
-            .tempdir()?;
+            .tempdir_in(temporary_root)?;
         let bootstrap = requests.path().join("session.sh");
         fs::write(&bootstrap, BOOTSTRAP)?;
         // All guest-writable files are opened before launch. Later host writes

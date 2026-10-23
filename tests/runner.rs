@@ -1590,6 +1590,118 @@ fn mxc_sandbox_denies_and_allows_file_access() {
     assert!(allowed_text.contains("Blocks: 1 passed"), "{allowed_text}");
 }
 
+#[cfg(unix)]
+#[test]
+fn sandbox_temporary_storage_rejects_writable_roots_before_parallel_documents() {
+    for shell in ["", "shell: bash\n"] {
+        for explicit_permission in [false, true] {
+            let specs = tempfile::tempdir().unwrap();
+            let workspace = tempfile::tempdir().unwrap();
+            let temporary = workspace.path().join("temporary");
+            fs::create_dir(&temporary).unwrap();
+            let marker = workspace.path().join("must-not-run");
+            fs::write(
+                specs.path().join("a.md"),
+                format!("```markmason\napp mark '{}'\n```\n", shell_path(&marker)),
+            )
+            .unwrap();
+            fs::write(
+                specs.path().join("b.md"),
+                format!(
+                    "---\n{shell}setup: app mark '{}'\n---\n\
+                 ```markmason\napp env E2E_HOME XDG_CONFIG_HOME\n```\n",
+                    shell_path(&marker)
+                ),
+            )
+            .unwrap();
+            let mut run = command(specs.path());
+            run.args(["--sandbox", "mxc", "--parallel", "2", "--cwd"])
+                .arg(if explicit_permission {
+                    specs.path()
+                } else {
+                    workspace.path()
+                })
+                .env("TMPDIR", &temporary);
+            if explicit_permission {
+                run.arg("--sandbox-write").arg(workspace.path());
+            }
+            let output = run.output().unwrap();
+            let transcript = text(&output);
+            assert_eq!(output.status.code(), Some(1), "{transcript}");
+            assert!(
+                transcript.contains("Sandbox temporary directory overlaps writable permission"),
+                "{transcript}"
+            );
+            assert!(!marker.exists(), "{transcript}");
+            assert_eq!(fs::read_dir(&temporary).unwrap().count(), 0, "{transcript}");
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn sandbox_temporary_storage_preserves_native_bash_with_tmpdir_under_cwd() {
+    let workspace = tempfile::tempdir().unwrap();
+    let temporary = workspace.path().join("temporary");
+    fs::create_dir(&temporary).unwrap();
+    fs::write(
+        workspace.path().join("native.md"),
+        "---\nshell: bash\n---\n```markmason\nprintf 'native works\\n'\n```\n\
+         ```expected\nnative works\n```\n",
+    )
+    .unwrap();
+    let output = command(&workspace.path().join("native.md"))
+        .args(["--sandbox", "none", "--cwd"])
+        .arg(workspace.path())
+        .env("TMPDIR", &temporary)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+    assert_eq!(fs::read_dir(temporary).unwrap().count(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn sandbox_temporary_storage_is_shared_only_within_its_document() {
+    let specs = tempfile::tempdir().unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(
+        specs.path().join("a.md"),
+        "```markmason\napp env E2E_HOME XDG_CONFIG_HOME\n```\n",
+    )
+    .unwrap();
+    fs::write(
+        specs.path().join("b.md"),
+        "---\nshell: bash\n---\n```markmason\n\
+         printf '%s\\n' \"$E2E_HOME\" \"$XDG_CONFIG_HOME\" \
+         \"$__markmason_requests\" \"$__markmason_root\"\n```\n",
+    )
+    .unwrap();
+    let output = command(specs.path())
+        .args(["--sandbox", "mxc", "--parallel", "2", "--verbose", "--cwd"])
+        .arg(specs.path())
+        .env("TMPDIR", temporary.path())
+        .output()
+        .unwrap();
+    let transcript = text(&output);
+    assert!(output.status.success(), "{transcript}");
+    let paths: Vec<_> = transcript
+        .lines()
+        .filter(|line| Path::new(line).is_absolute())
+        .map(PathBuf::from)
+        .collect();
+    assert_eq!(paths.len(), 6, "{transcript}");
+    let parent = fs::canonicalize(temporary.path()).unwrap();
+    let run_root = paths[0].parent().unwrap();
+    assert_eq!(run_root.parent(), Some(parent.as_path()), "{transcript}");
+    for (index, path) in paths.iter().enumerate() {
+        assert_eq!(path.parent(), Some(run_root), "{transcript}");
+        assert!(!path.exists(), "{transcript}");
+        assert!(!paths[..index].contains(path), "{transcript}");
+    }
+    assert_eq!(fs::read_dir(temporary.path()).unwrap().count(), 0);
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "requires public network access"]

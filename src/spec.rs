@@ -165,8 +165,12 @@ fn parse_sandbox(value: &Value) -> Result<Sandbox> {
     }
     let backend = map
         .get(Value::from("backend"))
-        .and_then(Value::as_str)
-        .map(parse_backend)
+        .map(|value| {
+            value
+                .as_str()
+                .context("Frontmatter sandbox backend must be a string")
+                .and_then(parse_backend)
+        })
         .transpose()?
         .unwrap_or(crate::sandbox::Backend::Mxc);
     let workdir = map

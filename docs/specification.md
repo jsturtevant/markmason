@@ -143,6 +143,12 @@ directory. Its writable output files are opened by the host before launch and
 read through retained handles. The host never creates files inside a directory
 the contained command can modify.
 
+Fixture state, cloned checkouts, and Bash protocol files live beneath a private
+run directory, created before any commands start. For sandboxed runs, the
+temporary directory (`TMPDIR` on Unix, `TEMP` on Windows) must be outside every
+document's writable permissions; unsafe layouts fail before setup, including
+with `--parallel`. Native runs do not impose this restriction.
+
 ### Partial output assertions
 
 Use `expected-substring` for a stable phrase inside a longer line, without

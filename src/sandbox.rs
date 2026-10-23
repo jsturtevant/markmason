@@ -246,6 +246,9 @@ impl Executor {
     }
 
     pub fn with_shell_paths(&self, requests: &Path, responses: &Path) -> Result<Self> {
+        if self.policy.backend == Backend::None {
+            return Ok(self.clone());
+        }
         let mut executor = self.clone();
         executor.readonly.push(dunce::canonicalize(requests)?);
         executor.readwrite.push(dunce::canonicalize(responses)?);

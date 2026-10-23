@@ -207,6 +207,29 @@ struct HostContext {
     cwd: PathBuf,
     sandbox: sandbox::CliPolicy,
     tools: sandbox::ToolPermissions,
+    temporary: Arc<TempDir>,
+}
+
+fn temporary_root(sandboxed: bool, writable_roots: &[PathBuf]) -> Result<TempDir> {
+    let requested = std::path::absolute(env::temp_dir())?;
+    let resolved = dunce::canonicalize(&requested)
+        .with_context(|| format!("Cannot resolve temporary directory {}", requested.display()))?;
+    if sandboxed
+        && let Some(root) = writable_roots
+            .iter()
+            .find(|root| requested.starts_with(root) || resolved.starts_with(root))
+    {
+        bail!(
+            "Sandbox temporary directory overlaps writable permission {}: {}. \
+             Choose a temporary directory outside sandbox-writable paths \
+             using TMPDIR (TEMP on Windows).",
+            root.display(),
+            requested.display()
+        );
+    }
+    Ok(Builder::new()
+        .prefix("markmason-run-")
+        .tempdir_in(resolved)?)
 }
 
 fn gh_config_dir() -> Result<PathBuf> {
@@ -235,8 +258,12 @@ impl Fixture {
         host: &HostContext,
         mut env: process::Environment,
     ) -> Result<Self> {
-        let home = Builder::new().prefix("markmason-home-").tempdir()?;
-        let config = Builder::new().prefix("markmason-xdg-").tempdir()?;
+        let home = Builder::new()
+            .prefix("markmason-home-")
+            .tempdir_in(host.temporary.path())?;
+        let config = Builder::new()
+            .prefix("markmason-xdg-")
+            .tempdir_in(host.temporary.path())?;
         let processes = process::Scope::default();
         for (key, value) in [
             ("NO_COLOR", "1"),
@@ -267,7 +294,9 @@ impl Fixture {
             if auth.code != 0 {
                 bail!("gh not authenticated. Run 'gh auth login'.\n{}", auth.text);
             }
-            let repo = Builder::new().prefix("markmason-repo-").tempdir()?;
+            let repo = Builder::new()
+                .prefix("markmason-repo-")
+                .tempdir_in(host.temporary.path())?;
             let cloned = process::run(
                 &[
                     "gh".into(),
@@ -333,6 +362,7 @@ impl Fixture {
                 spec.timeout
                     .unwrap_or(Duration::from_secs_f64(options.timeout)),
                 &executor,
+                host.temporary.path(),
             )?;
             if spec.cases.iter().any(|case| case.always) {
                 shell.enable_cleanup()?;
@@ -1585,20 +1615,23 @@ fn run(options: Options) -> Result<bool> {
             sandbox::Policy::resolve(&sandbox, spec.sandbox.as_ref())?.writable_roots(&cwd),
         );
     }
+    let sandboxed = options.sandbox == sandbox::Backend::Mxc
+        || specs.iter().any(|(_, spec, _)| {
+            spec.sandbox
+                .as_ref()
+                .is_some_and(|policy| policy.backend == sandbox::Backend::Mxc)
+        });
+    let temporary = Arc::new(temporary_root(sandboxed, &writable_roots)?);
     let host = HostContext {
         gh_config: gh_config_dir()?,
         cwd,
         sandbox,
-        tools: if options.sandbox == sandbox::Backend::Mxc
-            || specs.iter().any(|(_, spec, _)| {
-                spec.sandbox
-                    .as_ref()
-                    .is_some_and(|policy| policy.backend == sandbox::Backend::Mxc)
-            }) {
+        tools: if sandboxed {
             sandbox::ToolPermissions::discover(&env::vars_os().collect(), &writable_roots)?
         } else {
             sandbox::ToolPermissions::default()
         },
+        temporary,
     };
     if !options.step {
         return match options.parallel {
