@@ -62,6 +62,7 @@ mm --list                  # Discover without executing
 mm --fail-fast             # Stop after the first failed document cleans up
 mm --parallel              # Use available logical CPUs for independent files
 mm --parallel 8            # Bound file execution to eight workers
+mm path/to/specs --sandbox mxc  # Contain commands with MXC
 mm --file-pattern greet    # Select files by regex
 mm --step                  # Pick a file and walk through it
 mm --step --file-pattern '^greet\.md$'  # Skip the picker
@@ -86,6 +87,7 @@ Learn more with real examples from `mm`:
 - [Runtime failures and timeouts](tests/cli/runtime-errors.md)
 - [Setup and state](tests/cli/state.md)
 - [Required inputs](tests/cli/inputs.md)
+- [Sandboxed execution](tests/sandbox-cli/sandbox.md)
 - [Repository fixtures](tests/cli/fixtures.md)
 - [Persistent Bash sessions](tests/cli/shell.md)
 - [Deferred cleanup](tests/cli/cleanup.md)

@@ -77,6 +77,93 @@ also removed from their contents.
 - Executables resolve through `PATH`, relative to the working directory.
 - `node ./helper.js` resolves the script beside the Markdown file.
 
+## Sandboxed execution
+
+`--sandbox mxc` opts the selected run into MXC's OS-native Process containment:
+Bubblewrap on Linux, ProcessContainer on Windows, and Seatbelt on macOS. Native
+execution remains the default. A document can opt in with scalar frontmatter:
+
+Process containment is used instead of MXC Hyperlight or HLUK because ordinary
+Markmason blocks run arbitrary host CLIs, PTYs, and persistent real Bash
+sessions. Hyperlight/HLUK guest runtimes do not transparently preserve those
+host-command semantics.
+
+```yaml
+sandbox: mxc
+```
+
+CLI sandboxing is a security ceiling. A document cannot use `sandbox: none` to
+disable CLI-required containment. The object form can only reduce working
+directory access:
+
+```yaml
+sandbox:
+  backend: mxc
+  workdir: ro
+```
+
+`--cwd` selects the effective working directory. `--sandbox-workdir rw|ro|none`
+controls its sandbox mount and defaults to `rw`. The isolated state directory
+and configuration directory remain writable. Repeated `--sandbox-read PATH` and
+`--sandbox-write PATH` permissions append canonical host mounts; conflicting
+read-only/read-write overlaps are rejected before setup.
+
+With `clone:`, the checkout is the effective working directory. The original
+`--cwd` is mounted only for a top-level direct setup command that runs there.
+Markdown prerequisites and persistent Bash setup run in the checkout; files
+outside it need explicit filesystem permissions.
+
+Network egress and ingress are denied by default. Repeated
+`--sandbox-net-allow HOST[:PORT]` entries permit outbound TCP destinations.
+Frontmatter cannot add filesystem or network privileges.
+
+Setup, ordinary commands, pipeline stages, PTY commands, persistent Bash, and
+deferred cleanup use the same document sandbox. `clone:` remains a host-owned
+authenticated `gh repo clone`; the resulting temporary checkout is mounted as
+the sandbox working directory without mounting GitHub credentials.
+
+When any selected document uses MXC, all selected `clone:` checkouts are prepared
+before document inputs, setup, or commands run, using the caller's environment.
+This prevents an earlier document from replacing tools used by a later host
+clone. A clone failure aborts before workloads start; `--fail-fast` may leave
+prepared checkouts unused. Native-only runs keep per-document cloning, and
+`--list` never clones.
+
+MXC errors include the backend's operation, native code, and remediation when
+available. Linux and macOS do not always expose a denied path or destination;
+Markmason then preserves the command error and prints generic
+`--sandbox-read`/`--sandbox-write` or `--sandbox-net-allow` guidance without
+guessing the resource. Backend unavailability is an error and never falls back
+to native execution.
+
+Hints and warnings are runner diagnostics, separate from application output.
+They are never passed into pipelines or included in output assertions.
+
+MXC enforces filesystem permissions for the contained commands, not for the
+Markmason host process. Its [filesystem helpers return policy fragments for the
+caller to compose](https://github.com/microsoft/mxc/blob/fda29ac63bc306b7f97f3b86b4b63d44f7f40cf2/src/mxc-sdk/src/policy.rs#L37-L44);
+discovery is not an authorization decision.
+
+Markmason approves operator paths and tool permissions once, before any document
+runs. Redundant descendant mounts are removed; a mount source beneath another
+document's writable root is rejected. Tool directories within writable roots
+are available only through an existing permission, never separately remounted.
+Tool discovery's optional host-history writes and whole-drive reads are not
+adopted. These rules prevent commands from turning symlink changes into new
+permissions; they do not protect against unrelated host processes changing the
+approved filesystem.
+
+Persistent Bash reads scripts and stdin from a separate, read-only request
+directory. Its writable output files are opened by the host before launch and
+read through retained handles. The host never creates files inside a directory
+the contained command can modify.
+
+Fixture state, cloned checkouts, and Bash protocol files live beneath a private
+run directory, created before any commands start. For sandboxed runs, the
+temporary directory (`TMPDIR` on Unix, `TEMP` on Windows) must be outside every
+document's writable permissions; unsafe layouts fail before setup, including
+with `--parallel`. Native runs do not impose this restriction.
+
 ### Partial output assertions
 
 Use `expected-substring` for a stable phrase inside a longer line, without

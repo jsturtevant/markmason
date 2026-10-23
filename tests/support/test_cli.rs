@@ -4,6 +4,7 @@
 use std::{
     env, fs,
     io::{self, Read, Write},
+    net::TcpStream,
     path::Path,
     process::Command,
     thread,
@@ -26,6 +27,20 @@ fn main() {
     }
     match args[1].as_str() {
         "echo" => println!("{}", args[2..].join(" ")),
+        "read-file" => print!("{}", fs::read_to_string(&args[2]).unwrap()),
+        "write-file" => fs::write(&args[2], &args[3]).unwrap(),
+        #[cfg(unix)]
+        "replace-dir-with-symlink" => {
+            let source = Path::new(&args[2]);
+            let moved = source.with_extension("moved");
+            fs::rename(source, &moved).unwrap();
+            std::os::unix::fs::symlink(&args[3], source).unwrap();
+        }
+        "connect" => {
+            let mut stream = TcpStream::connect(&args[2]).unwrap();
+            stream.write_all(b"ready").unwrap();
+            println!("connected");
+        }
         "args" => println!("{:?}", &args[2..]),
         "lines" => {
             for line in &args[2..] {
@@ -38,6 +53,10 @@ fn main() {
             if args[1] == "fail" {
                 std::process::exit(2);
             }
+        }
+        "permission-denied" => {
+            eprintln!("Permission denied");
+            std::process::exit(2);
         }
         "cat" => {
             let mut s = String::new();

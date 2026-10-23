@@ -1,3 +1,5 @@
+#[cfg(target_os = "linux")]
+use std::net::ToSocketAddrs;
 use std::{
     fs,
     io::{self, BufRead, Write},
@@ -952,10 +954,11 @@ fn later_always_blocks_run_even_after_cleanup_failures() {
     for shell in ["", "shell: bash\n"] {
         let dir = tempfile::tempdir().unwrap();
         let marker = dir.path().join("last-cleanup");
+        let timeout = if cfg!(windows) { 2.0 } else { 0.5 };
         fs::write(
             dir.path().join("lesson.md"),
             format!(
-                "---\n{shell}timeout: 0.5\n---\n\
+                "---\n{shell}timeout: {timeout}\n---\n\
                  ```markmason\napp echo ready\n```\n\
                  ```markmason always\napp echo actual\n```\n```expected\nmissing\n```\n\
                  ```markmason always\napp sleep\n```\n\
@@ -1543,6 +1546,658 @@ fn invalid_regex_fails_before_running_commands() {
         text(&output)
     );
     assert!(!marker.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn mxc_sandbox_denies_and_allows_file_access() {
+    let specs = tempfile::tempdir().unwrap();
+    let private = tempfile::tempdir().unwrap();
+    let secret = private.path().join("secret.txt");
+    fs::write(&secret, "sandbox secret\n").unwrap();
+    fs::write(
+        specs.path().join("access.md"),
+        format!(
+            "## Read an approved file\n```markmason\napp read-file '{}'\n```\n\
+             ```expected\nsandbox secret\n```\n",
+            shell_path(&secret)
+        ),
+    )
+    .unwrap();
+
+    let denied = command(specs.path())
+        .args(["--sandbox", "mxc"])
+        .output()
+        .unwrap();
+    let denied_text = text(&denied);
+    assert_eq!(denied.status.code(), Some(1), "{denied_text}");
+    assert!(
+        denied_text.contains("No such file") || denied_text.contains("cannot find"),
+        "{denied_text}"
+    );
+    assert!(
+        denied_text.contains("permit the path with --sandbox-read PATH"),
+        "{denied_text}"
+    );
+
+    let allowed = command(specs.path())
+        .args(["--sandbox", "mxc", "--sandbox-read"])
+        .arg(private.path())
+        .output()
+        .unwrap();
+    let allowed_text = text(&allowed);
+    assert!(allowed.status.success(), "{allowed_text}");
+    assert!(allowed_text.contains("Blocks: 1 passed"), "{allowed_text}");
+}
+
+#[cfg(unix)]
+#[test]
+fn sandbox_temporary_storage_rejects_writable_roots_before_parallel_documents() {
+    for shell in ["", "shell: bash\n"] {
+        for explicit_permission in [false, true] {
+            let specs = tempfile::tempdir().unwrap();
+            let workspace = tempfile::tempdir().unwrap();
+            let temporary = workspace.path().join("temporary");
+            fs::create_dir(&temporary).unwrap();
+            let marker = workspace.path().join("must-not-run");
+            fs::write(
+                specs.path().join("a.md"),
+                format!("```markmason\napp mark '{}'\n```\n", shell_path(&marker)),
+            )
+            .unwrap();
+            fs::write(
+                specs.path().join("b.md"),
+                format!(
+                    "---\n{shell}setup: app mark '{}'\n---\n\
+                 ```markmason\napp env E2E_HOME XDG_CONFIG_HOME\n```\n",
+                    shell_path(&marker)
+                ),
+            )
+            .unwrap();
+            let mut run = command(specs.path());
+            run.args(["--sandbox", "mxc", "--parallel", "2", "--cwd"])
+                .arg(if explicit_permission {
+                    specs.path()
+                } else {
+                    workspace.path()
+                })
+                .env("TMPDIR", &temporary);
+            if explicit_permission {
+                run.arg("--sandbox-write").arg(workspace.path());
+            }
+            let output = run.output().unwrap();
+            let transcript = text(&output);
+            assert_eq!(output.status.code(), Some(1), "{transcript}");
+            assert!(
+                transcript.contains("Sandbox temporary directory overlaps writable permission"),
+                "{transcript}"
+            );
+            assert!(!marker.exists(), "{transcript}");
+            assert_eq!(fs::read_dir(&temporary).unwrap().count(), 0, "{transcript}");
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn sandbox_temporary_storage_preserves_native_bash_with_tmpdir_under_cwd() {
+    let workspace = tempfile::tempdir().unwrap();
+    let temporary = workspace.path().join("temporary");
+    fs::create_dir(&temporary).unwrap();
+    fs::write(
+        workspace.path().join("native.md"),
+        "---\nshell: bash\n---\n```markmason\nprintf 'native works\\n'\n```\n\
+         ```expected\nnative works\n```\n",
+    )
+    .unwrap();
+    let output = command(&workspace.path().join("native.md"))
+        .args(["--sandbox", "none", "--cwd"])
+        .arg(workspace.path())
+        .env("TMPDIR", &temporary)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+    assert_eq!(fs::read_dir(temporary).unwrap().count(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn sandbox_temporary_storage_is_shared_only_within_its_document() {
+    let specs = tempfile::tempdir().unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(
+        specs.path().join("a.md"),
+        "```markmason\napp env E2E_HOME XDG_CONFIG_HOME\n```\n",
+    )
+    .unwrap();
+    fs::write(
+        specs.path().join("b.md"),
+        "---\nshell: bash\n---\n```markmason\n\
+         printf '%s\\n' \"$E2E_HOME\" \"$XDG_CONFIG_HOME\" \
+         \"$__markmason_requests\" \"$__markmason_root\"\n```\n",
+    )
+    .unwrap();
+    let output = command(specs.path())
+        .args(["--sandbox", "mxc", "--parallel", "2", "--verbose", "--cwd"])
+        .arg(specs.path())
+        .env("TMPDIR", temporary.path())
+        .output()
+        .unwrap();
+    let transcript = text(&output);
+    assert!(output.status.success(), "{transcript}");
+    let paths: Vec<_> = transcript
+        .lines()
+        .filter(|line| Path::new(line).is_absolute())
+        .map(PathBuf::from)
+        .collect();
+    assert_eq!(paths.len(), 6, "{transcript}");
+    let parent = fs::canonicalize(temporary.path()).unwrap();
+    let run_root = paths[0].parent().unwrap();
+    assert_eq!(run_root.parent(), Some(parent.as_path()), "{transcript}");
+    for (index, path) in paths.iter().enumerate() {
+        assert_eq!(path.parent(), Some(run_root), "{transcript}");
+        assert!(!path.exists(), "{transcript}");
+        assert!(!paths[..index].contains(path), "{transcript}");
+    }
+    assert_eq!(fs::read_dir(temporary.path()).unwrap().count(), 0);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires public network access"]
+fn mxc_sandbox_denies_and_allows_network_access() {
+    let specs = tempfile::tempdir().unwrap();
+    let address = ("example.com", 80)
+        .to_socket_addrs()
+        .unwrap()
+        .find(|address| address.is_ipv4())
+        .expect("example.com must resolve to IPv4");
+    fs::write(
+        specs.path().join("network.md"),
+        format!(
+            "## Connect to an approved service\n```markmason\napp connect {address}\n```\n\
+             ```expected\nconnected\n```\n"
+        ),
+    )
+    .unwrap();
+    let denied = command(specs.path())
+        .args(["--sandbox", "mxc"])
+        .output()
+        .unwrap();
+    let denied_text = text(&denied);
+    assert_eq!(denied.status.code(), Some(1), "{denied_text}");
+    assert!(
+        denied_text.contains("--sandbox-net-allow HOST[:PORT]"),
+        "{denied_text}"
+    );
+    let allowed = command(specs.path())
+        .args([
+            "--sandbox",
+            "mxc",
+            "--sandbox-net-allow",
+            &address.to_string(),
+        ])
+        .output()
+        .unwrap();
+    let allowed_text = text(&allowed);
+    assert!(allowed.status.success(), "{allowed_text}");
+    assert!(allowed_text.contains("Blocks: 1 passed"), "{allowed_text}");
+}
+
+#[cfg(not(windows))]
+#[test]
+fn mxc_sandbox_runs_pty_and_persistent_bash() {
+    let specs = tempfile::tempdir().unwrap();
+    fs::write(
+        specs.path().join("interactive.md"),
+        "## Answer terminal prompts\n```markmason\napp interactive\n```\n```pty\n\
+         match: Ready?\nsend: Ada{enter}\nmatch: Ready?\nsend: ready{enter}\n```\n\
+         ```expected-contains\naccepted Ada\ndone ready\n```\n",
+    )
+    .unwrap();
+    fs::write(
+        specs.path().join("shell.md"),
+        "---\nshell: bash\ntimeout: 1\n---\n\
+         ## Keep the session beyond one command timeout\n```markmason\n\
+         app pause\napp pause\napp pause\napp pause\n```\n\
+         ## Set shell state\n```markmason\nMESSAGE=hello\n```\n\
+         ## Reuse shell state\n```markmason\nprintf '%s\\n' \"$MESSAGE\"\n```\n\
+         ```expected\nhello\n```\n",
+    )
+    .unwrap();
+    let output = command(specs.path())
+        .args(["--sandbox", "mxc"])
+        .output()
+        .unwrap();
+    let transcript = text(&output);
+    assert!(output.status.success(), "{transcript}");
+    assert!(transcript.contains("Documents: 2 passed"), "{transcript}");
+    assert!(transcript.contains("Blocks: 4 passed"), "{transcript}");
+}
+
+#[cfg(not(windows))]
+#[test]
+fn mxc_sandbox_frontmatter_cannot_relax_the_cli() {
+    let specs = tempfile::tempdir().unwrap();
+    let lesson = specs.path().join("lesson.md");
+    fs::write(
+        &lesson,
+        "---\nsandbox: mxc\n---\n## Run in the requested sandbox\n\
+         ```markmason\napp echo ready\n```\n```expected\nready\n```\n",
+    )
+    .unwrap();
+    let opted_in = command(specs.path()).output().unwrap();
+    assert!(opted_in.status.success(), "{}", text(&opted_in));
+
+    let marker = specs.path().join("must-not-run");
+    fs::write(
+        &lesson,
+        format!(
+            "---\nsandbox: none\n---\n## Do not weaken the CLI policy\n\
+             ```markmason\napp mark '{}'\n```\n",
+            shell_path(&marker)
+        ),
+    )
+    .unwrap();
+    let rejected = command(specs.path())
+        .args(["--sandbox", "mxc"])
+        .output()
+        .unwrap();
+    let transcript = text(&rejected);
+    assert_eq!(rejected.status.code(), Some(1), "{transcript}");
+    assert!(
+        transcript.contains("document requested sandbox 'none', but the CLI requires 'mxc'"),
+        "{transcript}"
+    );
+    assert!(!marker.exists(), "{transcript}");
+}
+
+#[test]
+fn markdown_setup_cannot_change_the_callers_sandbox_policy() {
+    for (caller, prerequisite, args) in [
+        ("none", "mxc", Vec::<&str>::new()),
+        ("mxc", "none", vec!["--sandbox", "mxc"]),
+    ] {
+        let specs = tempfile::tempdir().unwrap();
+        fs::write(
+            specs.path().join("setup.md"),
+            format!(
+                "---\nsandbox: {prerequisite}\n---\n\
+                 ```markmason\napp echo setup\n```\n"
+            ),
+        )
+        .unwrap();
+        fs::write(
+            specs.path().join("lesson.md"),
+            format!(
+                "---\nsandbox: {caller}\nsetup: mm setup.md\n---\n\
+                 ```markmason\napp echo must-not-run\n```\n"
+            ),
+        )
+        .unwrap();
+        let output = command(&specs.path().join("lesson.md"))
+            .args(args)
+            .output()
+            .unwrap();
+        let transcript = text(&output);
+        assert_eq!(output.status.code(), Some(1), "{transcript}");
+        assert!(
+            transcript.contains("Incompatible Markdown setup"),
+            "{transcript}"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn mxc_sandbox_workdir_access_can_be_restricted_and_regranted() {
+    let specs = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let marker = workspace.path().join("created.txt");
+    fs::write(
+        specs.path().join("workdir.md"),
+        format!(
+            "## Write in the selected working directory\n```markmason\n\
+             app write-file '{}' ready\n```\n",
+            shell_path(&marker)
+        ),
+    )
+    .unwrap();
+
+    for mode in ["ro", "none"] {
+        let denied = command(specs.path())
+            .args(["--sandbox", "mxc", "--sandbox-workdir", mode, "--cwd"])
+            .arg(workspace.path())
+            .output()
+            .unwrap();
+        let transcript = text(&denied);
+        assert_eq!(denied.status.code(), Some(1), "{mode}: {transcript}");
+        assert!(!marker.exists(), "{mode}: {transcript}");
+        assert!(
+            transcript.contains("--sandbox-write PATH"),
+            "{mode}: {transcript}"
+        );
+    }
+
+    fs::write(
+        specs.path().join("workdir.md"),
+        "## Write relative to the selected working directory\n\
+         ```markmason\napp write-file created.txt ready\n```\n",
+    )
+    .unwrap();
+    let allowed = command(specs.path())
+        .args([
+            "--sandbox",
+            "mxc",
+            "--sandbox-workdir",
+            "none",
+            "--sandbox-write",
+        ])
+        .arg(workspace.path())
+        .arg("--cwd")
+        .arg(workspace.path())
+        .output()
+        .unwrap();
+    let transcript = text(&allowed);
+    assert!(allowed.status.success(), "{transcript}");
+    assert_eq!(fs::read_to_string(&marker).unwrap(), "ready");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn mxc_sandbox_does_not_reapprove_a_replaced_workdir() {
+    for separate_documents in [false, true] {
+        let specs = tempfile::tempdir().unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        let workdir = parent.path().join("work");
+        fs::create_dir(&workdir).unwrap();
+        let private = tempfile::tempdir().unwrap();
+        fs::write(private.path().join("secret.txt"), "must-not-leak").unwrap();
+        let replace = format!(
+            "```markmason\napp replace-dir-with-symlink '{}' '{}'\n```\n",
+            shell_path(&workdir),
+            shell_path(private.path())
+        );
+        let read = "```markmason\napp read-file secret.txt\n```\n";
+        fs::write(
+            specs.path().join("a.md"),
+            if separate_documents {
+                replace.clone()
+            } else {
+                replace + read
+            },
+        )
+        .unwrap();
+        if separate_documents {
+            fs::write(specs.path().join("b.md"), read).unwrap();
+        }
+        let output = command(specs.path())
+            .args([
+                "--sandbox",
+                "mxc",
+                "--sandbox-workdir",
+                "none",
+                "--sandbox-write",
+            ])
+            .arg(parent.path())
+            .arg("--cwd")
+            .arg(&workdir)
+            .output()
+            .unwrap();
+        let transcript = text(&output);
+        assert_eq!(output.status.code(), Some(1), "{transcript}");
+        assert!(transcript.contains("working directory"), "{transcript}");
+        assert!(!transcript.contains("must-not-leak"), "{transcript}");
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn mxc_sandbox_does_not_reapprove_explicit_permissions_between_documents() {
+    for redundant_parent in [false, true] {
+        let specs = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let nested = workspace.path().join("data");
+        fs::create_dir(&nested).unwrap();
+        let private = tempfile::tempdir().unwrap();
+        let secret = private.path().join("secret.txt");
+        fs::write(&secret, "must-not-leak-through-explicit-permission").unwrap();
+        fs::write(
+            specs.path().join("a.md"),
+            format!(
+                "```markmason\napp replace-dir-with-symlink '{}' '{}'\n```\n",
+                shell_path(&nested),
+                shell_path(private.path())
+            ),
+        )
+        .unwrap();
+        fs::write(
+            specs.path().join("b.md"),
+            format!(
+                "```markmason\napp read-file '{}'\n```\n",
+                shell_path(&secret)
+            ),
+        )
+        .unwrap();
+        let mut run = command(specs.path());
+        run.args(["--sandbox", "mxc", "--cwd"])
+            .arg(workspace.path())
+            .arg("--sandbox-write")
+            .arg(&nested)
+            .arg("--verbose");
+        if redundant_parent {
+            run.arg("--sandbox-write").arg(workspace.path());
+        }
+        let output = run.output().unwrap();
+        let transcript = text(&output);
+        assert_eq!(output.status.code(), Some(1), "{transcript}");
+        assert!(
+            !transcript.contains("must-not-leak-through-explicit-permission"),
+            "{transcript}"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn mxc_sandbox_does_not_reapprove_replaced_tool_directories() {
+    for separate_documents in [false, true] {
+        let specs = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let tools = workspace.path().join("bin");
+        fs::create_dir(&tools).unwrap();
+        let private = tempfile::tempdir().unwrap();
+        let secret = private.path().join("secret.txt");
+        fs::write(&secret, "must-not-leak-through-tools").unwrap();
+        let replace = format!(
+            "```markmason\napp replace-dir-with-symlink '{}' '{}'\n```\n",
+            shell_path(&tools),
+            shell_path(private.path()),
+        );
+        let read = format!(
+            "```markmason\napp read-file '{}'\n```\n",
+            shell_path(&secret)
+        );
+        fs::write(
+            specs.path().join("a.md"),
+            if separate_documents {
+                replace.clone()
+            } else {
+                replace + &read
+            },
+        )
+        .unwrap();
+        if separate_documents {
+            fs::write(specs.path().join("b.md"), read).unwrap();
+        }
+        let mut run = command(specs.path());
+        let original_path = run
+            .get_envs()
+            .find(|(key, _)| *key == "PATH")
+            .unwrap()
+            .1
+            .unwrap()
+            .to_owned();
+        let path = std::env::join_paths(
+            std::iter::once(tools).chain(std::env::split_paths(&original_path)),
+        )
+        .unwrap();
+        let output = run
+            .args(["--sandbox", "mxc", "--cwd"])
+            .arg(workspace.path())
+            .env("PATH", path)
+            .arg("--verbose")
+            .output()
+            .unwrap();
+        let transcript = text(&output);
+        assert_eq!(output.status.code(), Some(1), "{transcript}");
+        assert!(
+            !transcript.contains("must-not-leak-through-tools"),
+            "{transcript}"
+        );
+    }
+}
+
+#[cfg(not(windows))]
+#[test]
+fn mxc_sandbox_runs_setup_and_deferred_cleanup() {
+    let specs = tempfile::tempdir().unwrap();
+    fs::write(
+        specs.path().join("lifecycle.md"),
+        "---\nsetup: app write-file setup.txt ready\n---\n\
+         ## Read setup state\n```markmason\napp read-file setup.txt\n```\n```expected\nready\n```\n\
+         ## Finish cleanup\n```markmason always\napp write-file cleanup.txt done\n```\n",
+    )
+    .unwrap();
+    let output = command(specs.path())
+        .args(["--sandbox", "mxc", "--cwd"])
+        .arg(specs.path())
+        .output()
+        .unwrap();
+    let transcript = text(&output);
+    assert!(output.status.success(), "{transcript}");
+    assert_eq!(
+        fs::read_to_string(specs.path().join("cleanup.txt")).unwrap(),
+        "done"
+    );
+    assert!(transcript.contains("Always 2/2"), "{transcript}");
+}
+
+#[cfg(not(windows))]
+#[test]
+fn mxc_sandbox_timeout_still_runs_deferred_cleanup() {
+    let specs = tempfile::tempdir().unwrap();
+    fs::write(
+        specs.path().join("timeout.md"),
+        "---\ntimeout: 1\n---\n## Exceed the timeout\n```markmason\napp sleep\n```\n\
+         ## Finish cleanup\n```markmason always\napp write-file cleanup.txt done\n```\n",
+    )
+    .unwrap();
+    let output = command(specs.path())
+        .args(["--sandbox", "mxc", "--cwd"])
+        .arg(specs.path())
+        .output()
+        .unwrap();
+    let transcript = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{transcript}");
+    assert!(transcript.contains("timed out"), "{transcript}");
+    assert!(specs.path().join("cleanup.txt").exists(), "{transcript}");
+    assert_eq!(
+        fs::read_to_string(specs.path().join("cleanup.txt")).unwrap(),
+        "done"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn mxc_sandbox_output_drain_remains_bounded() {
+    let specs = tempfile::tempdir().unwrap();
+    let started = specs.path().join("started");
+    fs::write(
+        specs.path().join("drain.md"),
+        format!(
+            "---\ntimeout: 1\n---\n## Leave output open in a descendant\n\
+             ```markmason\napp drain '{}'\n```\n",
+            shell_path(&started)
+        ),
+    )
+    .unwrap();
+    let began = Instant::now();
+    let output = command(specs.path())
+        .args(["--sandbox", "mxc", "--sandbox-write"])
+        .arg(specs.path())
+        .output()
+        .unwrap();
+    assert!(
+        began.elapsed() < Duration::from_secs(5),
+        "{}",
+        text(&output)
+    );
+    assert!(started.exists(), "{}", text(&output));
+}
+
+#[cfg(unix)]
+#[test]
+fn mxc_bash_capture_paths_cannot_redirect_host_reads() {
+    let specs = tempfile::tempdir().unwrap();
+    let private = tempfile::tempdir().unwrap();
+    let secret = private.path().join("secret.txt");
+    fs::write(&secret, "must-not-leak-from-host").unwrap();
+    fs::write(
+        specs.path().join("symlink.md"),
+        format!(
+            "---\nshell: bash\nsandbox: mxc\n---\n## Replace the visible capture path\n\
+             ```markmason\nrm -f \"$__markmason_root/stdout\" && ln -s '{}' \"$__markmason_root/stdout\"\n```\n",
+            shell_path(&secret)
+        ),
+    )
+    .unwrap();
+    let output = command(specs.path()).arg("--verbose").output().unwrap();
+    let transcript = text(&output);
+    assert!(output.status.success(), "{transcript}");
+    assert!(
+        !transcript.contains("must-not-leak-from-host"),
+        "{transcript}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn mxc_bash_requests_cannot_be_replaced_with_symlinks() {
+    let specs = tempfile::tempdir().unwrap();
+    let private = tempfile::tempdir().unwrap();
+    let victim = private.path().join("state.txt");
+    fs::write(&victim, "host-state-must-not-change").unwrap();
+    fs::write(
+        specs.path().join("requests.md"),
+        format!(
+            "---\nshell: bash\nsandbox: mxc\n---\n\
+             ```markmason\n\
+             for name in script input boundary ready; do\n\
+               if rm \"$__markmason_request/$name\"; then\n\
+                 printf 'host request was writable: %s\\n' \"$name\"\n\
+                 exit 1\n\
+               fi\n\
+             done\n\
+             if ln -s '{}' \"${{__markmason_request%/*}}/command-1\"; then\n\
+               printf 'host request parent was writable\\n'\n\
+               exit 1\n\
+             fi\n\
+             printf 'requests protected\\n'\n```\n\
+             ```expected\nrequests protected\n```\n\
+             ```markmason\ncat\n```\n```stdin\nnext input\n```\n\
+             ```expected\nnext input\n```\n",
+            shell_path(&victim)
+        ),
+    )
+    .unwrap();
+    let output = command(specs.path()).output().unwrap();
+    let transcript = text(&output);
+    assert!(output.status.success(), "{transcript}");
+    assert_eq!(
+        fs::read_to_string(&victim).unwrap(),
+        "host-state-must-not-change"
+    );
 }
 
 fn step_process(
@@ -3999,28 +4654,305 @@ fn clone_fixture_is_isolated_and_removed() {
         .path()
         .join(format!("gh{}", std::env::consts::EXE_SUFFIX));
     fs::hard_link(helper(), &gh).unwrap();
-    fs::write(dir.path().join("clone.md"), "---\nclone: owner/repo\n---\n```markmason\napp cloned\n```\n```expected\nyes\n```\n```markmason\napp echo $REPO_ROOT\n```\n").unwrap();
+    fs::write(dir.path().join("clone.md"), "---\nclone: owner/repo\nsetup: app mark host-setup\n---\n```markmason\napp cloned\n```\n```expected\nyes\n```\n```markmason\napp echo $REPO_ROOT\n```\n").unwrap();
     let path = std::env::join_paths(
         [dir.path().to_owned(), helper().parent().unwrap().to_owned()]
             .into_iter()
             .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
     )
     .unwrap();
-    let output = command(dir.path())
+    let sandbox_modes: &[bool] = if cfg!(windows) {
+        &[false]
+    } else {
+        &[false, true]
+    };
+    for &sandboxed in sandbox_modes {
+        let setup_marker = dir.path().join("host-setup");
+        let _ = fs::remove_file(&setup_marker);
+        let mut runner = command(dir.path());
+        runner
+            .env("PATH", &path)
+            .arg("--verbose")
+            .arg("--cwd")
+            .arg(dir.path());
+        if sandboxed {
+            runner.args(["--sandbox", "mxc"]);
+        }
+        let output = runner.output().unwrap();
+        assert!(output.status.success(), "{}", text(&output));
+        assert!(setup_marker.exists(), "{}", text(&output));
+        let text = text(&output);
+        let cloned = text
+            .lines()
+            .find(|line| line.contains("markmason-repo-") && !line.contains("PASS"))
+            .unwrap();
+        assert!(
+            !Path::new(cloned).exists(),
+            "sandboxed={sandboxed}: cloned fixture was not cleaned up: {cloned}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn mxc_clone_documents_do_not_mount_an_unused_original_cwd() {
+    for frontmatter in [
+        "",
+        "setup: mm setup.md\n",
+        "shell: bash\nsetup: export PREPARED=ready\n",
+    ] {
+        let specs = tempfile::tempdir().unwrap();
+        let original = tempfile::tempdir().unwrap();
+        let tools = tempfile::tempdir().unwrap();
+        fs::hard_link(helper(), tools.path().join("gh")).unwrap();
+        let secret = original.path().join("private.txt");
+        fs::write(&secret, "must-not-expose-original-cwd").unwrap();
+        fs::write(
+            specs.path().join("setup.md"),
+            "---\nsetup: app write-file prepared ready\n---\n\
+             ```markmason\napp read-file prepared\n```\n```expected\nready\n```\n",
+        )
+        .unwrap();
+        let lesson = specs.path().join("clone.md");
+        fs::write(
+            &lesson,
+            format!(
+                "---\nclone: owner/repo\n{frontmatter}---\n\
+             ```markmason\napp cloned\n```\n```expected\nyes\n```\n\
+             ```markmason\napp read-file '{}'\n```\n",
+                shell_path(&secret)
+            ),
+        )
+        .unwrap();
+        let path = std::env::join_paths(
+            [
+                tools.path().to_owned(),
+                helper().parent().unwrap().to_owned(),
+            ]
+            .into_iter()
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+        )
+        .unwrap();
+        let output = command(&lesson)
+            .args(["--sandbox", "mxc", "--cwd"])
+            .arg(original.path())
+            .env("PATH", path)
+            .arg("--verbose")
+            .output()
+            .unwrap();
+        let transcript = text(&output);
+        assert_eq!(output.status.code(), Some(1), "{transcript}");
+        assert!(
+            transcript.contains("Blocks: 1 passed, 1 failed"),
+            "{transcript}"
+        );
+        assert!(
+            !transcript.contains("must-not-expose-original-cwd"),
+            "{transcript}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn mxc_clone_only_can_start_from_the_system_temporary_directory() {
+    let specs = tempfile::tempdir().unwrap();
+    let tools = tempfile::tempdir().unwrap();
+    fs::hard_link(helper(), tools.path().join("gh")).unwrap();
+    fs::write(
+        specs.path().join("clone.md"),
+        "---\nclone: owner/repo\n---\n```markmason\napp cloned\n```\n```expected\nyes\n```\n",
+    )
+    .unwrap();
+    let path = std::env::join_paths(
+        [
+            tools.path().to_owned(),
+            helper().parent().unwrap().to_owned(),
+        ]
+        .into_iter()
+        .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let output = command(specs.path())
+        .args(["--sandbox", "mxc", "--cwd"])
+        .arg(std::env::temp_dir())
         .env("PATH", path)
-        .arg("--verbose")
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", text(&output));
-    let text = text(&output);
-    let cloned = text
-        .lines()
-        .find(|line| line.contains("markmason-repo-") && !line.contains("PASS"))
-        .unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn mxc_diagnostics_do_not_change_expected_command_output() {
+    let specs = tempfile::tempdir().unwrap();
+    fs::write(
+        specs.path().join("errors.md"),
+        "```markmason (exit 2)\napp permission-denied\n```\n\
+         ```expected\nPermission denied\n```\n\
+         ```markmason (exit 2)\napp permission-denied | app echo must-not-run\n```\n\
+         ```expected-contains\nPermission denied\n```\n",
+    )
+    .unwrap();
+    for backend in ["none", "mxc"] {
+        let output = command(specs.path())
+            .args(["--sandbox", backend])
+            .output()
+            .unwrap();
+        let transcript = text(&output);
+        assert!(output.status.success(), "{transcript}");
+        assert!(
+            transcript.contains("Blocks: 2 passed, 0 failed"),
+            "{transcript}"
+        );
+        if backend == "mxc" {
+            assert!(
+                transcript.contains("Sandbox filesystem access may be denied"),
+                "{transcript}"
+            );
+        }
+    }
+    let stepped = step_output(specs.path(), &["--sandbox", "mxc"], "\n\n\n\n");
+    let transcript = text(&stepped);
+    assert!(stepped.status.success(), "{transcript}");
+    assert!(transcript.contains("RUNNER DIAGNOSTICS"), "{transcript}");
     assert!(
-        !Path::new(cloned).exists(),
-        "cloned fixture was not cleaned up: {cloned}"
+        transcript.contains("Blocks: 2 passed, 0 failed"),
+        "{transcript}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn mxc_sandbox_clones_before_documents_can_replace_gh() {
+    for parallel in [false, true] {
+        let specs = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let trusted_tools = tempfile::tempdir().unwrap();
+        let private = tempfile::tempdir().unwrap();
+        let marker = private.path().join("host-command-ran");
+        fs::create_dir(workspace.path().join("bin")).unwrap();
+        fs::hard_link(helper(), trusted_tools.path().join("gh")).unwrap();
+        fs::write(
+            workspace.path().join("fake-gh"),
+            format!(
+                "#!/bin/sh\nprintf breached > '{}'\nexit 0\n",
+                shell_path(&marker)
+            ),
+        )
+        .unwrap();
+        fs::write(
+            specs.path().join("a.md"),
+            "---\nshell: bash\nparallel: false\n---\n\
+             ```markmason\ncp fake-gh bin/gh\nchmod +x bin/gh\n```\n",
+        )
+        .unwrap();
+        fs::write(
+            specs.path().join("b.md"),
+            "---\nclone: owner/repo\n---\n\
+             ```markmason\napp cloned\n```\n```expected\nyes\n```\n",
+        )
+        .unwrap();
+        let path = std::env::join_paths(
+            [
+                workspace.path().join("bin"),
+                trusted_tools.path().to_owned(),
+                helper().parent().unwrap().to_owned(),
+            ]
+            .into_iter()
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+        )
+        .unwrap();
+        let mut run = command(specs.path());
+        run.args(["--sandbox", "mxc", "--cwd"])
+            .arg(workspace.path())
+            .env("PATH", path);
+        if parallel {
+            run.args(["--parallel", "2"]);
+        }
+        let output = run.output().unwrap();
+        let transcript = text(&output);
+        assert!(
+            !marker.exists(),
+            "sandboxed document executed gh on the host:\n{transcript}"
+        );
+        assert!(output.status.success(), "{transcript}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn mxc_sandbox_clone_failure_stops_before_any_document_runs() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let specs = tempfile::tempdir().unwrap();
+    let tools = tempfile::tempdir().unwrap();
+    let marker = specs.path().join("must-not-run");
+    let gh = tools.path().join("gh");
+    fs::write(&gh, "#!/bin/sh\nexit 1\n").unwrap();
+    fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(
+        specs.path().join("a.md"),
+        format!("```markmason\napp mark '{}'\n```\n", shell_path(&marker)),
+    )
+    .unwrap();
+    fs::write(
+        specs.path().join("b.md"),
+        "---\nclone: owner/repo\n---\n```markmason\napp cloned\n```\n",
+    )
+    .unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(tools.path().to_owned())
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let output = command(specs.path())
+        .args(["--sandbox", "mxc", "--cwd"])
+        .arg(specs.path())
+        .env("PATH", path)
+        .output()
+        .unwrap();
+    let transcript = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{transcript}");
+    assert!(
+        transcript.contains("Failed preparing clone for b.md"),
+        "{transcript}"
+    );
+    assert!(!marker.exists(), "{transcript}");
+}
+
+#[cfg(unix)]
+#[test]
+fn mxc_sandbox_stdin_writer_respects_the_command_deadline() {
+    let specs = tempfile::tempdir().unwrap();
+    let marker = specs.path().join("writer-started");
+    fs::write(
+        specs.path().join("writer.md"),
+        format!(
+            "---\ntimeout: 1\n---\n```markmason\napp writer '{}'\n```\n\
+         ```stdin\n{}\n```\n",
+            shell_path(&marker),
+            "x".repeat(256 * 1024)
+        ),
+    )
+    .unwrap();
+    let start = Instant::now();
+    let output = command(specs.path())
+        .args(["--sandbox", "mxc", "--cwd"])
+        .arg(specs.path())
+        .output()
+        .unwrap();
+    let transcript = text(&output);
+    assert!(marker.exists(), "{transcript}");
+    // Some backends tear down the descendant immediately, completing the write
+    // with BrokenPipe. Otherwise the unfinished writer must be an execution error.
+    assert!(
+        output.status.success()
+            || transcript.contains("stdin writer")
+            || transcript.contains("timed out"),
+        "{transcript}"
+    );
+    assert!(start.elapsed() < Duration::from_secs(5), "{transcript}");
 }
 
 #[test]
@@ -4063,18 +4995,20 @@ fn listing_needs_neither_authentication_nor_a_working_directory() {
         "---\nclone: owner/repo\nsetup: nonexistent\n---\n```markmason\napp echo listed\n```\n",
     )
     .unwrap();
-    let output = command(dir.path())
-        .args(["--list", "--cwd"])
-        .arg(dir.path().join("nonexistent"))
-        .env_remove("GH_CONFIG_DIR")
-        .env_remove("XDG_CONFIG_HOME")
-        .env_remove("APPDATA")
-        .env_remove("HOME")
-        .env_remove("USERPROFILE")
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{}", text(&output));
-    assert!(text(&output).contains("app echo listed"));
+    for backend in ["none", "mxc"] {
+        let output = command(dir.path())
+            .args(["--sandbox", backend, "--list", "--cwd"])
+            .arg(dir.path().join("nonexistent"))
+            .env_remove("GH_CONFIG_DIR")
+            .env_remove("XDG_CONFIG_HOME")
+            .env_remove("APPDATA")
+            .env_remove("HOME")
+            .env_remove("USERPROFILE")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", text(&output));
+        assert!(text(&output).contains("app echo listed"));
+    }
 }
 
 #[test]
@@ -4729,7 +5663,11 @@ fn interrupts_reap_commands_stop_descendants_and_clean_up_fixtures() {
 #[cfg(unix)]
 #[test]
 fn oversized_pty_input_cannot_block_timeout_or_cancellation() {
-    for signal in [None, Some(libc::SIGINT), Some(libc::SIGTERM)] {
+    for (sandboxed, signal) in [false, true].into_iter().flat_map(|sandboxed| {
+        [None, Some(libc::SIGINT), Some(libc::SIGTERM)]
+            .into_iter()
+            .map(move |signal| (sandboxed, signal))
+    }) {
         let dir = tempfile::tempdir().unwrap();
         let started = dir.path().join("started");
         fs::write(
@@ -4738,7 +5676,13 @@ fn oversized_pty_input_cannot_block_timeout_or_cancellation() {
                 if signal.is_some() { 30 } else { 1 },
                 started.display(), "x".repeat(2 * 1024 * 1024)),
         ).unwrap();
-        let mut runner = command(dir.path())
+        let mut command = command(dir.path());
+        if sandboxed {
+            command
+                .args(["--sandbox", "mxc", "--sandbox-write"])
+                .arg(dir.path());
+        }
+        let mut runner = command
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
@@ -4770,7 +5714,11 @@ fn oversized_pty_input_cannot_block_timeout_or_cancellation() {
             );
         }
         let output = runner.wait_with_output().unwrap();
-        assert!(!output.status.success(), "{}", text(&output));
+        assert!(
+            !output.status.success(),
+            "sandboxed={sandboxed}: {}",
+            text(&output)
+        );
         if let Some(signal) = signal {
             assert_eq!(
                 output.status.code(),
@@ -4779,11 +5727,7 @@ fn oversized_pty_input_cannot_block_timeout_or_cancellation() {
                 text(&output)
             );
         } else {
-            assert!(
-                text(&output).contains("PTY command timed out"),
-                "{}",
-                text(&output)
-            );
+            assert!(text(&output).contains("timed out"), "{}", text(&output));
         }
         let info = fs::read_to_string(started).unwrap();
         let mut info = info.lines();

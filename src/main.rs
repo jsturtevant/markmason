@@ -2,6 +2,7 @@ mod cancellation;
 mod matching;
 mod presentation;
 mod process;
+mod sandbox;
 mod shell;
 mod spec;
 mod step;
@@ -18,7 +19,7 @@ use std::{
     io::{self, Write},
     panic::{self, AssertUnwindSafe},
     path::{Path, PathBuf},
-    sync::{Arc, mpsc},
+    sync::{Arc, Mutex, mpsc},
     thread,
     time::Duration,
 };
@@ -71,6 +72,21 @@ struct Options {
         conflicts_with = "step"
     )]
     parallel: Option<Parallelism>,
+    /// Execute document commands through a containment backend.
+    #[arg(long, value_enum, default_value_t)]
+    sandbox: sandbox::Backend,
+    /// Control sandbox access to the effective command working directory.
+    #[arg(long, value_enum, default_value_t)]
+    sandbox_workdir: sandbox::WorkdirAccess,
+    /// Add a read-only host path to the sandbox.
+    #[arg(long)]
+    sandbox_read: Vec<PathBuf>,
+    /// Add a read-write host path to the sandbox.
+    #[arg(long)]
+    sandbox_write: Vec<PathBuf>,
+    /// Allow an outbound sandbox network destination.
+    #[arg(long)]
+    sandbox_net_allow: Vec<String>,
     #[arg(long)]
     verbose: bool,
 }
@@ -173,8 +189,27 @@ fn resolve_setup(command: &str, dir: &Path) -> Result<Vec<String>> {
     Ok(args)
 }
 
+fn is_markdown_setup(args: &[String]) -> bool {
+    args.len() == 2
+        && Path::new(&args[0])
+            .file_name()
+            .is_some_and(|name| name == "mm" || name == "mm.exe")
+        && Path::new(&args[1])
+            .extension()
+            .is_some_and(|ext| ext == "md")
+}
+
+fn needs_original_setup_cwd(spec: &spec::Spec) -> bool {
+    spec.shell.is_none()
+        && spec
+            .setup
+            .as_ref()
+            .is_some_and(|setup| !is_markdown_setup(&spec::split_command(setup)))
+}
+
 struct Fixture {
     shell: RefCell<Option<shell::Session>>,
+    executor: sandbox::Executor,
     processes: process::Scope,
     _home: TempDir,
     _config: TempDir,
@@ -182,6 +217,80 @@ struct Fixture {
     cwd: PathBuf,
     env: process::Environment,
     vars: Vec<(String, String)>,
+}
+
+#[derive(Clone)]
+struct HostContext {
+    gh_config: PathBuf,
+    cwd: PathBuf,
+    sandbox: sandbox::CliPolicy,
+    tools: sandbox::ToolPermissions,
+    clones: Option<Arc<Mutex<BTreeMap<String, TempDir>>>>,
+    temporary: Arc<TempDir>,
+}
+
+fn clone_repository(
+    owner_repo: &str,
+    cwd: &Path,
+    env: &process::Environment,
+    temporary: &Path,
+    processes: &process::Scope,
+) -> Result<TempDir> {
+    let auth = process::run(
+        &["gh".into(), "auth".into(), "status".into()],
+        cwd,
+        env,
+        None,
+        Duration::from_secs(30),
+        processes,
+    )
+    .context("gh not installed or unavailable; install GitHub CLI to clone fixtures")?;
+    if auth.code != 0 {
+        bail!("gh not authenticated. Run 'gh auth login'.\n{}", auth.text);
+    }
+    let repo = Builder::new()
+        .prefix("markmason-repo-")
+        .tempdir_in(temporary)?;
+    let cloned = process::run(
+        &[
+            "gh".into(),
+            "repo".into(),
+            "clone".into(),
+            owner_repo.to_owned(),
+            repo.path().to_string_lossy().into_owned(),
+        ],
+        cwd,
+        env,
+        None,
+        Duration::from_secs(30),
+        processes,
+    )?;
+    if cloned.code != 0 {
+        bail!("Failed to clone {owner_repo}:\n{}", cloned.text);
+    }
+    Ok(repo)
+}
+
+fn temporary_root(sandboxed: bool, writable_roots: &[PathBuf]) -> Result<TempDir> {
+    let requested = std::path::absolute(env::temp_dir())?;
+    let resolved = dunce::canonicalize(&requested)
+        .with_context(|| format!("Cannot resolve temporary directory {}", requested.display()))?;
+    if sandboxed
+        && let Some(root) = writable_roots
+            .iter()
+            .find(|root| requested.starts_with(root) || resolved.starts_with(root))
+    {
+        bail!(
+            "Sandbox temporary directory overlaps writable permission {}: {}. \
+             Choose a temporary directory outside sandbox-writable paths \
+             using TMPDIR (TEMP on Windows).",
+            root.display(),
+            requested.display()
+        );
+    }
+    Ok(Builder::new()
+        .prefix("markmason-run-")
+        .tempdir_in(resolved)?)
 }
 
 fn gh_config_dir() -> Result<PathBuf> {
@@ -207,11 +316,16 @@ impl Fixture {
     fn new(
         options: &Options,
         spec: &spec::Spec,
-        gh_config: &Path,
+        file: &str,
+        host: &HostContext,
         mut env: process::Environment,
     ) -> Result<Self> {
-        let home = Builder::new().prefix("markmason-home-").tempdir()?;
-        let config = Builder::new().prefix("markmason-xdg-").tempdir()?;
+        let home = Builder::new()
+            .prefix("markmason-home-")
+            .tempdir_in(host.temporary.path())?;
+        let config = Builder::new()
+            .prefix("markmason-xdg-")
+            .tempdir_in(host.temporary.path())?;
         let processes = process::Scope::default();
         for (key, value) in [
             ("NO_COLOR", "1"),
@@ -221,46 +335,25 @@ impl Fixture {
         ] {
             process::set_env(&mut env, key, value);
         }
-        process::set_env(&mut env, "GH_CONFIG_DIR", gh_config.as_os_str());
+        process::set_env(&mut env, "GH_CONFIG_DIR", host.gh_config.as_os_str());
         process::set_env(&mut env, &options.state_dir_env, home.path().as_os_str());
         process::set_env(&mut env, "XDG_CONFIG_HOME", config.path().as_os_str());
         #[cfg(windows)]
         for name in ["APPDATA", "LOCALAPPDATA"] {
             process::set_env(&mut env, name, config.path().as_os_str());
         }
-        let mut cwd = dunce::canonicalize(&options.cwd)?;
+        let mut cwd = host.cwd.clone();
         let repo = if let Some(owner_repo) = &spec.clone {
-            let auth = process::run(
-                &["gh".into(), "auth".into(), "status".into()],
-                &cwd,
-                &env,
-                None,
-                Duration::from_secs(30),
-                &processes,
-            )
-            .context("gh not installed or unavailable; install GitHub CLI to clone fixtures")?;
-            if auth.code != 0 {
-                bail!("gh not authenticated. Run 'gh auth login'.\n{}", auth.text);
-            }
-            let repo = Builder::new().prefix("markmason-repo-").tempdir()?;
-            let cloned = process::run(
-                &[
-                    "gh".into(),
-                    "repo".into(),
-                    "clone".into(),
-                    owner_repo.clone(),
-                    repo.path().to_string_lossy().into_owned(),
-                ],
-                &cwd,
-                &env,
-                None,
-                Duration::from_secs(30),
-                &processes,
-            )?;
-            if cloned.code != 0 {
-                bail!("Failed to clone {owner_repo}:\n{}", cloned.text);
-            }
-            cwd = repo.path().to_owned();
+            let repo = if let Some(clones) = &host.clones {
+                clones
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("Prepared clone storage is poisoned"))?
+                    .remove(file)
+                    .with_context(|| format!("Missing prepared clone for {file}"))?
+            } else {
+                clone_repository(owner_repo, &cwd, &env, host.temporary.path(), &processes)?
+            };
+            cwd = dunce::canonicalize(repo.path())?;
             Some(repo)
         } else {
             None
@@ -283,6 +376,16 @@ impl Fixture {
                 config.path().to_string_lossy().into_owned(),
             ),
         ];
+        let policy = sandbox::Policy::resolve(&host.sandbox, spec.sandbox.as_ref())
+            .context("Invalid sandbox policy")?;
+        let executor = sandbox::Executor::new(
+            policy,
+            &cwd,
+            needs_original_setup_cwd(spec).then_some(host.cwd.as_path()),
+            home.path(),
+            config.path(),
+            &host.tools,
+        )?;
         let shell = if spec.shell.is_some() {
             let mut shell_env = env.clone();
             for (key, value) in &vars {
@@ -297,6 +400,8 @@ impl Fixture {
                 &shell_env,
                 spec.timeout
                     .unwrap_or(Duration::from_secs_f64(options.timeout)),
+                &executor,
+                host.temporary.path(),
             )?;
             if spec.cases.iter().any(|case| case.always) {
                 shell.enable_cleanup()?;
@@ -307,6 +412,7 @@ impl Fixture {
         };
         Ok(Self {
             shell: RefCell::new(shell),
+            executor,
             processes,
             _home: home,
             _config: config,
@@ -371,10 +477,7 @@ fn execute(
             return Ok(false);
         }
     }
-    let mut output = process::Output {
-        text: String::new(),
-        code: 0,
-    };
+    let mut output = process::Output::default();
     let mut stdin = case.stdin.as_ref().map(|s| s.as_bytes().to_vec());
     let mut step_index = 0;
     let mut shell_block = case.pty.as_deref().map(shell::Block::new);
@@ -404,18 +507,17 @@ fn execute(
                     &mut progress,
                 )
             } else if let Some(steps) = &case.pty {
-                let (result, completed) = process::pty(
-                    &resolve(&command, dir)?,
-                    &fixture.cwd,
-                    &fixture.env,
-                    &steps[step_index..],
+                let args = resolve(&command, dir)?;
+                let (result, completed) = fixture.executor.pty(sandbox::PtyRequest {
+                    args: &args,
+                    cwd: &fixture.cwd,
+                    env: &fixture.env,
+                    steps: &steps[step_index..],
                     timeout,
-                    process::PtyExecution {
-                        scope: &fixture.processes,
-                        final_command: index + 1 == commands.len(),
-                        progress: &mut progress,
-                    },
-                )?;
+                    scope: &fixture.processes,
+                    final_command: index + 1 == commands.len(),
+                    progress: &mut progress,
+                })?;
                 step_index += completed;
                 Ok(result)
             } else {
@@ -425,16 +527,19 @@ fn execute(
                 }
                 let mut input = stdin.take();
                 let mut output = None;
+                let mut pipeline_diagnostics = String::new();
                 for stage in stages {
-                    let result = process::run_with_progress(
-                        &resolve(&stage, dir)?,
-                        &fixture.cwd,
-                        &fixture.env,
+                    let args = resolve(&stage, dir)?;
+                    let result = fixture.executor.run(sandbox::RunRequest {
+                        args: &args,
+                        cwd: &fixture.cwd,
+                        env: &fixture.env,
                         input,
                         timeout,
-                        &fixture.processes,
-                        &mut progress,
-                    )?;
+                        scope: &fixture.processes,
+                        progress: &mut progress,
+                    })?;
+                    pipeline_diagnostics.push_str(&result.diagnostics);
                     if result.code != 0 {
                         output = Some(result);
                         break;
@@ -442,7 +547,9 @@ fn execute(
                     input = Some(result.text.as_bytes().to_vec());
                     output = Some(result);
                 }
-                output.context("Pipeline produced no output")
+                let mut output = output.context("Pipeline produced no output")?;
+                output.diagnostics = pipeline_diagnostics;
+                Ok(output)
             }
         })();
         let result = match result {
@@ -450,7 +557,7 @@ fn execute(
             Err(error) => {
                 if let Some(session) = stepping.as_deref_mut() {
                     session.inspect(
-                        &output.text,
+                        &output,
                         None,
                         step::Status::ExecutionError(&error),
                         shell_mode,
@@ -469,6 +576,7 @@ fn execute(
             output.text.push('\n');
         }
         output.text.push_str(&result.text);
+        output.diagnostics.push_str(&result.diagnostics);
         output.code = result.code;
         if let Some(session) = stepping.as_deref_mut() {
             let complete = index + 1 == commands.len() || output.code != 0;
@@ -483,7 +591,7 @@ fn execute(
                 Ok(()) => step::Status::Progress,
             };
             session.inspect(
-                &output.text,
+                &output,
                 Some(output.code),
                 status,
                 shell_mode && verdict.is_err(),
@@ -518,6 +626,9 @@ fn check_output(
     diagnostics: bool,
     mut buffered: Option<&mut String>,
 ) -> Result<()> {
+    if diagnostics {
+        emit_diagnostic(&mut buffered, &output.diagnostics);
+    }
     if verbose {
         emit_diagnostic(&mut buffered, &format!("ACTUAL:\n{}\n", output.text));
     }
@@ -594,15 +705,7 @@ fn run_setup(
         return Ok(());
     };
     let args = resolve_setup(setup, dir)?;
-    let executable = Path::new(&args[0]);
-    let markdown = args.len() == 2
-        && executable
-            .file_name()
-            .is_some_and(|name| name == "mm" || name == "mm.exe")
-        && Path::new(&args[1])
-            .extension()
-            .is_some_and(|ext| ext == "md");
-    if markdown {
+    if is_markdown_setup(&args) {
         let path = dunce::canonicalize(dir.join(&args[1]))
             .with_context(|| format!("Cannot find Markdown setup {}", args[1]))?;
         if state.chain.contains(&path) {
@@ -618,6 +721,10 @@ fn run_setup(
         if setup_spec.shell.is_some() && inherited_shell.is_none() {
             bail!("Markdown setup uses shell: bash; specify shell: bash in the calling file");
         }
+        fixture
+            .executor
+            .validate_prerequisite(setup_spec.sandbox.as_ref())
+            .with_context(|| format!("Incompatible Markdown setup {}", path.display()))?;
         if setup_spec.clone.is_some() {
             bail!(
                 "Markdown setup {} cannot use clone; put clone in the calling file",
@@ -687,16 +794,18 @@ fn run_setup(
                 .join(" ");
             shell.run(&command, None, None, timeout, true)
         } else {
-            process::run(
-                &args,
-                setup_cwd,
-                &fixture.env,
-                None,
+            fixture.executor.run(sandbox::RunRequest {
+                args: &args,
+                cwd: setup_cwd,
+                env: &fixture.env,
+                input: None,
                 timeout,
-                &fixture.processes,
-            )
+                scope: &fixture.processes,
+                progress: &mut || Ok(()),
+            })
         }
         .with_context(|| format!("Setup command failed: {setup}"))?;
+        emit_diagnostic(&mut diagnostics, &result.diagnostics);
         if result.code != 0 {
             bail!("Setup command failed: {setup}\n{}", result.text);
         }
@@ -803,7 +912,7 @@ struct FileRun {
 fn run_unattended_document(
     options: &Options,
     root: &Path,
-    gh_config: &Path,
+    host: &HostContext,
     selected: (String, spec::Spec, Vec<usize>),
     verbose: bool,
     buffered: bool,
@@ -864,7 +973,7 @@ fn run_unattended_document(
         let env = input_environment(&inputs, &options.state_dir_env, &file, None)?
             .context("Unattended input collection unexpectedly stopped")?;
         cancellation::check()?;
-        Fixture::new(options, &spec, gh_config, env)
+        Fixture::new(options, &spec, &file, host, env)
     })();
     let fixture = match fixture {
         Ok(fixture) => fixture,
@@ -1002,7 +1111,7 @@ fn print_file_run(run: &FileRun) -> Result<()> {
 fn run_serial_documents(
     options: &Options,
     root: &Path,
-    gh_config: &Path,
+    host: &HostContext,
     specs: Vec<(String, spec::Spec, Vec<usize>)>,
     verbose: bool,
 ) -> Result<bool> {
@@ -1022,14 +1131,8 @@ fn run_serial_documents(
         if cancellation::signal().is_some() {
             break;
         }
-        let run = run_unattended_document(
-            options,
-            root,
-            gh_config,
-            (file, spec, indices),
-            verbose,
-            false,
-        )?;
+        let run =
+            run_unattended_document(options, root, host, (file, spec, indices), verbose, false)?;
         print_file_run(&run)?;
         let failed = run.document.failed();
         documents.push(run.document);
@@ -1123,7 +1226,7 @@ where
 fn run_parallel_documents(
     options: &Options,
     root: &Path,
-    gh_config: &Path,
+    host: &HostContext,
     specs: Vec<(String, spec::Spec, Vec<usize>)>,
     verbose: bool,
     workers: usize,
@@ -1139,7 +1242,7 @@ fn run_parallel_documents(
         .collect();
     let options = Arc::new(options.clone());
     let root = Arc::new(root.to_owned());
-    let gh_config = Arc::new(gh_config.to_owned());
+    let host = Arc::new(host.clone());
     let (completed, results) = mpsc::channel();
     let mut queued: VecDeque<_> = specs.into_iter().enumerate().collect();
     let mut active = 0usize;
@@ -1169,7 +1272,7 @@ fn run_parallel_documents(
                 let run = run_unattended_document(
                     &options,
                     &root,
-                    &gh_config,
+                    &host,
                     (file.clone(), spec, indices),
                     verbose,
                     true,
@@ -1184,7 +1287,7 @@ fn run_parallel_documents(
             }
             let worker_options = Arc::clone(&options);
             let root = Arc::clone(&root);
-            let gh_config = Arc::clone(&gh_config);
+            let host = Arc::clone(&host);
             let completed = completed.clone();
             let failed_file = file.clone();
             let total = indices.len() + spec.cases.iter().filter(|case| case.always).count();
@@ -1192,7 +1295,7 @@ fn run_parallel_documents(
                 run_unattended_document(
                     &worker_options,
                     &root,
-                    &gh_config,
+                    &host,
                     (file.clone(), spec, indices),
                     verbose,
                     true,
@@ -1299,14 +1402,7 @@ fn collect_inputs(
         return Ok(());
     };
     let args = resolve_setup(setup, dir)?;
-    if args.len() == 2
-        && Path::new(&args[0])
-            .file_name()
-            .is_some_and(|name| name == "mm" || name == "mm.exe")
-        && Path::new(&args[1])
-            .extension()
-            .is_some_and(|ext| ext == "md")
-    {
+    if is_markdown_setup(&args) {
         let path = dunce::canonicalize(dir.join(&args[1]))
             .with_context(|| format!("Cannot find Markdown setup {}", args[1]))?;
         if chain.contains(&path) {
@@ -1532,24 +1628,83 @@ fn run(options: Options) -> Result<bool> {
         }
         return Ok(valid);
     }
-    // Resolve authentication before replacing XDG_CONFIG_HOME in each fixture.
-    let gh_config = Some(gh_config_dir()?);
+    // Snapshot host permissions before any document can modify discovered paths.
+    let cwd = dunce::canonicalize(&options.cwd)
+        .with_context(|| format!("Cannot resolve working directory {}", options.cwd.display()))?;
+    let sandbox = sandbox::CliPolicy {
+        backend: options.sandbox,
+        workdir: options.sandbox_workdir,
+        readonly: options.sandbox_read.clone(),
+        readwrite: options.sandbox_write.clone(),
+        network_allow: options.sandbox_net_allow.clone(),
+    }
+    .approve_paths()?;
+    let mut writable_roots = Vec::new();
+    for (_, spec, _) in &specs {
+        let original_cwd =
+            (spec.clone.is_none() || needs_original_setup_cwd(spec)).then_some(cwd.as_path());
+        writable_roots.extend(
+            sandbox::Policy::resolve(&sandbox, spec.sandbox.as_ref())?.writable_roots(original_cwd),
+        );
+    }
+    let sandboxed = options.sandbox == sandbox::Backend::Mxc
+        || specs.iter().any(|(_, spec, _)| {
+            spec.sandbox
+                .as_ref()
+                .is_some_and(|policy| policy.backend == sandbox::Backend::Mxc)
+        });
+    let temporary = Arc::new(temporary_root(sandboxed, &writable_roots)?);
+    let mut host = HostContext {
+        gh_config: gh_config_dir()?,
+        cwd,
+        sandbox,
+        tools: if sandboxed {
+            sandbox::ToolPermissions::discover(&env::vars_os().collect(), &writable_roots)?
+        } else {
+            sandbox::ToolPermissions::default()
+        },
+        clones: None,
+        temporary,
+    };
+    if sandboxed {
+        let mut env: process::Environment = env::vars_os().collect();
+        process::set_env(&mut env, "GH_CONFIG_DIR", host.gh_config.as_os_str());
+        process::set_env(&mut env, "GIT_TERMINAL_PROMPT", "0");
+        process::set_env(&mut env, "GH_PROMPT_DISABLED", "1");
+        let processes = process::Scope::default();
+        let mut clones = BTreeMap::new();
+        for (file, spec, indices) in &specs {
+            if !indices.is_empty()
+                && let Some(owner_repo) = &spec.clone
+            {
+                cancellation::check()?;
+                let repo = clone_repository(
+                    owner_repo,
+                    host.temporary.path(),
+                    &env,
+                    host.temporary.path(),
+                    &processes,
+                )
+                .with_context(|| format!("Failed preparing clone for {file}"))?;
+                clones.insert(file.clone(), repo);
+            }
+        }
+        processes.close()?;
+        host.clones = Some(Arc::new(Mutex::new(clones)));
+    }
     if !options.step {
-        let gh_config = gh_config
-            .as_deref()
-            .context("Missing fixture configuration")?;
         return match options.parallel {
             Some(Parallelism::Auto) => {
                 let workers = thread::available_parallelism()
                     .map(usize::from)
                     .unwrap_or(1)
                     .max(1);
-                run_parallel_documents(&options, &root, gh_config, specs, verbose, workers)
+                run_parallel_documents(&options, &root, &host, specs, verbose, workers)
             }
             Some(Parallelism::Jobs(workers)) => {
-                run_parallel_documents(&options, &root, gh_config, specs, verbose, workers)
+                run_parallel_documents(&options, &root, &host, specs, verbose, workers)
             }
-            _ => run_serial_documents(&options, &root, gh_config, specs, verbose),
+            _ => run_serial_documents(&options, &root, &host, specs, verbose),
         };
     }
     let mut failed = 0;
@@ -1666,15 +1821,7 @@ fn run(options: Options) -> Result<bool> {
                 presenter.resume_document(&file, document_started)?;
             }
             cancellation::check()?;
-            Fixture::new(
-                &options,
-                &spec,
-                gh_config
-                    .as_deref()
-                    .context("Missing fixture configuration")?,
-                env,
-            )
-            .map(Some)
+            Fixture::new(&options, &spec, &file, &host, env).map(Some)
         })();
         let fixture = match fixture {
             Ok(Some(fixture)) => fixture,

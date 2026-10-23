@@ -23,6 +23,7 @@ predictable output, prompts, and state.
 | [pty-timeout](pty-timeout/timeout.md) | Exit 1 | An unreached terminal prompt times out |
 | [walkthrough](walkthrough) | Mixed | Terminal-driven stepping, file selection, quitting, and assertion failures |
 | [shell](shell/lesson.md) | Exit 0 | Persistent Bash state, shared Markdown setup, and logical-command stepping |
+| [sandbox-network](sandbox-network/blocked.md) | Exit 1 with `--sandbox mxc` | A real TCP connection attempt is denied without network permission |
 
 For example, `matching-order` prints `second`, then `first`, but expects `first`,
 then `second`. The [outer test](../cli/matching-errors.md) expects exit 1 and the

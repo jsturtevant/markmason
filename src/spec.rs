@@ -7,6 +7,7 @@ use std::time::Duration;
 #[derive(Debug, Default)]
 pub struct Spec {
     pub inputs: Vec<Input>,
+    pub sandbox: Option<Sandbox>,
     pub shell: Option<Shell>,
     pub clone: Option<String>,
     pub setup: Option<String>,
@@ -14,6 +15,12 @@ pub struct Spec {
     pub timeout: Option<Duration>,
     pub parallel: bool,
     pub cases: Vec<Case>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Sandbox {
+    pub backend: crate::sandbox::Backend,
+    pub workdir: Option<crate::sandbox::WorkdirAccess>,
 }
 
 #[derive(Debug, Clone)]
@@ -127,6 +134,57 @@ fn parse_steps(lines: &[&str]) -> Result<Vec<Step>> {
     Ok(steps)
 }
 
+fn parse_sandbox(value: &Value) -> Result<Sandbox> {
+    let parse_backend = |text: &str| match text {
+        "none" => Ok(crate::sandbox::Backend::None),
+        "mxc" => Ok(crate::sandbox::Backend::Mxc),
+        _ => bail!("Frontmatter sandbox backend must be 'none' or 'mxc'"),
+    };
+    let parse_workdir = |text: &str| match text {
+        "none" => Ok(crate::sandbox::WorkdirAccess::None),
+        "ro" | "read-only" => Ok(crate::sandbox::WorkdirAccess::ReadOnly),
+        "rw" | "read-write" => Ok(crate::sandbox::WorkdirAccess::ReadWrite),
+        _ => bail!("Frontmatter sandbox workdir must be 'rw', 'ro', or 'none'"),
+    };
+    if let Some(text) = value.as_str() {
+        return Ok(Sandbox {
+            backend: parse_backend(text)?,
+            workdir: None,
+        });
+    }
+    let map = value
+        .as_mapping()
+        .context("Frontmatter sandbox must be a backend string or object")?;
+    for key in map.keys() {
+        let key = key
+            .as_str()
+            .context("Frontmatter sandbox keys must be strings")?;
+        if !matches!(key, "backend" | "workdir") {
+            bail!("Unknown frontmatter sandbox field: {key}");
+        }
+    }
+    let backend = map
+        .get(Value::from("backend"))
+        .map(|value| {
+            value
+                .as_str()
+                .context("Frontmatter sandbox backend must be a string")
+                .and_then(parse_backend)
+        })
+        .transpose()?
+        .unwrap_or(crate::sandbox::Backend::Mxc);
+    let workdir = map
+        .get(Value::from("workdir"))
+        .map(|value| {
+            value
+                .as_str()
+                .context("Frontmatter sandbox workdir must be a string")
+                .and_then(parse_workdir)
+        })
+        .transpose()?;
+    Ok(Sandbox { backend, workdir })
+}
+
 pub fn parse(content: &str) -> Result<Spec> {
     parse_with_shell(content, None)
 }
@@ -172,6 +230,12 @@ pub fn parse_with_shell(content: &str, shell: Option<Shell>) -> Result<Spec> {
                     bail!("Frontmatter shell must be bash");
                 }
                 spec.shell = Some(Shell::Bash);
+            }
+            if let Some(value) = map
+                .get(Value::from("sandbox"))
+                .filter(|value| !value.is_null())
+            {
+                spec.sandbox = Some(parse_sandbox(value)?);
             }
             for (key, target) in [("clone", &mut spec.clone), ("setup", &mut spec.setup)] {
                 if let Some(value) = map.get(Value::from(key)).filter(|v| !v.is_null()) {

@@ -173,6 +173,23 @@ fn frontmatter_and_tags() -> Result<()> {
 }
 
 #[test]
+fn sandbox_backend_requires_a_string_when_present() -> Result<()> {
+    for value in ["false", "42", "null", "[none]", "{}"] {
+        let error = spec::parse(&format!("---\nsandbox: {{backend: {value}}}\n---\n"))
+            .expect_err("non-string sandbox backend must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("sandbox backend must be a string"),
+            "{error}"
+        );
+    }
+    let default = spec::parse("---\nsandbox: {workdir: ro}\n---\n")?;
+    assert_eq!(default.sandbox.unwrap().backend, sandbox::Backend::Mxc);
+    Ok(())
+}
+
+#[test]
 fn setup_commands_resolve_files_without_assuming_an_interpreter() -> Result<()> {
     let dir = tempfile::tempdir()?;
     fs::write(dir.path().join("setup script.py"), "")?;
