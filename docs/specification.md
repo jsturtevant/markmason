@@ -117,6 +117,13 @@ deferred cleanup use the same document sandbox. `clone:` remains a host-owned
 authenticated `gh repo clone`; the resulting temporary checkout is mounted as
 the sandbox working directory without mounting GitHub credentials.
 
+When any selected document uses MXC, all selected `clone:` checkouts are prepared
+before document inputs, setup, or commands run, using the caller's environment.
+This prevents an earlier document from replacing tools used by a later host
+clone. A clone failure aborts before workloads start; `--fail-fast` may leave
+prepared checkouts unused. Native-only runs keep per-document cloning, and
+`--list` never clones.
+
 MXC errors include the backend's operation, native code, and remediation when
 available. Linux and macOS do not always expose a denied path or destination;
 Markmason then preserves the command error and prints generic

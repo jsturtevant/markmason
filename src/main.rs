@@ -19,7 +19,7 @@ use std::{
     io::{self, Write},
     panic::{self, AssertUnwindSafe},
     path::{Path, PathBuf},
-    sync::{Arc, mpsc},
+    sync::{Arc, Mutex, mpsc},
     thread,
     time::Duration,
 };
@@ -207,7 +207,50 @@ struct HostContext {
     cwd: PathBuf,
     sandbox: sandbox::CliPolicy,
     tools: sandbox::ToolPermissions,
+    clones: Option<Arc<Mutex<BTreeMap<String, TempDir>>>>,
     temporary: Arc<TempDir>,
+}
+
+fn clone_repository(
+    owner_repo: &str,
+    cwd: &Path,
+    env: &process::Environment,
+    temporary: &Path,
+    processes: &process::Scope,
+) -> Result<TempDir> {
+    let auth = process::run(
+        &["gh".into(), "auth".into(), "status".into()],
+        cwd,
+        env,
+        None,
+        Duration::from_secs(30),
+        processes,
+    )
+    .context("gh not installed or unavailable; install GitHub CLI to clone fixtures")?;
+    if auth.code != 0 {
+        bail!("gh not authenticated. Run 'gh auth login'.\n{}", auth.text);
+    }
+    let repo = Builder::new()
+        .prefix("markmason-repo-")
+        .tempdir_in(temporary)?;
+    let cloned = process::run(
+        &[
+            "gh".into(),
+            "repo".into(),
+            "clone".into(),
+            owner_repo.to_owned(),
+            repo.path().to_string_lossy().into_owned(),
+        ],
+        cwd,
+        env,
+        None,
+        Duration::from_secs(30),
+        processes,
+    )?;
+    if cloned.code != 0 {
+        bail!("Failed to clone {owner_repo}:\n{}", cloned.text);
+    }
+    Ok(repo)
 }
 
 fn temporary_root(sandboxed: bool, writable_roots: &[PathBuf]) -> Result<TempDir> {
@@ -255,6 +298,7 @@ impl Fixture {
     fn new(
         options: &Options,
         spec: &spec::Spec,
+        file: &str,
         host: &HostContext,
         mut env: process::Environment,
     ) -> Result<Self> {
@@ -282,38 +326,15 @@ impl Fixture {
         }
         let mut cwd = host.cwd.clone();
         let repo = if let Some(owner_repo) = &spec.clone {
-            let auth = process::run(
-                &["gh".into(), "auth".into(), "status".into()],
-                &cwd,
-                &env,
-                None,
-                Duration::from_secs(30),
-                &processes,
-            )
-            .context("gh not installed or unavailable; install GitHub CLI to clone fixtures")?;
-            if auth.code != 0 {
-                bail!("gh not authenticated. Run 'gh auth login'.\n{}", auth.text);
-            }
-            let repo = Builder::new()
-                .prefix("markmason-repo-")
-                .tempdir_in(host.temporary.path())?;
-            let cloned = process::run(
-                &[
-                    "gh".into(),
-                    "repo".into(),
-                    "clone".into(),
-                    owner_repo.clone(),
-                    repo.path().to_string_lossy().into_owned(),
-                ],
-                &cwd,
-                &env,
-                None,
-                Duration::from_secs(30),
-                &processes,
-            )?;
-            if cloned.code != 0 {
-                bail!("Failed to clone {owner_repo}:\n{}", cloned.text);
-            }
+            let repo = if let Some(clones) = &host.clones {
+                clones
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("Prepared clone storage is poisoned"))?
+                    .remove(file)
+                    .with_context(|| format!("Missing prepared clone for {file}"))?
+            } else {
+                clone_repository(owner_repo, &cwd, &env, host.temporary.path(), &processes)?
+            };
             cwd = dunce::canonicalize(repo.path())?;
             Some(repo)
         } else {
@@ -936,7 +957,7 @@ fn run_unattended_document(
         let env = input_environment(&inputs, &options.state_dir_env, &file, None)?
             .context("Unattended input collection unexpectedly stopped")?;
         cancellation::check()?;
-        Fixture::new(options, &spec, host, env)
+        Fixture::new(options, &spec, &file, host, env)
     })();
     let fixture = match fixture {
         Ok(fixture) => fixture,
@@ -1622,7 +1643,7 @@ fn run(options: Options) -> Result<bool> {
                 .is_some_and(|policy| policy.backend == sandbox::Backend::Mxc)
         });
     let temporary = Arc::new(temporary_root(sandboxed, &writable_roots)?);
-    let host = HostContext {
+    let mut host = HostContext {
         gh_config: gh_config_dir()?,
         cwd,
         sandbox,
@@ -1631,8 +1652,35 @@ fn run(options: Options) -> Result<bool> {
         } else {
             sandbox::ToolPermissions::default()
         },
+        clones: None,
         temporary,
     };
+    if sandboxed {
+        let mut env: process::Environment = env::vars_os().collect();
+        process::set_env(&mut env, "GH_CONFIG_DIR", host.gh_config.as_os_str());
+        process::set_env(&mut env, "GIT_TERMINAL_PROMPT", "0");
+        process::set_env(&mut env, "GH_PROMPT_DISABLED", "1");
+        let processes = process::Scope::default();
+        let mut clones = BTreeMap::new();
+        for (file, spec, indices) in &specs {
+            if !indices.is_empty()
+                && let Some(owner_repo) = &spec.clone
+            {
+                cancellation::check()?;
+                let repo = clone_repository(
+                    owner_repo,
+                    host.temporary.path(),
+                    &env,
+                    host.temporary.path(),
+                    &processes,
+                )
+                .with_context(|| format!("Failed preparing clone for {file}"))?;
+                clones.insert(file.clone(), repo);
+            }
+        }
+        processes.close()?;
+        host.clones = Some(Arc::new(Mutex::new(clones)));
+    }
     if !options.step {
         return match options.parallel {
             Some(Parallelism::Auto) => {
@@ -1762,7 +1810,7 @@ fn run(options: Options) -> Result<bool> {
                 presenter.resume_document(&file, document_started)?;
             }
             cancellation::check()?;
-            Fixture::new(&options, &spec, &host, env).map(Some)
+            Fixture::new(&options, &spec, &file, &host, env).map(Some)
         })();
         let fixture = match fixture {
             Ok(Some(fixture)) => fixture,

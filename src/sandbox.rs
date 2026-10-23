@@ -580,133 +580,164 @@ impl Executor {
         let stderr = read_stream(child.take_stderr());
         let mut stdin = child.take_stdin();
         let (input_tx, input_rx) = mpsc::channel();
-        thread::spawn(move || {
-            let result = if let (Some(mut stdin), Some(input)) = (stdin.take(), input) {
-                stdin.write_all(&input)
-            } else {
-                Ok(())
+        let input_worker = thread::spawn(move || {
+            let result = match (stdin.take(), input) {
+                (Some(mut stdin), Some(input)) => stdin.write_all(&input),
+                (None, Some(_)) => Err(std::io::Error::other("MXC did not provide a stdin pipe")),
+                (_, None) => Ok(()),
             };
             drop(stdin);
             let _ = input_tx.send(result);
         });
         let started = Instant::now();
-        let mut cancelled = None;
-        let outcome = loop {
-            if let Err(error) = crate::cancellation::check() {
-                child.kill().context("Failed to cancel MXC command")?;
-                cancelled = Some(error);
+        let result = (|| {
+            let mut cancelled = None;
+            let outcome = loop {
+                if let Err(error) = crate::cancellation::check() {
+                    child.kill().context("Failed to cancel MXC command")?;
+                    cancelled = Some(error);
+                }
+                progress()?;
+                if let Some(code) = child.try_wait()? {
+                    break WaitResult::Exited(code);
+                }
+                if started.elapsed() >= timeout {
+                    child.kill_for_timeout()?;
+                    break WaitResult::TimedOut;
+                }
+                thread::sleep(Duration::from_millis(10));
+            };
+            let waited = child.wait()?;
+            let warnings = child.warnings();
+            if matches!(outcome, WaitResult::TimedOut) || cancelled.is_some() {
+                if let Some(closer) = &stdout_closer {
+                    closer.close();
+                }
+                if let Some(closer) = &stderr_closer {
+                    closer.close();
+                }
             }
-            progress()?;
-            if let Some(code) = child.try_wait()? {
-                break WaitResult::Exited(code);
-            }
-            if started.elapsed() >= timeout {
-                child.kill_for_timeout()?;
-                break WaitResult::TimedOut;
-            }
-            thread::sleep(Duration::from_millis(10));
-        };
-        let waited = child.wait()?;
-        let warnings = child.warnings();
-        if matches!(outcome, WaitResult::TimedOut) || cancelled.is_some() {
-            if let Some(closer) = &stdout_closer {
-                closer.close();
-            }
-            if let Some(closer) = &stderr_closer {
-                closer.close();
-            }
-        }
-        let stdout =
-            match collect_stream(stdout, stdout_closer, started, timeout, progress, "stdout") {
+            let stdout = match collect_stream(
+                stdout,
+                stdout_closer.as_ref(),
+                started,
+                timeout,
+                progress,
+                "stdout",
+            ) {
                 Ok(stdout) => stdout,
                 Err(error) => {
-                    if let Some(closer) = stderr_closer {
+                    if let Some(closer) = &stderr_closer {
                         closer.close();
                     }
                     return Err(error);
                 }
             };
-        let stderr = collect_stream(stderr, stderr_closer, started, timeout, progress, "stderr")?;
-        if let Ok(result) = input_rx.recv_timeout(Duration::from_secs(1))
-            && let Err(error) = result
-            && error.kind() != std::io::ErrorKind::BrokenPipe
-        {
-            return Err(error).context("Failed writing sandbox stdin");
-        }
-        if let Some(error) = cancelled {
-            return Err(error);
-        }
-        let outcome = if matches!(waited, WaitResult::TimedOut) {
-            WaitResult::TimedOut
-        } else {
-            outcome
-        };
-        if matches!(outcome, WaitResult::TimedOut) {
-            bail!(
-                "Command timed out after {}ms: {}\nOutput so far:\n{}{}",
-                timeout.as_millis(),
-                args.join(" "),
-                String::from_utf8_lossy(&stdout),
-                String::from_utf8_lossy(&stderr)
-            );
-        }
-        let code = match outcome {
-            WaitResult::Exited(code) => code,
-            WaitResult::TimedOut => unreachable!(),
-        };
-        let mut text = String::from_utf8_lossy(&stdout).into_owned();
-        if code != 0 {
-            let stderr = String::from_utf8_lossy(&stderr);
-            text.push_str(&stderr);
-            if let Some(guidance) = policy_guidance(&stderr) {
-                if !text.ends_with('\n') {
+            let stderr = collect_stream(
+                stderr,
+                stderr_closer.as_ref(),
+                started,
+                timeout,
+                progress,
+                "stderr",
+            )?;
+            wait_for_stdin(&input_rx, started, timeout, progress)?;
+            if let Some(error) = cancelled {
+                return Err(error);
+            }
+            let outcome = if matches!(waited, WaitResult::TimedOut) {
+                WaitResult::TimedOut
+            } else {
+                outcome
+            };
+            if matches!(outcome, WaitResult::TimedOut) {
+                bail!(
+                    "Command timed out after {}ms: {}\nOutput so far:\n{}{}",
+                    timeout.as_millis(),
+                    args.join(" "),
+                    String::from_utf8_lossy(&stdout),
+                    String::from_utf8_lossy(&stderr)
+                );
+            }
+            let code = match outcome {
+                WaitResult::Exited(code) => code,
+                WaitResult::TimedOut => unreachable!(),
+            };
+            let mut text = String::from_utf8_lossy(&stdout).into_owned();
+            if code != 0 {
+                let stderr = String::from_utf8_lossy(&stderr);
+                text.push_str(&stderr);
+                if let Some(guidance) = policy_guidance(&stderr) {
+                    if !text.ends_with('\n') {
+                        text.push('\n');
+                    }
+                    text.push_str(guidance);
                     text.push('\n');
                 }
-                text.push_str(guidance);
-                text.push('\n');
-            }
-            if !warnings.is_empty() {
-                text.push_str("\nSandbox warnings:\n");
-                text.push_str(&warnings.join("\n"));
-                text.push('\n');
-            }
+                if !warnings.is_empty() {
+                    text.push_str("\nSandbox warnings:\n");
+                    text.push_str(&warnings.join("\n"));
+                    text.push('\n');
+                }
 
-            fn policy_guidance(stderr: &str) -> Option<&'static str> {
-                let lower = stderr.to_lowercase();
-                if [
-                    "network is unreachable",
-                    "connection refused",
-                    "connection timed out",
-                    "could not resolve",
-                    "name or service not known",
-                ]
-                .iter()
-                .any(|message| lower.contains(message))
-                {
-                    return Some(
-                        "Sandbox network access may be denied; permit the destination with \
+                fn policy_guidance(stderr: &str) -> Option<&'static str> {
+                    let lower = stderr.to_lowercase();
+                    if [
+                        "network is unreachable",
+                        "connection refused",
+                        "connection timed out",
+                        "could not resolve",
+                        "name or service not known",
+                    ]
+                    .iter()
+                    .any(|message| lower.contains(message))
+                    {
+                        return Some(
+                            "Sandbox network access may be denied; permit the destination with \
                          --sandbox-net-allow HOST[:PORT].",
-                    );
-                }
-                if [
-                    "permission denied",
-                    "operation not permitted",
-                    "read-only file system",
-                    "no such file",
-                    "cannot find the path",
-                ]
-                .iter()
-                .any(|message| lower.contains(message))
-                {
-                    return Some(
-                        "Sandbox filesystem access may be denied; permit the path with \
+                        );
+                    }
+                    if [
+                        "permission denied",
+                        "operation not permitted",
+                        "read-only file system",
+                        "no such file",
+                        "cannot find the path",
+                    ]
+                    .iter()
+                    .any(|message| lower.contains(message))
+                    {
+                        return Some(
+                            "Sandbox filesystem access may be denied; permit the path with \
                          --sandbox-read PATH or --sandbox-write PATH.",
-                    );
+                        );
+                    }
+                    None
                 }
-                None
+            }
+            Ok(process::Output { text, code })
+        })();
+        if result.is_err() {
+            for closer in [stdout_closer, stderr_closer].into_iter().flatten() {
+                closer.close();
+            }
+            child
+                .kill()
+                .context("Failed to stop MXC processes after execution error")?;
+            child
+                .wait()
+                .context("Failed to reap MXC processes after execution error")?;
+            if input_rx
+                .recv_timeout(Duration::from_secs(1))
+                .is_err_and(|error| matches!(error, mpsc::RecvTimeoutError::Timeout))
+            {
+                return result.context("Sandbox stdin writer did not stop after process teardown");
             }
         }
-        Ok(process::Output { text, code })
+        input_worker
+            .join()
+            .map_err(|_| anyhow::anyhow!("Sandbox stdin writer panicked"))?;
+        result
     }
 
     fn pty_mxc(&self, request: PtyRequest<'_>) -> Result<(process::Output, usize)> {
@@ -767,7 +798,7 @@ fn read_stream(stream: Option<Box<dyn Read + Send>>) -> mpsc::Receiver<std::io::
 
 fn collect_stream(
     stream: mpsc::Receiver<std::io::Result<Vec<u8>>>,
-    closer: Option<mxc_sdk::v1::StreamCloser>,
+    closer: Option<&mxc_sdk::v1::StreamCloser>,
     started: Instant,
     timeout: Duration,
     progress: &mut dyn FnMut() -> Result<()>,
@@ -791,6 +822,26 @@ fn collect_stream(
                 bail!("Timed out draining sandbox {label}");
             }
             Err(error) => bail!("Sandbox {label} reader stopped: {error}"),
+        }
+    }
+}
+
+fn wait_for_stdin(
+    input: &mpsc::Receiver<std::io::Result<()>>,
+    started: Instant,
+    timeout: Duration,
+    progress: &mut dyn FnMut() -> Result<()>,
+) -> Result<()> {
+    loop {
+        crate::cancellation::check()?;
+        progress()?;
+        let remaining = timeout.saturating_sub(started.elapsed());
+        match input.recv_timeout(remaining.min(Duration::from_millis(10))) {
+            Ok(Ok(())) => return Ok(()),
+            Ok(Err(error)) if error.kind() == std::io::ErrorKind::BrokenPipe => return Ok(()),
+            Ok(Err(error)) => return Err(error).context("Failed writing sandbox stdin"),
+            Err(mpsc::RecvTimeoutError::Timeout) if started.elapsed() < timeout => {}
+            Err(error) => bail!("Failed waiting for sandbox stdin writer: {error}"),
         }
     }
 }
@@ -902,6 +953,49 @@ fn mxc_error(error: mxc_sdk::v1::Error) -> anyhow::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stdin_writer_timeout_and_disconnect_are_execution_errors() {
+        let (sender, receiver) = mpsc::channel();
+        let error = wait_for_stdin(&receiver, Instant::now(), Duration::ZERO, &mut || Ok(()))
+            .expect_err("a pending stdin writer must not pass");
+        assert!(error.to_string().contains("stdin writer"), "{error}");
+        drop(sender);
+        let error = wait_for_stdin(
+            &receiver,
+            Instant::now(),
+            Duration::from_secs(1),
+            &mut || Ok(()),
+        )
+        .expect_err("a disconnected stdin writer must not pass");
+        assert!(error.to_string().contains("stdin writer"), "{error}");
+    }
+
+    #[test]
+    fn stdin_writer_polling_honors_progress_and_preserves_broken_pipe() {
+        let (sender, receiver) = mpsc::channel();
+        let error = wait_for_stdin(
+            &receiver,
+            Instant::now(),
+            Duration::from_secs(1),
+            &mut || bail!("progress interrupted"),
+        )
+        .expect_err("progress errors must stop stdin polling");
+        assert!(
+            error.to_string().contains("progress interrupted"),
+            "{error}"
+        );
+        sender
+            .send(Err(std::io::ErrorKind::BrokenPipe.into()))
+            .unwrap();
+        wait_for_stdin(
+            &receiver,
+            Instant::now(),
+            Duration::from_secs(1),
+            &mut || Ok(()),
+        )
+        .unwrap();
+    }
 
     #[test]
     fn document_cannot_relax_cli_policy() {

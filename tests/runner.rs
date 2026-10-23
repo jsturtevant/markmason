@@ -4693,6 +4693,139 @@ fn clone_fixture_is_isolated_and_removed() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn mxc_sandbox_clones_before_documents_can_replace_gh() {
+    for parallel in [false, true] {
+        let specs = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let trusted_tools = tempfile::tempdir().unwrap();
+        let private = tempfile::tempdir().unwrap();
+        let marker = private.path().join("host-command-ran");
+        fs::create_dir(workspace.path().join("bin")).unwrap();
+        fs::hard_link(helper(), trusted_tools.path().join("gh")).unwrap();
+        fs::write(
+            workspace.path().join("fake-gh"),
+            format!(
+                "#!/bin/sh\nprintf breached > '{}'\nexit 0\n",
+                shell_path(&marker)
+            ),
+        )
+        .unwrap();
+        fs::write(
+            specs.path().join("a.md"),
+            "---\nshell: bash\nparallel: false\n---\n\
+             ```markmason\ncp fake-gh bin/gh\nchmod +x bin/gh\n```\n",
+        )
+        .unwrap();
+        fs::write(
+            specs.path().join("b.md"),
+            "---\nclone: owner/repo\n---\n\
+             ```markmason\napp cloned\n```\n```expected\nyes\n```\n",
+        )
+        .unwrap();
+        let path = std::env::join_paths(
+            [
+                workspace.path().join("bin"),
+                trusted_tools.path().to_owned(),
+                helper().parent().unwrap().to_owned(),
+            ]
+            .into_iter()
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+        )
+        .unwrap();
+        let mut run = command(specs.path());
+        run.args(["--sandbox", "mxc", "--cwd"])
+            .arg(workspace.path())
+            .env("PATH", path);
+        if parallel {
+            run.args(["--parallel", "2"]);
+        }
+        let output = run.output().unwrap();
+        let transcript = text(&output);
+        assert!(
+            !marker.exists(),
+            "sandboxed document executed gh on the host:\n{transcript}"
+        );
+        assert!(output.status.success(), "{transcript}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn mxc_sandbox_clone_failure_stops_before_any_document_runs() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let specs = tempfile::tempdir().unwrap();
+    let tools = tempfile::tempdir().unwrap();
+    let marker = specs.path().join("must-not-run");
+    let gh = tools.path().join("gh");
+    fs::write(&gh, "#!/bin/sh\nexit 1\n").unwrap();
+    fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(
+        specs.path().join("a.md"),
+        format!("```markmason\napp mark '{}'\n```\n", shell_path(&marker)),
+    )
+    .unwrap();
+    fs::write(
+        specs.path().join("b.md"),
+        "---\nclone: owner/repo\n---\n```markmason\napp cloned\n```\n",
+    )
+    .unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(tools.path().to_owned())
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let output = command(specs.path())
+        .args(["--sandbox", "mxc", "--cwd"])
+        .arg(specs.path())
+        .env("PATH", path)
+        .output()
+        .unwrap();
+    let transcript = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{transcript}");
+    assert!(
+        transcript.contains("Failed preparing clone for b.md"),
+        "{transcript}"
+    );
+    assert!(!marker.exists(), "{transcript}");
+}
+
+#[cfg(unix)]
+#[test]
+fn mxc_sandbox_stdin_writer_respects_the_command_deadline() {
+    let specs = tempfile::tempdir().unwrap();
+    let marker = specs.path().join("writer-started");
+    fs::write(
+        specs.path().join("writer.md"),
+        format!(
+            "---\ntimeout: 1\n---\n```markmason\napp writer '{}'\n```\n\
+         ```stdin\n{}\n```\n",
+            shell_path(&marker),
+            "x".repeat(256 * 1024)
+        ),
+    )
+    .unwrap();
+    let start = Instant::now();
+    let output = command(specs.path())
+        .args(["--sandbox", "mxc", "--cwd"])
+        .arg(specs.path())
+        .output()
+        .unwrap();
+    let transcript = text(&output);
+    assert!(marker.exists(), "{transcript}");
+    // Some backends tear down the descendant immediately, completing the write
+    // with BrokenPipe. Otherwise the unfinished writer must be an execution error.
+    assert!(
+        output.status.success()
+            || transcript.contains("stdin writer")
+            || transcript.contains("timed out"),
+        "{transcript}"
+    );
+    assert!(start.elapsed() < Duration::from_secs(5), "{transcript}");
+}
+
 #[test]
 fn empty_authentication_environment_values_use_nonempty_fallbacks() {
     let dir = tempfile::tempdir().unwrap();
@@ -4733,18 +4866,20 @@ fn listing_needs_neither_authentication_nor_a_working_directory() {
         "---\nclone: owner/repo\nsetup: nonexistent\n---\n```markmason\napp echo listed\n```\n",
     )
     .unwrap();
-    let output = command(dir.path())
-        .args(["--list", "--cwd"])
-        .arg(dir.path().join("nonexistent"))
-        .env_remove("GH_CONFIG_DIR")
-        .env_remove("XDG_CONFIG_HOME")
-        .env_remove("APPDATA")
-        .env_remove("HOME")
-        .env_remove("USERPROFILE")
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{}", text(&output));
-    assert!(text(&output).contains("app echo listed"));
+    for backend in ["none", "mxc"] {
+        let output = command(dir.path())
+            .args(["--sandbox", backend, "--list", "--cwd"])
+            .arg(dir.path().join("nonexistent"))
+            .env_remove("GH_CONFIG_DIR")
+            .env_remove("XDG_CONFIG_HOME")
+            .env_remove("APPDATA")
+            .env_remove("HOME")
+            .env_remove("USERPROFILE")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", text(&output));
+        assert!(text(&output).contains("app echo listed"));
+    }
 }
 
 #[test]
