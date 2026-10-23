@@ -33,7 +33,7 @@ mm --version
 Print the installed version, not the help text describing the flag.
 
 ```expected
-mm 0.4.1
+mm 0.5.0
 ```
 ````
 
